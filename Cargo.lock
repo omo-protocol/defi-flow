@@ -502,9 +502,9 @@ dependencies = [
 
 [[package]]
 name = "alloy-rpc-types-debug"
-version = "1.6.3"
+version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "779f70ab16a77e305571881b07a9bc6b0068ae6f962497baf5762825c5b839fb"
+checksum = "2c55187c9162b8f2bcddc444046b50a227029af89876ab6e5db2c600a3a989b7"
 dependencies = [
  "alloy-primitives",
  "derive_more",
