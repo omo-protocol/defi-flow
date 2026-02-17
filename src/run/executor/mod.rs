@@ -1,4 +1,10 @@
+pub mod aerodrome;
+pub mod evm;
 pub mod hyperliquid;
+pub mod lending;
+pub mod lifi;
+pub mod pendle;
+pub mod rysk;
 pub mod stub;
 
 use std::collections::HashMap;
@@ -35,9 +41,6 @@ pub fn build_executors(
 ) -> Result<HashMap<NodeId, Box<dyn VenueExecutor>>> {
     let mut executors: HashMap<NodeId, Box<dyn VenueExecutor>> = HashMap::new();
 
-    // Create a shared HyperliquidExecutor for all Hyperliquid/Hyena nodes
-    let hl_executor = hyperliquid::HyperliquidExecutor::new(config)?;
-
     for node in &workflow.nodes {
         let id = node.id().to_string();
         let executor: Box<dyn VenueExecutor> = match node {
@@ -45,7 +48,6 @@ pub fn build_executors(
                 match venue {
                     crate::model::node::PerpVenue::Hyperliquid
                     | crate::model::node::PerpVenue::Hyena => {
-                        // Each node gets its own executor instance sharing the same API config
                         Box::new(hyperliquid::HyperliquidExecutor::new(config)?)
                     }
                 }
@@ -53,20 +55,29 @@ pub fn build_executors(
             Node::Spot { .. } => {
                 Box::new(hyperliquid::HyperliquidExecutor::new(config)?)
             }
+            Node::Swap { .. } => {
+                Box::new(lifi::LiFiExecutor::new(config)?)
+            }
+            Node::Bridge { .. } => {
+                Box::new(lifi::LiFiExecutor::new(config)?)
+            }
+            Node::Lending { .. } => {
+                Box::new(lending::LendingExecutor::new(config)?)
+            }
+            Node::Lp { .. } => {
+                Box::new(aerodrome::AerodromeExecutor::new(config)?)
+            }
+            Node::Pendle { .. } => {
+                Box::new(pendle::PendleExecutor::new(config)?)
+            }
+            Node::Options { .. } => {
+                Box::new(rysk::RyskExecutor::new(config)?)
+            }
             Node::Wallet { .. } => Box::new(stub::StubExecutor::new("wallet")),
             Node::Optimizer { .. } => Box::new(stub::StubExecutor::new("optimizer")),
-            Node::Options { .. } => Box::new(stub::StubExecutor::new("options")),
-            Node::Lp { .. } => Box::new(stub::StubExecutor::new("lp")),
-            Node::Swap { .. } => Box::new(stub::StubExecutor::new("swap")),
-            Node::Bridge { .. } => Box::new(stub::StubExecutor::new("bridge")),
-            Node::Lending { .. } => Box::new(stub::StubExecutor::new("lending")),
-            Node::Pendle { .. } => Box::new(stub::StubExecutor::new("pendle")),
         };
         executors.insert(id, executor);
     }
-
-    // Drop the prototype
-    drop(hl_executor);
 
     Ok(executors)
 }
