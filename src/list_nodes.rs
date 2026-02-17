@@ -6,7 +6,7 @@ pub fn run() -> anyhow::Result<()> {
 1. wallet
    Source or sink for funds on a specific chain.
    Parameters:
-     - chain:   Chain   (ethereum | arbitrum | optimism | base | mantle | hyperevm | hypercore)
+     - chain:   Chain   (object: {"name":"ethereum","chain_id":1,"rpc_url":"https://eth.llamarpc.com"} — chain_id and rpc_url optional for non-EVM chains like {"name":"hyperliquid"})
      - address: String  (0x-prefixed wallet address)
 
 2. perp
@@ -61,14 +61,15 @@ pub fn run() -> anyhow::Result<()> {
      - provider:   SwapProvider (LiFi)
      - from_token: String       (e.g. "USDe")
      - to_token:   String       (e.g. "USDC")
+     - chain:      Chain?       (optional — chain this swap executes on, for cross-chain validation)
      - trigger:    Trigger?     (optional)
 
 7. bridge
    Cross-chain bridge transfer.
    Parameters:
      - provider:   BridgeProvider (LiFi | Stargate)
-     - from_chain: Chain          (ethereum | arbitrum | optimism | base | mantle | hyperevm | hypercore)
-     - to_chain:   Chain          (same options)
+     - from_chain: Chain          (object: {"name":"mantle","chain_id":5000,"rpc_url":"https://rpc.mantle.xyz"})
+     - to_chain:   Chain          (same format — non-EVM chains omit chain_id/rpc_url: {"name":"hyperliquid"})
      - token:      String         (e.g. "USDe")
      - trigger:    Trigger?       (optional)
 

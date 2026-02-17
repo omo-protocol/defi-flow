@@ -79,8 +79,8 @@ impl LiFiMovement {
         to_token: &str,
         amount_wei: &str,
     ) -> Result<QuoteResponse> {
-        let from_chain_id = evm::lifi_chain_id(from_chain);
-        let to_chain_id = evm::lifi_chain_id(to_chain);
+        let from_chain_id = from_chain.chain_id().expect("LiFi requires chain_id");
+        let to_chain_id = to_chain.chain_id().expect("LiFi requires chain_id");
 
         let from_addr = evm::token_address(from_chain, from_token)
             .map(|a| format!("{a:?}"))
@@ -262,10 +262,11 @@ impl Venue for LiFiMovement {
             Node::Swap {
                 from_token,
                 to_token,
+                chain,
                 ..
             } => {
-                let chain = Chain::HyperEvm;
-                self.execute_swap(&chain, from_token, to_token, input_amount)
+                let swap_chain = chain.as_ref().cloned().unwrap_or_else(Chain::hyperevm);
+                self.execute_swap(&swap_chain, from_token, to_token, input_amount)
                     .await
             }
             Node::Bridge {

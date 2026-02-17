@@ -58,6 +58,16 @@ pub enum ValidationError {
 
     #[error("Perp node `{node_id}` with action {action} requires `leverage` field")]
     PerpMissingLeverage { node_id: String, action: String },
+
+    #[error(
+        "Edge {from_node}->{to_node} crosses chains ({from_chain}->{to_chain}) without a bridge"
+    )]
+    CrossChainEdge {
+        from_node: String,
+        to_node: String,
+        from_chain: String,
+        to_chain: String,
+    },
 }
 
 /// Load and fully validate a workflow from a JSON file.

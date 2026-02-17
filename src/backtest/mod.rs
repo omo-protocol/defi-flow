@@ -1,4 +1,5 @@
 pub mod metrics;
+pub mod monte_carlo;
 pub mod result;
 
 use anyhow::{Context, Result};
@@ -22,10 +23,33 @@ pub struct BacktestConfig {
     pub seed: u64,
     pub verbose: bool,
     pub output: Option<std::path::PathBuf>,
+    pub monte_carlo: Option<monte_carlo::MonteCarloConfig>,
 }
 
 /// Run a backtest from the CLI.
 pub fn run(config: &BacktestConfig) -> Result<()> {
+    let historical = run_single_backtest(config)?;
+
+    if let Some(ref mc_config) = config.monte_carlo {
+        // Print historical first, then run MC
+        BacktestResult::print_table(&[historical.clone()]);
+        let mc_result = monte_carlo::run(config, mc_config, historical)?;
+        monte_carlo::print_results(&mc_result);
+    } else {
+        BacktestResult::print_table(&[historical]);
+    }
+
+    // Optional JSON output
+    if let Some(ref output_path) = config.output {
+        let _ = output_path;
+        println!("  (JSON output: not yet implemented)");
+    }
+
+    Ok(())
+}
+
+/// Run a single backtest and return the result (used by both historical and MC paths).
+pub fn run_single_backtest(config: &BacktestConfig) -> Result<BacktestResult> {
     // 1. Load and validate workflow
     let workflow = validate::load_and_validate(&config.workflow_path).map_err(|errors| {
         let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
@@ -61,21 +85,21 @@ pub fn run(config: &BacktestConfig) -> Result<()> {
     // 5. Build engine
     let mut engine = Engine::new(workflow, venue_map);
 
-    // 6-10. Run async phases in a tokio runtime
+    // 6. Run async phases in a tokio runtime
     let rt = tokio::runtime::Runtime::new().context("creating tokio runtime")?;
-    rt.block_on(run_backtest(&mut engine, clock, config, periods_per_year))
+    rt.block_on(execute_backtest(&mut engine, clock, config, periods_per_year))
 }
 
-async fn run_backtest(
+async fn execute_backtest(
     engine: &mut Engine,
     mut clock: SimClock,
     config: &BacktestConfig,
     periods_per_year: f64,
-) -> Result<()> {
-    // 6. Seed the wallet node with initial capital
+) -> Result<BacktestResult> {
+    // Seed the wallet node with initial capital
     seed_wallet(engine, config.capital).await;
 
-    // 7. Deploy phase
+    // Deploy phase
     if config.verbose {
         println!("Deploying workflow...");
     }
@@ -89,7 +113,7 @@ async fn run_backtest(
         println!("[deploy] TVL = {:.2}", initial_tvl);
     }
 
-    // 8. Tick loop
+    // Tick loop
     let mut tick_count = 0u64;
     while clock.advance() {
         let now = clock.current_timestamp();
@@ -113,7 +137,7 @@ async fn run_backtest(
         }
     }
 
-    // 9. Collect venue-specific metrics
+    // Collect venue-specific metrics
     let m = engine.collect_metrics();
 
     let bt_result = bt_metrics.finalize(
@@ -128,15 +152,7 @@ async fn run_backtest(
         m.swap_costs,
     );
 
-    BacktestResult::print_table(&[bt_result]);
-
-    // 10. Optional JSON output
-    if let Some(ref output_path) = config.output {
-        let _ = output_path;
-        println!("  (JSON output: not yet implemented)");
-    }
-
-    Ok(())
+    Ok(bt_result)
 }
 
 /// Seed the first wallet node with initial capital.

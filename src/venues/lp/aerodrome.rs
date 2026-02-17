@@ -6,6 +6,7 @@ use async_trait::async_trait;
 
 use crate::model::chain::Chain;
 use crate::model::node::{LpAction, Node};
+
 use crate::run::config::RuntimeConfig;
 use crate::venues::evm;
 use crate::venues::{ExecutionResult, SimMetrics, Venue};
@@ -101,7 +102,7 @@ impl AerodromeLp {
         if parts.len() != 2 {
             anyhow::bail!("Invalid pool format '{}', expected 'TOKEN0/TOKEN1'", pool);
         }
-        let chain = Chain::Base;
+        let chain = Chain::base();
         let token0 = evm::token_address(&chain, parts[0])
             .with_context(|| format!("Unknown token '{}' on Base", parts[0]))?;
         let token1 = evm::token_address(&chain, parts[1])
@@ -154,7 +155,7 @@ impl AerodromeLp {
         let wallet = alloy::network::EthereumWallet::from(signer);
         let provider = ProviderBuilder::new()
             .wallet(wallet)
-            .connect_http(evm::rpc_url(&Chain::Base).parse()?);
+            .connect_http(Chain::base().rpc_url().unwrap().parse()?);
 
         let erc20_0 = IERC20::new(token0, &provider);
         erc20_0
@@ -252,7 +253,7 @@ impl AerodromeLp {
             let wallet = alloy::network::EthereumWallet::from(signer);
             let provider = ProviderBuilder::new()
                 .wallet(wallet)
-                .connect_http(evm::rpc_url(&Chain::Base).parse()?);
+                .connect_http(Chain::base().rpc_url().unwrap().parse()?);
 
             let gauge_contract = IGauge::new(gauge, &provider);
             let result = gauge_contract

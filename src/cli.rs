@@ -61,6 +61,18 @@ pub enum Command {
         /// Output results as JSON to this file
         #[arg(long)]
         output: Option<PathBuf>,
+
+        /// Run N Monte Carlo simulations (block bootstrap + GBM perturbation)
+        #[arg(long)]
+        monte_carlo: Option<u32>,
+
+        /// Block size for bootstrap resampling (default: 10)
+        #[arg(long, default_value = "10")]
+        block_size: usize,
+
+        /// GBM volatility scale factor (0.0 = no perturbation, 1.0 = full historical vol)
+        #[arg(long, default_value = "1.0")]
+        gbm_vol_scale: f64,
     },
 
     /// Run a workflow live with on-chain execution

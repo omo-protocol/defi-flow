@@ -65,7 +65,7 @@ static PENDLE_MARKETS: LazyLock<HashMap<String, PendleMarket>> = LazyLock::new(|
     m.insert(
         "PT-kHYPE".to_string(),
         PendleMarket {
-            chain: Chain::HyperEvm,
+            chain: Chain::hyperevm(),
             market_address: "0x0000000000000000000000000000000000000001"
                 .parse()
                 .unwrap(),
@@ -154,7 +154,7 @@ impl PendleYield {
         let wallet = alloy::network::EthereumWallet::from(signer);
         let provider = ProviderBuilder::new()
             .wallet(wallet)
-            .connect_http(evm::rpc_url(&info.chain).parse()?);
+            .connect_http(info.chain.rpc_url().expect("Pendle chain requires RPC").parse()?);
 
         let amount_units = evm::to_token_units(input_amount, 1.0, 18);
 

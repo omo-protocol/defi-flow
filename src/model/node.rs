@@ -361,6 +361,9 @@ pub enum Node {
         from_token: String,
         /// Destination token symbol, e.g. "ETH".
         to_token: String,
+        /// Chain this swap executes on (used for cross-chain validation).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chain: Option<Chain>,
         /// Optional periodic trigger.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trigger: Option<Trigger>,
@@ -621,5 +624,42 @@ impl Node {
                 )
             }
         }
+    }
+
+    /// The chain this node's output is on. `None` for chain-agnostic nodes (Optimizer, Swap without chain).
+    pub fn chain(&self) -> Option<Chain> {
+        match self {
+            Node::Wallet { chain, .. } => Some(chain.clone()),
+            Node::Bridge { to_chain, .. } => Some(to_chain.clone()),
+            Node::Perp { .. } => Some(Chain::hyperevm()),
+            Node::Options { .. } => Some(Chain::hyperevm()),
+            Node::Spot { .. } => Some(Chain::base()),
+            Node::Lp { .. } => Some(Chain::base()),
+            Node::Swap { chain, .. } => chain.clone(),
+            Node::Lending { venue, .. } => Some(lending_venue_chain(venue)),
+            Node::Pendle { .. } => Some(Chain::hyperevm()),
+            Node::Optimizer { .. } => None,
+        }
+    }
+
+    /// The chain this node expects on its input side.
+    /// For Bridge nodes, this is `from_chain`; for all others, same as `chain()`.
+    pub fn input_chain(&self) -> Option<Chain> {
+        match self {
+            Node::Bridge { from_chain, .. } => Some(from_chain.clone()),
+            other => other.chain(),
+        }
+    }
+}
+
+/// Map a lending venue to the chain it operates on.
+fn lending_venue_chain(venue: &LendingVenue) -> Chain {
+    match venue {
+        LendingVenue::HyperLend => Chain::hyperevm(),
+        LendingVenue::Aave => Chain::ethereum(),
+        LendingVenue::Lendle => Chain::mantle(),
+        LendingVenue::Morpho => Chain::ethereum(),
+        LendingVenue::Compound => Chain::ethereum(),
+        LendingVenue::InitCapital => Chain::mantle(),
     }
 }

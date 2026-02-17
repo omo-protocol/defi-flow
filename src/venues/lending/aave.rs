@@ -6,6 +6,7 @@ use async_trait::async_trait;
 
 use crate::model::chain::Chain;
 use crate::model::node::{LendingAction, LendingVenue, Node};
+
 use crate::run::config::RuntimeConfig;
 use crate::venues::evm;
 use crate::venues::{ExecutionResult, SimMetrics, Venue};
@@ -66,12 +67,12 @@ impl AaveLending {
 
     fn venue_chain(venue: &LendingVenue) -> Chain {
         match venue {
-            LendingVenue::HyperLend => Chain::HyperEvm,
-            LendingVenue::Aave => Chain::Ethereum,
-            LendingVenue::Lendle => Chain::Mantle,
-            LendingVenue::Morpho => Chain::Ethereum,
-            LendingVenue::Compound => Chain::Ethereum,
-            LendingVenue::InitCapital => Chain::Mantle,
+            LendingVenue::HyperLend => Chain::hyperevm(),
+            LendingVenue::Aave => Chain::ethereum(),
+            LendingVenue::Lendle => Chain::mantle(),
+            LendingVenue::Morpho => Chain::ethereum(),
+            LendingVenue::Compound => Chain::ethereum(),
+            LendingVenue::InitCapital => Chain::mantle(),
         }
     }
 
@@ -129,7 +130,7 @@ impl AaveLending {
         let wallet = alloy::network::EthereumWallet::from(signer);
         let provider = ProviderBuilder::new()
             .wallet(wallet)
-            .connect_http(evm::rpc_url(&chain).parse()?);
+            .connect_http(chain.rpc_url().expect("lending chain requires RPC").parse()?);
 
         let erc20 = IERC20::new(token_addr, &provider);
         let approve_tx = erc20.approve(pool_addr, amount_units);
@@ -189,7 +190,7 @@ impl AaveLending {
         let wallet = alloy::network::EthereumWallet::from(signer);
         let provider = ProviderBuilder::new()
             .wallet(wallet)
-            .connect_http(evm::rpc_url(&chain).parse()?);
+            .connect_http(chain.rpc_url().expect("lending chain requires RPC").parse()?);
 
         let pool = IAavePool::new(pool_addr, &provider);
         let withdraw_tx = pool.withdraw(token_addr, amount_units, self.wallet_address);
@@ -243,7 +244,7 @@ impl AaveLending {
         let wallet = alloy::network::EthereumWallet::from(signer);
         let provider = ProviderBuilder::new()
             .wallet(wallet)
-            .connect_http(evm::rpc_url(&chain).parse()?);
+            .connect_http(chain.rpc_url().expect("lending chain requires RPC").parse()?);
 
         let pool = IAavePool::new(pool_addr, &provider);
         let borrow_tx = pool.borrow(token_addr, amount_units, U256::from(2), 0, self.wallet_address);
@@ -297,7 +298,7 @@ impl AaveLending {
         let wallet = alloy::network::EthereumWallet::from(signer);
         let provider = ProviderBuilder::new()
             .wallet(wallet)
-            .connect_http(evm::rpc_url(&chain).parse()?);
+            .connect_http(chain.rpc_url().expect("lending chain requires RPC").parse()?);
 
         let erc20 = IERC20::new(token_addr, &provider);
         let approve_tx = erc20.approve(pool_addr, amount_units);
@@ -352,7 +353,7 @@ impl AaveLending {
         let wallet = alloy::network::EthereumWallet::from(signer);
         let provider = ProviderBuilder::new()
             .wallet(wallet)
-            .connect_http(evm::rpc_url(&chain).parse()?);
+            .connect_http(chain.rpc_url().expect("lending chain requires RPC").parse()?);
 
         let rewards = IRewardsController::new(rewards_addr, &provider);
         let assets = vec![token_addr];

@@ -1,5 +1,6 @@
 use crate::model::amount::Amount;
 use crate::model::chain::Chain;
+
 use crate::model::edge::Edge;
 use crate::model::node::*;
 use crate::model::workflow::Workflow;
@@ -22,14 +23,14 @@ pub fn run() -> anyhow::Result<()> {
             // ── Deploy phase ────────────────────────────────────
             Node::Wallet {
                 id: "wallet_src".into(),
-                chain: Chain::Mantle,
+                chain: Chain::mantle(),
                 address: "0xYourWalletAddress".into(),
             },
             Node::Bridge {
                 id: "bridge_hyper".into(),
                 provider: BridgeProvider::Stargate,
-                from_chain: Chain::Mantle,
-                to_chain: Chain::HyperCore,
+                from_chain: Chain::mantle(),
+                to_chain: Chain::hyperliquid(),
                 token: "USDe".into(),
                 trigger: None,
             },
@@ -38,6 +39,7 @@ pub fn run() -> anyhow::Result<()> {
                 provider: SwapProvider::LiFi,
                 from_token: "USDe".into(),
                 to_token: "USDC".into(),
+                chain: None,
                 trigger: None,
             },
             Node::Optimizer {
@@ -174,6 +176,7 @@ pub fn run() -> anyhow::Result<()> {
                 provider: SwapProvider::LiFi,
                 from_token: "AERO".into(),
                 to_token: "USDC".into(),
+                chain: None,
                 trigger: Some(Trigger::Cron {
                     interval: CronInterval::Daily,
                 }),

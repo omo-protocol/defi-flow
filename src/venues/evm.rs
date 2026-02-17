@@ -18,39 +18,11 @@ sol! {
     }
 }
 
-// ── Chain configuration ────────────────────────────────────────────
-
-pub fn chain_id(chain: &Chain) -> u64 {
-    match chain {
-        Chain::Ethereum => 1,
-        Chain::Arbitrum => 42161,
-        Chain::Optimism => 10,
-        Chain::Base => 8453,
-        Chain::Mantle => 5000,
-        Chain::HyperEvm => 999,
-        Chain::HyperCore => 999,
-    }
-}
-
-pub fn rpc_url(chain: &Chain) -> &'static str {
-    match chain {
-        Chain::Ethereum => "https://eth.llamarpc.com",
-        Chain::Arbitrum => "https://arb1.arbitrum.io/rpc",
-        Chain::Optimism => "https://mainnet.optimism.io",
-        Chain::Base => "https://mainnet.base.org",
-        Chain::Mantle => "https://rpc.mantle.xyz",
-        Chain::HyperEvm | Chain::HyperCore => "https://rpc.hyperliquid.xyz/evm",
-    }
-}
-
-pub fn lifi_chain_id(chain: &Chain) -> u64 {
-    chain_id(chain)
-}
-
 // ── Token address registry ─────────────────────────────────────────
 
 pub fn token_address(chain: &Chain, symbol: &str) -> Option<Address> {
-    let key = (chain_id(chain), symbol.to_uppercase());
+    let cid = chain.chain_id()?;
+    let key = (cid, symbol.to_uppercase());
     TOKEN_REGISTRY.get(&key).copied()
 }
 
@@ -134,7 +106,7 @@ use lazy_static_token_registry;
 // ── Known contract addresses ───────────────────────────────────────
 
 pub fn lending_pool_address(chain: &Chain, venue: &str) -> Option<Address> {
-    match (chain_id(chain), venue.to_lowercase().as_str()) {
+    match (chain.chain_id()?, venue.to_lowercase().as_str()) {
         (999, "hyperlend") => Some("0xC0EE4e7e60D0A1F9a9AfaE0706D1b5C5A7f5B9b4".parse().unwrap()),
         (8453, "aave") => Some("0xA238Dd80C7A0845DA4b9e9146FF76C97a7aEcE89".parse().unwrap()),
         (42161, "aave") => Some("0x794a61358D6845594F94dc1DB02A252b5b4814aD".parse().unwrap()),
@@ -148,7 +120,7 @@ pub fn aerodrome_position_manager() -> Address {
 }
 
 pub fn pendle_router(chain: &Chain) -> Option<Address> {
-    match chain_id(chain) {
+    match chain.chain_id()? {
         42161 => Some("0x00000000005BBB0EF59571E58418F9a4357b68A0".parse().unwrap()),
         1 => Some("0x00000000005BBB0EF59571E58418F9a4357b68A0".parse().unwrap()),
         999 => Some("0x00000000005BBB0EF59571E58418F9a4357b68A0".parse().unwrap()),
@@ -157,7 +129,7 @@ pub fn pendle_router(chain: &Chain) -> Option<Address> {
 }
 
 pub fn rewards_controller_address(chain: &Chain, venue: &str) -> Option<Address> {
-    match (chain_id(chain), venue.to_lowercase().as_str()) {
+    match (chain.chain_id()?, venue.to_lowercase().as_str()) {
         (999, "hyperlend") => Some("0x54586bE62E3c3580375aE3723C145253060Ca0C2".parse().unwrap()),
         _ => None,
     }
