@@ -1,0 +1,20 @@
+{
+  "deploy_completed": true,
+  "last_tick": 1771335638,
+  "balances": {
+    "lend_usdc": 0.0,
+    "options_hype_cc": 0.0,
+    "wallet_src": 0.0,
+    "collect_premium": 0.0,
+    "roll_options": 0.0,
+    "claim_aero": 0.0,
+    "swap_aero_usdc": 0.0,
+    "perp_btc_short": 0.0,
+    "perp_eth_long": 0.0,
+    "lp_aero": 0.0,
+    "swap_usdc": 0.0,
+    "claim_lend_rewards": 0.0,
+    "bridge_hyper": 0.0,
+    "pendle_pt_khype": 0.0
+  }
+}
