@@ -56,7 +56,7 @@ pub fn run() -> anyhow::Result<()> {
                         correlation: 0.0,
                     },
                     VenueAllocation {
-                        target_node: "perp_btc_short".into(),
+                        target_node: "swap_usde_hyena".into(),
                         expected_return: 0.10,
                         volatility: 0.35,
                         correlation: -0.2,
@@ -97,15 +97,26 @@ pub fn run() -> anyhow::Result<()> {
                 action: PerpAction::Open,
                 direction: Some(PerpDirection::Long),
                 leverage: Some(3.0),
+                margin_token: None,
+                trigger: None,
+            },
+            // ── Swap USDC→USDe for Hyena margin ──────────────────
+            Node::Swap {
+                id: "swap_usde_hyena".into(),
+                provider: SwapProvider::LiFi,
+                from_token: "USDC".into(),
+                to_token: "USDe".into(),
+                chain: None,
                 trigger: None,
             },
             Node::Perp {
                 id: "perp_btc_short".into(),
                 venue: PerpVenue::Hyena,
-                pair: "BTC/USDC".into(),
+                pair: "BTC/USDe".into(),
                 action: PerpAction::Open,
                 direction: Some(PerpDirection::Short),
                 leverage: Some(2.0),
+                margin_token: None, // defaults to USDe for Hyena
                 trigger: None,
             },
             Node::Lp {
@@ -154,6 +165,7 @@ pub fn run() -> anyhow::Result<()> {
                 action: PerpAction::CollectFunding,
                 direction: None,
                 leverage: None,
+                margin_token: None,
                 trigger: Some(Trigger::Cron {
                     interval: CronInterval::Daily,
                 }),
@@ -252,8 +264,14 @@ pub fn run() -> anyhow::Result<()> {
             },
             Edge {
                 from_node: "kelly_opt".into(),
-                to_node: "perp_btc_short".into(),
+                to_node: "swap_usde_hyena".into(),
                 token: "USDC".into(),
+                amount: Amount::All,
+            },
+            Edge {
+                from_node: "swap_usde_hyena".into(),
+                to_node: "perp_btc_short".into(),
+                token: "USDe".into(),
                 amount: Amount::All,
             },
             Edge {

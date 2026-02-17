@@ -146,6 +146,7 @@ async fn execute_backtest(
         engine.rebalances,
         m.liquidations,
         m.funding_pnl,
+        m.rewards_pnl,
         m.premium_pnl,
         m.lp_fees,
         m.lending_interest,

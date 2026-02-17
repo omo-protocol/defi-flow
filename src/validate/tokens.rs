@@ -203,7 +203,8 @@ fn expected_input_token(node: &Node) -> Option<&str> {
     match node {
         Node::Swap { from_token, .. } => Some(from_token),
         Node::Bridge { token, .. } => Some(token),
-        // Wallet, Perp, Spot, Lp, Optimizer accept tokens contextually
+        Node::Perp { .. } => node.margin_token(),
+        // Wallet, Spot, Lp, Optimizer accept tokens contextually
         _ => None,
     }
 }

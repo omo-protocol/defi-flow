@@ -121,6 +121,7 @@ impl Engine {
         for v in self.venues.values() {
             let vm = v.metrics();
             m.funding_pnl += vm.funding_pnl;
+            m.rewards_pnl += vm.rewards_pnl;
             m.premium_pnl += vm.premium_pnl;
             m.lp_fees += vm.lp_fees;
             m.lending_interest += vm.lending_interest;

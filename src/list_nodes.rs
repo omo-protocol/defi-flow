@@ -15,9 +15,10 @@ pub fn run() -> anyhow::Result<()> {
      - venue:     PerpVenue     (Hyperliquid | Hyena)
      - pair:      String        (e.g. "ETH/USDC")
      - action:    PerpAction    (open | close | adjust | collect_funding)
-     - direction: PerpDirection (long | short)       — required for open/adjust
-     - leverage:  f64           (e.g. 5.0)           — required for open/adjust
-     - trigger:   Trigger?      (optional, for periodic actions)
+     - direction:     PerpDirection (long | short)       — required for open/adjust
+     - leverage:      f64           (e.g. 5.0)           — required for open/adjust
+     - margin_token:  String?       (margin/collateral token, default: "USDC" for Hyperliquid, "USDe" for Hyena)
+     - trigger:       Trigger?      (optional, for periodic actions)
 
 3. options
    Options trading via Rysk on HyperEVM.

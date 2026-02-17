@@ -33,6 +33,7 @@ pub struct PerpSimulator {
     rng: StdRng,
     pub liquidation_count: u32,
     pub cumulative_funding: f64,
+    pub cumulative_rewards: f64,
 }
 
 impl PerpSimulator {
@@ -47,6 +48,7 @@ impl PerpSimulator {
             rng: StdRng::seed_from_u64(seed),
             liquidation_count: 0,
             cumulative_funding: 0.0,
+            cumulative_rewards: 0.0,
         }
     }
 
@@ -113,6 +115,25 @@ impl PerpSimulator {
 
         self.cumulative_funding += funding;
         self.balance += funding;
+    }
+
+    fn accrue_rewards(&mut self) {
+        let pos = &self.position;
+        if pos.position_amt.abs() < 1e-12 {
+            return;
+        }
+
+        let row = self.current_market();
+        if row.rewards_apy <= 0.0 {
+            return;
+        }
+
+        let reward_per_period = row.rewards_apy / PERIODS_PER_YEAR;
+        let notional = pos.position_amt.abs() * row.mark_price;
+        let reward = notional * reward_per_period;
+
+        self.cumulative_rewards += reward;
+        self.balance += reward;
     }
 
     fn place_order(&mut self, direction: PerpDirection, leverage: f64, amount: f64) {
@@ -185,13 +206,18 @@ impl Venue for PerpSimulator {
         node: &Node,
         input_amount: f64,
     ) -> Result<ExecutionResult> {
-        let (action, direction, leverage) = match node {
+        let (action, direction, leverage, margin) = match node {
             Node::Perp {
                 action,
                 direction,
                 leverage,
                 ..
-            } => (action, direction, leverage),
+            } => (
+                action,
+                direction,
+                leverage,
+                node.margin_token().unwrap_or("USDC").to_string(),
+            ),
             _ => bail!("PerpSimulator called on non-perp node"),
         };
 
@@ -222,7 +248,7 @@ impl Venue for PerpSimulator {
                 let available = self.balance;
                 self.balance = 0.0;
                 Ok(ExecutionResult::TokenOutput {
-                    token: "USDC".to_string(),
+                    token: margin.clone(),
                     amount: available,
                 })
             }
@@ -237,7 +263,7 @@ impl Venue for PerpSimulator {
                 if available > 0.0 {
                     self.balance -= available;
                     Ok(ExecutionResult::TokenOutput {
-                        token: "USDC".to_string(),
+                        token: margin.clone(),
                         amount: available,
                     })
                 } else {
@@ -261,6 +287,7 @@ impl Venue for PerpSimulator {
         self.current_ts = now;
         self.advance_cursor();
         self.accrue_funding();
+        self.accrue_rewards();
         self.check_and_liquidate();
         Ok(())
     }
@@ -268,6 +295,7 @@ impl Venue for PerpSimulator {
     fn metrics(&self) -> SimMetrics {
         SimMetrics {
             funding_pnl: self.cumulative_funding,
+            rewards_pnl: self.cumulative_rewards,
             liquidations: self.liquidation_count,
             ..Default::default()
         }

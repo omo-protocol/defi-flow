@@ -38,6 +38,7 @@ pub enum ExecutionResult {
 #[derive(Debug, Default, Clone)]
 pub struct SimMetrics {
     pub funding_pnl: f64,
+    pub rewards_pnl: f64,
     pub premium_pnl: f64,
     pub lp_fees: f64,
     pub lending_interest: f64,

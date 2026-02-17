@@ -251,7 +251,7 @@ impl HyperliquidPerp {
         }
     }
 
-    async fn execute_perp_close(&mut self, coin: &str) -> Result<ExecutionResult> {
+    async fn execute_perp_close(&mut self, coin: &str, margin: &str) -> Result<ExecutionResult> {
         let asset = *self
             .asset_indices
             .get(coin)
@@ -292,7 +292,7 @@ impl HyperliquidPerp {
             self.positions.remove(coin);
             return Ok(ExecutionResult::PositionUpdate {
                 consumed: 0.0,
-                output: Some(("USDC".to_string(), output_value.max(0.0))),
+                output: Some((margin.to_string(), output_value.max(0.0))),
             });
         }
 
@@ -340,7 +340,7 @@ impl HyperliquidPerp {
                 self.positions.remove(coin);
                 Ok(ExecutionResult::PositionUpdate {
                     consumed: 0.0,
-                    output: Some(("USDC".to_string(), output_value)),
+                    output: Some((margin.to_string(), output_value)),
                 })
             }
             ExchangeResponseStatus::Err(err) => {
@@ -352,6 +352,7 @@ impl HyperliquidPerp {
     async fn execute_collect_funding(
         &self,
         coin: &str,
+        _margin: &str,
     ) -> Result<ExecutionResult> {
         println!(
             "  HL: funding for {} is auto-credited to margin (no action needed)",
@@ -372,6 +373,8 @@ impl Venue for HyperliquidPerp {
             self.init_metadata().await?;
         }
 
+        let margin = node.margin_token().unwrap_or("USDC");
+
         match node {
             Node::Perp {
                 pair,
@@ -390,13 +393,13 @@ impl Venue for HyperliquidPerp {
                         self.execute_perp_open(coin, dir, lev, input_amount)
                             .await
                     }
-                    PerpAction::Close => self.execute_perp_close(coin).await,
+                    PerpAction::Close => self.execute_perp_close(coin, margin).await,
                     PerpAction::Adjust => {
                         println!("  HL: ADJUST leverage for {} (not yet implemented)", coin);
                         Ok(ExecutionResult::Noop)
                     }
                     PerpAction::CollectFunding => {
-                        self.execute_collect_funding(coin).await
+                        self.execute_collect_funding(coin, margin).await
                     }
                 }
             }

@@ -266,6 +266,10 @@ pub enum Node {
         /// Leverage multiplier (required for open/adjust, e.g. 5.0 for 5x).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         leverage: Option<f64>,
+        /// Margin / collateral token. Defaults to venue's native token
+        /// (USDC for Hyperliquid, USDe for Hyena) if omitted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        margin_token: Option<String>,
         /// Optional periodic trigger.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trigger: Option<Trigger>,
@@ -649,6 +653,31 @@ impl Node {
             Node::Bridge { from_chain, .. } => Some(from_chain.clone()),
             other => other.chain(),
         }
+    }
+
+    /// The effective margin / collateral token for Perp nodes.
+    /// Returns `None` for non-Perp nodes.
+    pub fn margin_token(&self) -> Option<&str> {
+        match self {
+            Node::Perp {
+                venue,
+                margin_token,
+                ..
+            } => Some(
+                margin_token
+                    .as_deref()
+                    .unwrap_or(perp_venue_default_margin(venue)),
+            ),
+            _ => None,
+        }
+    }
+}
+
+/// Map a perp venue to its default margin / collateral token.
+pub fn perp_venue_default_margin(venue: &PerpVenue) -> &'static str {
+    match venue {
+        PerpVenue::Hyperliquid => "USDC",
+        PerpVenue::Hyena => "USDe",
     }
 }
 
