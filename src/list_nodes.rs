@@ -18,6 +18,8 @@ pub fn run() -> anyhow::Result<()> {
      - direction:     PerpDirection (long | short)       — required for open/adjust
      - leverage:      f64           (e.g. 5.0)           — required for open/adjust
      - margin_token:  String?       (margin/collateral token, default: "USDC" for Hyperliquid, "USDe" for Hyena)
+                                     Note: Hyperliquid USDC lives on HyperCore; must be bridged via
+                                     Stargate, not swappable via LiFi.
      - trigger:       Trigger?      (optional, for periodic actions)
 
 3. options

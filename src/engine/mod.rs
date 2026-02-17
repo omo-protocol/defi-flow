@@ -3,7 +3,7 @@ pub mod optimizer;
 pub mod state;
 pub mod topo;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
 
@@ -129,6 +129,75 @@ impl Engine {
             m.liquidations += vm.liquidations;
         }
         m
+    }
+
+    /// Check if a new workflow is structurally compatible (same nodes, types, edges).
+    /// Parameter-only changes are compatible; adding/removing nodes or edges is not.
+    pub fn is_structurally_compatible(&self, new_workflow: &Workflow) -> bool {
+        if self.workflow.nodes.len() != new_workflow.nodes.len()
+            || self.workflow.edges.len() != new_workflow.edges.len()
+        {
+            return false;
+        }
+
+        // Same node IDs and types
+        let current_nodes: HashMap<&str, &str> = self
+            .workflow
+            .nodes
+            .iter()
+            .map(|n| (n.id(), n.type_name()))
+            .collect();
+
+        for node in &new_workflow.nodes {
+            match current_nodes.get(node.id()) {
+                Some(&type_name) if type_name == node.type_name() => {}
+                _ => return false,
+            }
+        }
+
+        // Same edge topology
+        let current_edges: HashSet<(&str, &str)> = self
+            .workflow
+            .edges
+            .iter()
+            .map(|e| (e.from_node.as_str(), e.to_node.as_str()))
+            .collect();
+        let new_edges: HashSet<(&str, &str)> = new_workflow
+            .edges
+            .iter()
+            .map(|e| (e.from_node.as_str(), e.to_node.as_str()))
+            .collect();
+
+        current_edges == new_edges
+    }
+
+    /// Replace the workflow with an updated version, preserving venue state.
+    /// Recomputes deploy order and triggered nodes from the new workflow.
+    /// Returns true if any parameters actually changed.
+    pub fn update_workflow(&mut self, new_workflow: Workflow) -> bool {
+        if self.workflow == new_workflow {
+            return false;
+        }
+
+        // Log which nodes changed
+        for (old, new) in self.workflow.nodes.iter().zip(new_workflow.nodes.iter()) {
+            if old != new {
+                println!("[reload]   Node '{}' parameters changed", old.id());
+            }
+        }
+        for (old, new) in self.workflow.edges.iter().zip(new_workflow.edges.iter()) {
+            if old != new {
+                println!(
+                    "[reload]   Edge {}->{} changed",
+                    old.from_node, old.to_node
+                );
+            }
+        }
+
+        self.workflow = new_workflow;
+        self.deploy_order = topo::deploy_order(&self.workflow);
+        self.triggered_nodes = extract_triggered_nodes(&self.workflow);
+        true
     }
 
     /// Execute a single node: gather inputs, call venue (or optimizer), distribute outputs.

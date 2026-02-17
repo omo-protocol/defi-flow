@@ -21,10 +21,22 @@ pub enum Command {
         file: PathBuf,
     },
 
-    /// Display an ASCII DAG visualization of a workflow
+    /// Visualize a workflow as ASCII, DOT, SVG, or PNG
     Visualize {
         /// Path to the workflow JSON file
         file: PathBuf,
+
+        /// Output format: ascii (default), dot, svg, or png
+        #[arg(long, default_value = "ascii")]
+        format: String,
+
+        /// Render only the subgraph between two nodes (format: "from_node:to_node")
+        #[arg(long)]
+        scope: Option<String>,
+
+        /// Output file path (default: stdout for ascii/dot, required for svg/png)
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
     },
 
     /// List all available node types and their parameters

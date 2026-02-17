@@ -20,7 +20,9 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         cli::Command::Schema => schema::run(),
         cli::Command::Validate { file } => validate::run(&file),
-        cli::Command::Visualize { file } => visualize::run(&file),
+        cli::Command::Visualize { file, format, scope, output } => {
+            visualize::run(&file, &format, scope.as_deref(), output.as_deref())
+        }
         cli::Command::ListNodes => list_nodes::run(),
         cli::Command::Example => example::run(),
         cli::Command::Backtest {

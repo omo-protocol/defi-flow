@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::model::node::PerpAction;
+use crate::model::node::{PerpAction, PerpVenue};
 use crate::model::{Node, Workflow};
 
 use super::ValidationError;
@@ -203,7 +203,12 @@ fn expected_input_token(node: &Node) -> Option<&str> {
     match node {
         Node::Swap { from_token, .. } => Some(from_token),
         Node::Bridge { token, .. } => Some(token),
-        Node::Perp { .. } => node.margin_token(),
+        Node::Perp { venue, .. } => match venue {
+            // Hyperliquid USDC lives on HyperCore and is not LiFi-swappable.
+            // Skip input token validation — delivered via Stargate bridge.
+            PerpVenue::Hyperliquid => None,
+            _ => node.margin_token(),
+        },
         // Wallet, Spot, Lp, Optimizer accept tokens contextually
         _ => None,
     }
