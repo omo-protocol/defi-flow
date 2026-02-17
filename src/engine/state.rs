@@ -40,10 +40,12 @@ impl NodeBalances {
         actual
     }
 
-    /// Resolve an Amount enum against a node's current token balance.
-    pub fn resolve_amount(&self, node_id: &str, token: &str, amount: &Amount) -> f64 {
-        let balance = self.get(node_id, token);
-        resolve(balance, amount)
+    /// Total of all token balances for a single node.
+    pub fn node_total(&self, node_id: &str) -> f64 {
+        self.inner
+            .get(node_id)
+            .map(|m| m.values().sum())
+            .unwrap_or(0.0)
     }
 
     /// Total undeployed value across all node balances (sum of everything).

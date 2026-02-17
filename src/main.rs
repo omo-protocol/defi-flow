@@ -10,8 +10,8 @@ mod list_nodes;
 mod model;
 mod run;
 mod schema;
-mod sim;
 mod validate;
+mod venues;
 mod visualize;
 
 fn main() -> anyhow::Result<()> {

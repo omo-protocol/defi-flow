@@ -1,13 +1,12 @@
 mod manifest;
-mod plan;
-pub mod source;
+pub mod providers;
+pub mod types;
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use plan::DataSource;
-use source::FetchResult;
+use types::FetchConfig;
 
 /// Run the fetch-data command: read workflow, fetch data from APIs, write CSVs + manifest.
 pub fn run(workflow_path: &Path, output_dir: &Path, days: u32, interval: &str) -> Result<()> {
@@ -17,8 +16,8 @@ pub fn run(workflow_path: &Path, output_dir: &Path, days: u32, interval: &str) -
         anyhow::anyhow!("Workflow validation failed:\n  {}", msgs.join("\n  "))
     })?;
 
-    // 2. Build fetch plan
-    let jobs = plan::build_plan(&workflow);
+    // 2. Build fetch plan (delegated to venue categories)
+    let jobs = crate::venues::fetch_plan_all(&workflow);
     if jobs.is_empty() {
         println!("No nodes require external data. Nothing to fetch.");
         return Ok(());
@@ -44,7 +43,7 @@ pub fn run(workflow_path: &Path, output_dir: &Path, days: u32, interval: &str) -
     // 3. Compute time range
     let end_ms = chrono::Utc::now().timestamp_millis() as u64;
     let start_ms = end_ms - (days as u64) * 86_400_000;
-    let config = source::FetchConfig {
+    let config = FetchConfig {
         start_time_ms: start_ms,
         end_time_ms: end_ms,
         interval: interval.to_string(),
@@ -76,7 +75,7 @@ pub fn run(workflow_path: &Path, output_dir: &Path, days: u32, interval: &str) -
                 job.key
             );
 
-            let result = fetch_job(&client, job, &config).await;
+            let result = crate::venues::dispatch_fetch(&client, job, &config).await;
 
             match result {
                 Ok(data) => {
@@ -124,59 +123,4 @@ pub fn run(workflow_path: &Path, output_dir: &Path, days: u32, interval: &str) -
     })?;
 
     Ok(())
-}
-
-/// Dispatch a single fetch job to the appropriate data source.
-async fn fetch_job(
-    client: &reqwest::Client,
-    job: &plan::FetchJob,
-    config: &source::FetchConfig,
-) -> Result<FetchResult> {
-    match &job.source {
-        DataSource::HyperliquidPerp => source::hyperliquid::fetch_perp(client, &job.key, config)
-            .await
-            .map(FetchResult::Perp),
-
-        DataSource::HyperliquidSpot => source::hyperliquid::fetch_spot(client, &job.key, config)
-            .await
-            .map(FetchResult::Price),
-
-        DataSource::Rysk => {
-            // Fetch Hyperliquid spot prices as oracle for Rysk's synthetic history
-            let oracle_prices = source::hyperliquid::fetch_spot(client, &job.key, config)
-                .await
-                .ok();
-            source::rysk::fetch_options(
-                client,
-                &job.key,
-                config,
-                oracle_prices.as_deref(),
-            )
-            .await
-            .map(FetchResult::Options)
-        }
-
-        DataSource::AerodromeSubgraph => source::aerodrome::fetch_lp(client, &job.key, config)
-            .await
-            .map(FetchResult::Lp),
-
-        DataSource::DefiLlamaYield => {
-            if job.kind == "pendle" {
-                // Strip "pendle:" prefix from key
-                let market = job.key.strip_prefix("pendle:").unwrap_or(&job.key);
-                source::defillama::fetch_pendle(client, market, config)
-                    .await
-                    .map(FetchResult::Pendle)
-            } else {
-                // Parse "venue_slug:asset" from key
-                let (venue, asset) = job
-                    .key
-                    .split_once(':')
-                    .unwrap_or(("unknown", &job.key));
-                source::defillama::fetch_lending(client, venue, asset, config)
-                    .await
-                    .map(FetchResult::Lending)
-            }
-        }
-    }
 }

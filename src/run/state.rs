@@ -37,17 +37,4 @@ impl RunState {
         Ok(())
     }
 
-    pub fn get_balance(&self, node_id: &str) -> f64 {
-        self.balances.get(node_id).copied().unwrap_or(0.0)
-    }
-
-    pub fn add_balance(&mut self, node_id: &str, amount: f64) {
-        let entry = self.balances.entry(node_id.to_string()).or_insert(0.0);
-        *entry += amount;
-    }
-
-    pub fn deduct_balance(&mut self, node_id: &str, amount: f64) {
-        let entry = self.balances.entry(node_id.to_string()).or_insert(0.0);
-        *entry = (*entry - amount).max(0.0);
-    }
 }

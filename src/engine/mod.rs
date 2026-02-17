@@ -2,7 +2,6 @@ pub mod clock;
 pub mod optimizer;
 pub mod state;
 pub mod topo;
-pub mod venue;
 
 use std::collections::HashMap;
 
@@ -10,17 +9,19 @@ use anyhow::{Context, Result};
 
 use crate::model::node::{CronInterval, Node, NodeId, Trigger};
 use crate::model::workflow::Workflow;
+use crate::venues::{ExecutionResult, SimMetrics, Venue};
 
-use clock::SimClock;
 use state::NodeBalances;
-use venue::{ExecutionResult, VenueSimulator};
 
-/// Execution engine that walks a workflow DAG and dispatches to venue simulators.
+/// Execution engine that walks a workflow DAG and dispatches to venues.
+///
+/// Both backtest (data-driven simulators) and live (on-chain executors) share
+/// this engine.  The caller controls timing: for backtests, a `SimClock`
+/// drives `tick(now, dt_secs)`; for live runs, real wall-clock time does.
 pub struct Engine {
     pub workflow: Workflow,
-    pub simulators: HashMap<NodeId, Box<dyn VenueSimulator>>,
+    pub venues: HashMap<NodeId, Box<dyn Venue>>,
     pub balances: NodeBalances,
-    pub clock: SimClock,
 
     /// Topological order of non-triggered nodes for the deploy phase.
     deploy_order: Vec<NodeId>,
@@ -31,109 +32,106 @@ pub struct Engine {
 
     // ── Counters for metrics ──
     pub rebalances: u32,
-    pub liquidations: u32,
-    pub swap_costs: f64,
-    pub funding_pnl: f64,
-    pub premium_pnl: f64,
-    pub lp_fees: f64,
-    pub lending_interest: f64,
 }
 
 impl Engine {
     pub fn new(
         workflow: Workflow,
-        simulators: HashMap<NodeId, Box<dyn VenueSimulator>>,
-        clock: SimClock,
+        venues: HashMap<NodeId, Box<dyn Venue>>,
     ) -> Self {
         let deploy_order = topo::deploy_order(&workflow);
-
-        let triggered_nodes: Vec<(NodeId, CronInterval)> = workflow
-            .nodes
-            .iter()
-            .filter_map(|n| {
-                if let Some(trigger) = get_trigger(n) {
-                    if let Trigger::Cron { interval } = trigger {
-                        return Some((n.id().to_string(), *interval));
-                    }
-                }
-                None
-            })
-            .collect();
+        let triggered_nodes = extract_triggered_nodes(&workflow);
 
         Self {
             workflow,
-            simulators,
+            venues,
             balances: NodeBalances::default(),
-            clock,
             deploy_order,
             triggered_nodes,
             trigger_last_fired: HashMap::new(),
             rebalances: 0,
-            liquidations: 0,
-            swap_costs: 0.0,
-            funding_pnl: 0.0,
-            premium_pnl: 0.0,
-            lp_fees: 0.0,
-            lending_interest: 0.0,
         }
     }
 
+    /// Return the deploy order (for diagnostic printing).
+    pub fn deploy_order(&self) -> &[NodeId] {
+        &self.deploy_order
+    }
+
     /// Run the one-time deploy phase: execute non-triggered nodes in topological order.
-    pub fn deploy(&mut self) -> Result<()> {
+    pub async fn deploy(&mut self) -> Result<()> {
         let order = self.deploy_order.clone();
         for node_id in &order {
             self.execute_node(node_id)
+                .await
                 .with_context(|| format!("deploying node '{node_id}'"))?;
         }
         Ok(())
     }
 
     /// Advance the simulation by one tick:
-    /// 1. Advance clock
-    /// 2. Tick all active simulators (accrue interest/funding, check liquidations)
-    /// 3. Fire triggered nodes whose interval has elapsed
+    /// 1. Tick all active venues (accrue interest/funding, check liquidations)
+    /// 2. Fire triggered nodes whose interval has elapsed
     ///
-    /// Returns false when the clock is exhausted.
-    pub fn tick(&mut self) -> Result<bool> {
-        if !self.clock.advance() {
-            return Ok(false);
-        }
-
-        // Tick all simulators
-        let node_ids: Vec<NodeId> = self.simulators.keys().cloned().collect();
-        for node_id in &node_ids {
-            if let Some(sim) = self.simulators.get_mut(node_id) {
-                sim.tick(&self.clock)?;
-            }
-        }
+    /// Returns the list of triggered node IDs that fired this tick.
+    pub async fn tick(&mut self, now: u64, dt_secs: f64) -> Result<Vec<NodeId>> {
+        // Tick all venues
+        self.tick_venues(now, dt_secs).await?;
 
         // Fire triggered nodes
+        let mut fired = Vec::new();
         let triggers = self.triggered_nodes.clone();
         for (node_id, interval) in &triggers {
-            if self.should_fire(node_id, interval) {
+            if self.should_fire(node_id, interval, now) {
                 self.execute_node(node_id)
+                    .await
                     .with_context(|| format!("firing triggered node '{node_id}'"))?;
-                self.trigger_last_fired
-                    .insert(node_id.clone(), self.clock.current_timestamp());
+                self.trigger_last_fired.insert(node_id.clone(), now);
+                fired.push(node_id.clone());
             }
         }
 
-        Ok(true)
+        Ok(fired)
     }
 
-    /// Current total value of the portfolio (all simulator positions + undeployed balances).
-    pub fn total_tvl(&self) -> f64 {
-        let sim_value: f64 = self
-            .simulators
-            .values()
-            .map(|s| s.total_value(&self.clock))
-            .sum();
-        let balance_value = self.balances.total_value();
-        sim_value + balance_value
+    /// Tick all venues without checking triggers.
+    /// Used by the live runner which manages its own scheduling.
+    pub async fn tick_venues(&mut self, now: u64, dt_secs: f64) -> Result<()> {
+        let node_ids: Vec<NodeId> = self.venues.keys().cloned().collect();
+        for node_id in &node_ids {
+            if let Some(venue) = self.venues.get_mut(node_id) {
+                venue.tick(now, dt_secs).await?;
+            }
+        }
+        Ok(())
     }
 
-    /// Execute a single node: gather inputs, call simulator (or optimizer), distribute outputs.
-    fn execute_node(&mut self, node_id: &str) -> Result<()> {
+    /// Current total value of the portfolio (all venue positions + undeployed balances).
+    pub async fn total_tvl(&self) -> f64 {
+        let mut venue_value = 0.0;
+        for v in self.venues.values() {
+            venue_value += v.total_value().await.unwrap_or(0.0);
+        }
+        venue_value + self.balances.total_value()
+    }
+
+    /// Collect aggregated metrics from all venues.
+    pub fn collect_metrics(&self) -> SimMetrics {
+        let mut m = SimMetrics::default();
+        for v in self.venues.values() {
+            let vm = v.metrics();
+            m.funding_pnl += vm.funding_pnl;
+            m.premium_pnl += vm.premium_pnl;
+            m.lp_fees += vm.lp_fees;
+            m.lending_interest += vm.lending_interest;
+            m.swap_costs += vm.swap_costs;
+            m.liquidations += vm.liquidations;
+        }
+        m
+    }
+
+    /// Execute a single node: gather inputs, call venue (or optimizer), distribute outputs.
+    pub async fn execute_node(&mut self, node_id: &str) -> Result<()> {
         let node = self
             .workflow
             .nodes
@@ -146,17 +144,21 @@ impl Engine {
         let (input_token, input_amount) = self.gather_inputs(node_id);
 
         // Handle optimizer specially
-        if let Node::Optimizer { ref id, drift_threshold, .. } = node {
-            return self.execute_optimizer(&node, id, input_amount, drift_threshold);
+        if let Node::Optimizer {
+            ref id,
+            drift_threshold,
+            ..
+        } = node
+        {
+            return self
+                .execute_optimizer(&node, id, input_amount, drift_threshold)
+                .await;
         }
 
-        // Normal node: call simulator
-        if let Some(sim) = self.simulators.get_mut(node_id) {
-            let result = sim.execute(&node, input_amount, &self.clock)?;
+        // Normal node: call venue
+        if let Some(venue) = self.venues.get_mut(node_id) {
+            let result = venue.execute(&node, input_amount).await?;
             self.distribute_result(node_id, &input_token, result)?;
-        } else {
-            // No simulator (e.g. wallet during deploy) — just pass through balances
-            // The input was already added to this node's balance by gather_inputs
         }
 
         Ok(())
@@ -201,7 +203,7 @@ impl Engine {
     ) -> Result<()> {
         match result {
             ExecutionResult::TokenOutput { token, amount } => {
-                // Remove the input token balance (was consumed by simulator)
+                // Remove the input token balance (was consumed by venue)
                 self.balances.deduct(node_id, input_token, f64::MAX);
                 // Add the output token
                 self.balances.add(node_id, &token, amount);
@@ -214,16 +216,13 @@ impl Engine {
                     self.balances.add(node_id, &token, amount);
                 }
             }
-            ExecutionResult::Allocations(_) => {
-                // Should not happen here — optimizer handled separately
-            }
             ExecutionResult::Noop => {}
         }
         Ok(())
     }
 
     /// Execute an optimizer node: compute Kelly allocations, distribute capital to targets.
-    fn execute_optimizer(
+    async fn execute_optimizer(
         &mut self,
         node: &Node,
         node_id: &str,
@@ -241,18 +240,15 @@ impl Engine {
         // Check drift — if this is a periodic rebalance, only proceed if drifted
         if drift_threshold > 0.0 && self.trigger_last_fired.contains_key(node_id) {
             let alloc_result = optimizer::compute_kelly_allocations(node, total_capital)?;
-            let current_values: Vec<(NodeId, f64)> = alloc_result
-                .allocations
-                .iter()
-                .map(|(target_id, _)| {
-                    let value = self
-                        .simulators
-                        .get(target_id)
-                        .map(|s| s.total_value(&self.clock))
-                        .unwrap_or(0.0);
-                    (target_id.clone(), value)
-                })
-                .collect();
+            let mut current_values: Vec<(NodeId, f64)> = Vec::new();
+            for (target_id, _) in &alloc_result.allocations {
+                let value = if let Some(venue) = self.venues.get(target_id.as_str()) {
+                    venue.total_value().await.unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+                current_values.push((target_id.clone(), value));
+            }
 
             if !optimizer::should_rebalance(
                 &current_values,
@@ -295,7 +291,7 @@ impl Engine {
             // Add to target node's balance
             self.balances.add(target_id, &token, amount);
 
-            // Execute the target node's simulator
+            // Execute the target node's venue
             let target_node = self
                 .workflow
                 .nodes
@@ -304,8 +300,8 @@ impl Engine {
                 .cloned();
 
             if let Some(ref target_node) = target_node {
-                if let Some(sim) = self.simulators.get_mut(target_id.as_str()) {
-                    let result = sim.execute(target_node, amount, &self.clock)?;
+                if let Some(venue) = self.venues.get_mut(target_id.as_str()) {
+                    let result = venue.execute(target_node, amount).await?;
                     self.distribute_result(target_id, &token, result)?;
                 }
             }
@@ -314,10 +310,9 @@ impl Engine {
         Ok(())
     }
 
-    fn should_fire(&self, node_id: &str, interval: &CronInterval) -> bool {
+    fn should_fire(&self, node_id: &str, interval: &CronInterval, now: u64) -> bool {
         let last_fired = self.trigger_last_fired.get(node_id).copied().unwrap_or(0);
-        let current = self.clock.current_timestamp();
-        let elapsed = current.saturating_sub(last_fired);
+        let elapsed = now.saturating_sub(last_fired);
         let period_seconds = cron_to_seconds(interval);
         elapsed >= period_seconds
     }
@@ -330,6 +325,21 @@ fn cron_to_seconds(interval: &CronInterval) -> u64 {
         CronInterval::Weekly => 604800,
         CronInterval::Monthly => 2592000,
     }
+}
+
+fn extract_triggered_nodes(workflow: &Workflow) -> Vec<(NodeId, CronInterval)> {
+    workflow
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            if let Some(trigger) = get_trigger(n) {
+                if let Trigger::Cron { interval } = trigger {
+                    return Some((n.id().to_string(), *interval));
+                }
+            }
+            None
+        })
+        .collect()
 }
 
 /// Extract the trigger from a node, if present.

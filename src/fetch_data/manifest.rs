@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use super::source::FetchResult;
+use super::types::FetchResult;
 
 #[derive(Serialize)]
 struct ManifestEntry {

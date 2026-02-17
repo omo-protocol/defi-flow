@@ -56,9 +56,4 @@ impl SimClock {
         }
         self.timestamps[self.current_idx] - self.timestamps[self.current_idx - 1]
     }
-
-    /// Fraction of a year elapsed since the previous tick.
-    pub fn dt_years(&self) -> f64 {
-        self.dt_seconds() as f64 / (365.25 * 86400.0)
-    }
 }
