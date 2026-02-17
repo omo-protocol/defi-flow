@@ -1,30 +1,36 @@
 {
   "name": "ETH Delta-Neutral Funding Arb",
-  "description": "Classic delta-neutral strategy: short ETH perpetual on Hyperliquid to collect funding payments while supplying USDC on HyperLend for base yield. Net delta is zero — profit comes from funding rate spread (shorts get paid in bullish markets) plus lending APY. Idle capital is parked in lending. Daily funding collection and weekly reward claims auto-compound back through the optimizer.",
+  "description": "Delta-neutral with Kelly optimizer: Kelly decides allocation between active hedge (spot+perp pair) and idle lending. Spot and perp legs receive equal capital via percentage edges for perfect delta neutrality. Yield = funding + lending APY. Weekly rebalance on 5% drift.",
   "nodes": [
     {
       "type": "wallet",
       "id": "wallet",
-      "chain": { "name": "HyperEVM", "chain_id": 999 },
+      "chain": { "name": "hyperevm", "chain_id": 999 },
       "address": "0xYourWalletAddress"
     },
     {
       "type": "optimizer",
-      "id": "allocator",
+      "id": "kelly",
       "strategy": "kelly",
       "kelly_fraction": 0.5,
-      "max_allocation": 0.60,
+      "max_allocation": 0.80,
       "drift_threshold": 0.05,
       "allocations": [
         {
-          "target_node": "perp_eth_short",
-          "expected_return": 0.20,
+          "target_node": "buy_eth",
+          "expected_return": 0.07,
           "volatility": 0.15,
           "correlation": 0.0
         },
         {
-          "target_node": "lend_usdc",
-          "expected_return": 0.08,
+          "target_node": "short_eth",
+          "expected_return": 0.07,
+          "volatility": 0.15,
+          "correlation": 0.0
+        },
+        {
+          "target_node": "lend_idle",
+          "expected_return": 0.04,
           "volatility": 0.02,
           "correlation": 0.0
         }
@@ -35,8 +41,15 @@
       }
     },
     {
+      "type": "swap",
+      "id": "buy_eth",
+      "provider": "LiFi",
+      "from_token": "USDC",
+      "to_token": "ETH"
+    },
+    {
       "type": "perp",
-      "id": "perp_eth_short",
+      "id": "short_eth",
       "venue": "Hyperliquid",
       "pair": "ETH/USDC",
       "action": "open",
@@ -45,62 +58,34 @@
     },
     {
       "type": "lending",
-      "id": "lend_usdc",
+      "id": "lend_idle",
       "venue": "HyperLend",
       "asset": "USDC",
       "action": "supply"
-    },
-    {
-      "type": "perp",
-      "id": "collect_funding",
-      "venue": "Hyperliquid",
-      "pair": "ETH/USDC",
-      "action": "collect_funding",
-      "trigger": {
-        "type": "cron",
-        "interval": "daily"
-      }
-    },
-    {
-      "type": "lending",
-      "id": "claim_lend_rewards",
-      "venue": "HyperLend",
-      "asset": "USDC",
-      "action": "claim_rewards",
-      "trigger": {
-        "type": "cron",
-        "interval": "weekly"
-      }
     }
   ],
   "edges": [
     {
       "from_node": "wallet",
-      "to_node": "allocator",
+      "to_node": "kelly",
       "token": "USDC",
       "amount": { "type": "all" }
     },
     {
-      "from_node": "allocator",
-      "to_node": "perp_eth_short",
+      "from_node": "kelly",
+      "to_node": "buy_eth",
       "token": "USDC",
       "amount": { "type": "all" }
     },
     {
-      "from_node": "allocator",
-      "to_node": "lend_usdc",
+      "from_node": "kelly",
+      "to_node": "short_eth",
       "token": "USDC",
       "amount": { "type": "all" }
     },
     {
-      "from_node": "collect_funding",
-      "to_node": "allocator",
-      "token": "USDC",
-      "amount": { "type": "all" }
-    },
-    {
-      "from_node": "claim_lend_rewards",
-      "to_node": "allocator",
+      "from_node": "kelly",
+      "to_node": "lend_idle",
       "token": "USDC",
       "amount": { "type": "all" }
     }
