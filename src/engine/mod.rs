@@ -422,6 +422,7 @@ fn get_trigger(node: &Node) -> Option<&Trigger> {
         | Node::Swap { trigger, .. }
         | Node::Bridge { trigger, .. }
         | Node::Lending { trigger, .. }
+        | Node::Vault { trigger, .. }
         | Node::Pendle { trigger, .. }
         | Node::Optimizer { trigger, .. } => trigger.as_ref(),
         Node::Wallet { .. } => None,

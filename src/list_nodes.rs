@@ -90,7 +90,19 @@ pub fn run() -> anyhow::Result<()> {
      - defillama_slug:      String? (optional DefiLlama project slug for fetch-data)
      - trigger:             Trigger? (optional, e.g. claim_rewards daily)
 
-9. pendle
+9. vault
+   Yield-bearing vault — deposit, withdraw, claim rewards.
+   Execution layer handles protocol-specific details (ERC4626 interface, etc.)
+   Parameters:
+     - archetype:           VaultArchetype (morpho_v2)
+     - chain:               Chain   (e.g. {{"name":"ethereum","chain_id":1}})
+     - vault_address:       String  (0x-prefixed vault contract address)
+     - asset:               String  (e.g. "USDC", "WETH")
+     - action:              VaultAction (deposit | withdraw | claim_rewards)
+     - defillama_slug:      String? (optional DefiLlama project slug for fetch-data)
+     - trigger:             Trigger? (optional, e.g. claim_rewards daily)
+
+10. pendle
    Pendle yield tokenization — mint/redeem principal tokens (PT) for fixed yield
    or yield tokens (YT) for variable yield. Used in strategies like PT-kHYPE looping.
    Execution layer handles Pendle router interactions and market lookups.
@@ -99,7 +111,7 @@ pub fn run() -> anyhow::Result<()> {
      - action:  PendleAction (mint_pt | redeem_pt | mint_yt | redeem_yt | claim_rewards)
      - trigger: Trigger?     (optional, e.g. claim_rewards weekly)
 
-10. optimizer
+11. optimizer
    Capital allocation optimizer using Kelly Criterion.
    With a trigger, periodically checks allocations and rebalances if drift > threshold.
    Parameters:

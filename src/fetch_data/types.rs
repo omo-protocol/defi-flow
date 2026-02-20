@@ -57,6 +57,7 @@ pub enum FetchResult {
     Options(Vec<csv_types::OptionsCsvRow>),
     Lp(Vec<csv_types::LpCsvRow>),
     Lending(Vec<csv_types::LendingCsvRow>),
+    Vault(Vec<csv_types::VaultCsvRow>),
     Pendle(Vec<csv_types::PendleCsvRow>),
     Price(Vec<csv_types::PriceCsvRow>),
 }
@@ -68,6 +69,7 @@ impl FetchResult {
             FetchResult::Options(r) => r.len(),
             FetchResult::Lp(r) => r.len(),
             FetchResult::Lending(r) => r.len(),
+            FetchResult::Vault(r) => r.len(),
             FetchResult::Pendle(r) => r.len(),
             FetchResult::Price(r) => r.len(),
         }

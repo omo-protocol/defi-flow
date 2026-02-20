@@ -49,6 +49,27 @@ pub enum BridgeProvider {
     Stargate,
 }
 
+/// Vault protocol interface archetypes.
+/// Determines which ABI / contract interaction pattern to use for live execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultArchetype {
+    /// Morpho Vaults V2 (ERC4626-style).
+    MorphoV2,
+}
+
+/// Vault protocol actions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultAction {
+    /// Deposit assets into the vault.
+    Deposit,
+    /// Withdraw assets from the vault.
+    Withdraw,
+    /// Claim reward emissions.
+    ClaimRewards,
+}
+
 /// Lending protocol interface archetypes.
 /// Determines which ABI / contract interaction pattern to use for live execution.
 /// Aave forks (HyperLend, Lendle, Seamless, Granary, etc.) all use `AaveV3` or `AaveV2`.
@@ -416,6 +437,29 @@ pub enum Node {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trigger: Option<Trigger>,
     },
+    /// Vault deposit node (e.g. Morpho Vaults V2).
+    /// Deposit into yield-bearing vaults, withdraw, or claim rewards.
+    /// The archetype determines which ABI to use; addresses are provided per-deployment.
+    Vault {
+        /// Unique identifier for this node.
+        id: NodeId,
+        /// Which vault interface to use (determines the ABI).
+        archetype: VaultArchetype,
+        /// The chain this vault deployment is on.
+        chain: Chain,
+        /// Vault contract address (0x-prefixed).
+        vault_address: String,
+        /// Asset token symbol, e.g. "USDC", "WETH".
+        asset: String,
+        /// What action to perform.
+        action: VaultAction,
+        /// DefiLlama project slug for fetch-data (e.g. "morpho-vaults-v2").
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        defillama_slug: Option<String>,
+        /// Optional periodic trigger (e.g. claim rewards daily).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trigger: Option<Trigger>,
+    },
     /// Pendle yield tokenization node.
     /// Mint/redeem principal tokens (PT) for fixed yield or yield tokens (YT)
     /// for variable yield. Used in strategies like PT-kHYPE looping.
@@ -474,6 +518,7 @@ impl Node {
             | Node::Swap { id, .. }
             | Node::Bridge { id, .. }
             | Node::Lending { id, .. }
+            | Node::Vault { id, .. }
             | Node::Pendle { id, .. }
             | Node::Optimizer { id, .. } => id,
         }
@@ -490,6 +535,7 @@ impl Node {
             Node::Swap { .. } => "swap",
             Node::Bridge { .. } => "bridge",
             Node::Lending { .. } => "lending",
+            Node::Vault { .. } => "vault",
             Node::Pendle { .. } => "pendle",
             Node::Optimizer { .. } => "optimizer",
         }
@@ -505,6 +551,7 @@ impl Node {
             | Node::Swap { trigger, .. }
             | Node::Bridge { trigger, .. }
             | Node::Lending { trigger, .. }
+            | Node::Vault { trigger, .. }
             | Node::Pendle { trigger, .. }
             | Node::Optimizer { trigger, .. } => trigger.is_some(),
             Node::Wallet { .. } => false,
@@ -610,6 +657,17 @@ impl Node {
                 let t = trig_suffix(trigger);
                 format!("lending({archetype:?} {action:?} {asset} on {chain}{t})")
             }
+            Node::Vault {
+                archetype,
+                chain,
+                asset,
+                action,
+                trigger,
+                ..
+            } => {
+                let t = trig_suffix(trigger);
+                format!("vault({archetype:?} {action:?} {asset} on {chain}{t})")
+            }
             Node::Pendle {
                 market,
                 action,
@@ -653,6 +711,7 @@ impl Node {
             Node::Lp { .. } => Some(Chain::base()),
             Node::Swap { chain, .. } => chain.clone(),
             Node::Lending { chain, .. } => Some(chain.clone()),
+            Node::Vault { chain, .. } => Some(chain.clone()),
             Node::Pendle { .. } => Some(Chain::hyperevm()),
             Node::Optimizer { .. } => None,
         }

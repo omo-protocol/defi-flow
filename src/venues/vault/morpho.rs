@@ -1,0 +1,230 @@
+use alloy::primitives::Address;
+use alloy::providers::ProviderBuilder;
+use alloy::sol;
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+
+use crate::model::node::{Node, VaultAction};
+use crate::run::config::RuntimeConfig;
+use crate::venues::evm;
+use crate::venues::{ExecutionResult, SimMetrics, Venue};
+
+// ── Morpho Vault V2 interface (ERC4626) ─────────────────────────────
+
+sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    contract IMorphoVault {
+        function deposit(uint256 assets, address receiver) external returns (uint256 shares);
+        function withdraw(uint256 assets, address receiver, address owner) external returns (uint256 shares);
+        function redeem(uint256 shares, address receiver, address owner) external returns (uint256 assets);
+        function maxWithdraw(address owner) external view returns (uint256);
+        function convertToAssets(uint256 shares) external view returns (uint256);
+        function balanceOf(address account) external view returns (uint256);
+        function asset() external view returns (address);
+        function decimals() external view returns (uint8);
+    }
+}
+
+sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    contract IERC20 {
+        function approve(address spender, uint256 amount) external returns (bool);
+        function balanceOf(address account) external view returns (uint256);
+    }
+}
+
+// ── Morpho Vault V2 Live Executor ───────────────────────────────────
+
+pub struct MorphoVault {
+    wallet_address: Address,
+    private_key: String,
+    dry_run: bool,
+    deposited_value: f64,
+    metrics: SimMetrics,
+}
+
+impl MorphoVault {
+    pub fn new(config: &RuntimeConfig) -> Result<Self> {
+        Ok(MorphoVault {
+            wallet_address: config.wallet_address,
+            private_key: config.private_key.clone(),
+            dry_run: config.dry_run,
+            deposited_value: 0.0,
+            metrics: SimMetrics::default(),
+        })
+    }
+
+    async fn execute_deposit(
+        &mut self,
+        vault_addr: Address,
+        rpc_url: &str,
+        token_addr: Address,
+        asset_symbol: &str,
+        input_amount: f64,
+    ) -> Result<ExecutionResult> {
+        let decimals = token_decimals_for(asset_symbol);
+        let amount_units = evm::to_token_units(input_amount, 1.0, decimals);
+
+        println!(
+            "  VAULT DEPOSIT: {} {} to vault {}",
+            input_amount, asset_symbol, evm::short_addr(&vault_addr),
+        );
+
+        if self.dry_run {
+            println!("  VAULT: [DRY RUN] would approve {} + deposit to vault", asset_symbol);
+            self.deposited_value += input_amount;
+            return Ok(ExecutionResult::PositionUpdate {
+                consumed: input_amount,
+                output: None,
+            });
+        }
+
+        let provider = make_provider(&self.private_key, rpc_url)?;
+
+        // Approve vault to spend underlying token
+        let erc20 = IERC20::new(token_addr, &provider);
+        let approve_tx = erc20.approve(vault_addr, amount_units);
+        let pending = approve_tx.send().await.context("ERC20 approve failed")?;
+        let receipt = pending.get_receipt().await.context("approve receipt")?;
+        println!("  VAULT: approve tx: {:?}", receipt.transaction_hash);
+
+        // Deposit into vault (ERC4626)
+        let vault = IMorphoVault::new(vault_addr, &provider);
+        let deposit_tx = vault.deposit(amount_units, self.wallet_address);
+        let pending = deposit_tx.send().await.context("vault deposit failed")?;
+        let receipt = pending.get_receipt().await.context("deposit receipt")?;
+        println!("  VAULT: deposit tx: {:?}", receipt.transaction_hash);
+
+        self.deposited_value += input_amount;
+        Ok(ExecutionResult::PositionUpdate {
+            consumed: input_amount,
+            output: None,
+        })
+    }
+
+    async fn execute_withdraw(
+        &mut self,
+        vault_addr: Address,
+        rpc_url: &str,
+        asset_symbol: &str,
+        input_amount: f64,
+    ) -> Result<ExecutionResult> {
+        let decimals = token_decimals_for(asset_symbol);
+        let amount_units = evm::to_token_units(input_amount, 1.0, decimals);
+
+        println!(
+            "  VAULT WITHDRAW: {} {} from vault {}",
+            input_amount, asset_symbol, evm::short_addr(&vault_addr),
+        );
+
+        if self.dry_run {
+            println!("  VAULT: [DRY RUN] would withdraw from vault");
+            self.deposited_value = (self.deposited_value - input_amount).max(0.0);
+            return Ok(ExecutionResult::TokenOutput {
+                token: asset_symbol.to_string(),
+                amount: input_amount,
+            });
+        }
+
+        let provider = make_provider(&self.private_key, rpc_url)?;
+
+        let vault = IMorphoVault::new(vault_addr, &provider);
+        let withdraw_tx = vault.withdraw(amount_units, self.wallet_address, self.wallet_address);
+        let pending = withdraw_tx.send().await.context("vault withdraw failed")?;
+        let receipt = pending.get_receipt().await.context("withdraw receipt")?;
+        println!("  VAULT: withdraw tx: {:?}", receipt.transaction_hash);
+
+        self.deposited_value = (self.deposited_value - input_amount).max(0.0);
+        Ok(ExecutionResult::TokenOutput {
+            token: asset_symbol.to_string(),
+            amount: input_amount,
+        })
+    }
+}
+
+#[async_trait]
+impl Venue for MorphoVault {
+    async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult> {
+        match node {
+            Node::Vault {
+                chain,
+                vault_address,
+                asset,
+                action,
+                ..
+            } => {
+                let rpc_url = chain
+                    .rpc_url()
+                    .context("vault chain requires RPC URL")?;
+                let vault_addr: Address = vault_address
+                    .parse()
+                    .with_context(|| format!("invalid vault_address: {vault_address}"))?;
+                let token_addr = evm::token_address(chain, asset)
+                    .with_context(|| format!("Unknown token '{asset}' on {chain}"))?;
+
+                match action {
+                    VaultAction::Deposit => {
+                        self.execute_deposit(vault_addr, rpc_url, token_addr, asset, input_amount).await
+                    }
+                    VaultAction::Withdraw => {
+                        self.execute_withdraw(vault_addr, rpc_url, asset, input_amount).await
+                    }
+                    VaultAction::ClaimRewards => {
+                        // Morpho rewards are claimed via off-chain merkle proofs
+                        // through the Universal Rewards Distributor — not automated here yet.
+                        println!("  VAULT: claim_rewards not yet automated for Morpho V2");
+                        Ok(ExecutionResult::Noop)
+                    }
+                }
+            }
+            _ => {
+                println!("  VAULT: unsupported node type '{}'", node.type_name());
+                Ok(ExecutionResult::Noop)
+            }
+        }
+    }
+
+    async fn total_value(&self) -> Result<f64> {
+        Ok(self.deposited_value)
+    }
+
+    async fn tick(&mut self, _now: u64, _dt_secs: f64) -> Result<()> {
+        if self.deposited_value > 0.0 {
+            println!(
+                "  VAULT TICK: deposited=${:.2}",
+                self.deposited_value,
+            );
+        }
+        Ok(())
+    }
+
+    fn metrics(&self) -> SimMetrics {
+        SimMetrics {
+            lending_interest: self.metrics.lending_interest,
+            ..SimMetrics::default()
+        }
+    }
+}
+
+fn make_provider(
+    private_key: &str,
+    rpc_url: &str,
+) -> Result<impl alloy::providers::Provider + Clone> {
+    let signer: alloy::signers::local::PrivateKeySigner = private_key
+        .parse()
+        .map_err(|e| anyhow::anyhow!("Invalid key: {e}"))?;
+    let wallet = alloy::network::EthereumWallet::from(signer);
+    Ok(ProviderBuilder::new()
+        .wallet(wallet)
+        .connect_http(rpc_url.parse()?))
+}
+
+fn token_decimals_for(symbol: &str) -> u8 {
+    match symbol.to_uppercase().as_str() {
+        "USDC" | "USDT" => 6,
+        "WBTC" | "CBBTC" => 8,
+        _ => 18,
+    }
+}

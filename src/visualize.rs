@@ -259,6 +259,13 @@ fn node_detail(node: &Node) -> String {
             action,
             ..
         } => format!("{archetype:?} {action:?} {asset} on {chain}"),
+        Node::Vault {
+            archetype,
+            chain,
+            asset,
+            action,
+            ..
+        } => format!("{archetype:?} {action:?} {asset} on {chain}"),
         Node::Pendle {
             market, action, ..
         } => format!("{action:?} {market}"),
@@ -286,6 +293,7 @@ fn node_dot_style(node: &Node) -> String {
         Node::Swap { .. } => ("parallelogram", "#e65100"),
         Node::Bridge { .. } => ("parallelogram", "#4e342e"),
         Node::Lending { .. } => ("box", "#00838f"),
+        Node::Vault { .. } => ("box", "#00695c"),
         Node::Pendle { .. } => ("box", "#37474f"),
         Node::Optimizer { .. } => ("diamond", "#f9a825"),
     };

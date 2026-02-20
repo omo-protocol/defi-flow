@@ -59,6 +59,10 @@ pub fn collect_timestamps(data_dir: &Path, manifest: &HashMap<NodeId, ManifestEn
                 let rows: Vec<csv_types::LendingCsvRow> = load_csv(data_dir, &entry.file)?;
                 timestamps.extend(rows.iter().map(|r| r.timestamp));
             }
+            "vault" => {
+                let rows: Vec<csv_types::VaultCsvRow> = load_csv(data_dir, &entry.file)?;
+                timestamps.extend(rows.iter().map(|r| r.timestamp));
+            }
             "pendle" => {
                 let rows: Vec<csv_types::PendleCsvRow> = load_csv(data_dir, &entry.file)?;
                 timestamps.extend(rows.iter().map(|r| r.timestamp));

@@ -1,6 +1,7 @@
 pub mod evm;
 pub mod lending;
 pub mod lp;
+pub mod vault;
 pub mod movement;
 pub mod options;
 pub mod perps;
@@ -218,6 +219,7 @@ register_venue_categories!(
     options::OptionsCategory,
     lp::LpCategory,
     lending::LendingCategory,
+    vault::VaultCategory,
     movement::MovementCategory,
     yield_tokens::YieldTokensCategory,
     primitives::PrimitivesCategory,
