@@ -1,4 +1,4 @@
-use super::result::BacktestResult;
+use super::result::{BacktestResult, TrajectoryPoint};
 
 /// Backtest metrics collector — ported from markowitz's BacktestMetrics.
 /// Tracks TWRR, drawdown, Sharpe ratio, and per-venue counters.
@@ -11,6 +11,7 @@ pub struct BacktestMetrics {
     peak_tvl: f64,
     max_drawdown: f64,
     // History
+    ts_history: Vec<u64>,
     tvl_history: Vec<f64>,
 }
 
@@ -22,12 +23,13 @@ impl BacktestMetrics {
             period_start_tvl: initial_tvl,
             peak_tvl: initial_tvl,
             max_drawdown: 0.0,
+            ts_history: Vec::new(),
             tvl_history: Vec::new(),
         }
     }
 
     /// Record end-of-tick TVL: updates peak, drawdown, pushes to history.
-    pub fn record_tick(&mut self, tvl: f64) {
+    pub fn record_tick(&mut self, timestamp: u64, tvl: f64) {
         if tvl > self.peak_tvl {
             self.peak_tvl = tvl;
         }
@@ -39,6 +41,7 @@ impl BacktestMetrics {
         if drawdown > self.max_drawdown {
             self.max_drawdown = drawdown;
         }
+        self.ts_history.push(timestamp);
         self.tvl_history.push(tvl);
     }
 
@@ -75,6 +78,16 @@ impl BacktestMetrics {
         let sharpe = self.compute_sharpe();
         let net_pnl = final_tvl - initial_capital;
 
+        let trajectory: Vec<TrajectoryPoint> = self
+            .ts_history
+            .iter()
+            .zip(self.tvl_history.iter())
+            .map(|(&ts, &tvl)| TrajectoryPoint {
+                timestamp: ts,
+                tvl,
+            })
+            .collect();
+
         BacktestResult {
             label,
             twrr_pct: twrr * 100.0,
@@ -90,7 +103,8 @@ impl BacktestMetrics {
             lp_fees,
             lending_interest,
             swap_costs,
-            ticks: self.tvl_history.len(),
+            ticks: trajectory.len(),
+            trajectory,
         }
     }
 

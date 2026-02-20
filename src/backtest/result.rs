@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrajectoryPoint {
+    pub timestamp: u64,
+    pub tvl: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacktestResult {
     pub label: String,
     pub twrr_pct: f64,
@@ -17,6 +23,7 @@ pub struct BacktestResult {
     pub lending_interest: f64,
     pub swap_costs: f64,
     pub ticks: usize,
+    pub trajectory: Vec<TrajectoryPoint>,
 }
 
 impl BacktestResult {

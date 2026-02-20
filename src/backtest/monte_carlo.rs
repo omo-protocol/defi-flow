@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use rand::prelude::*;
+use serde::Serialize;
 
 use super::result::BacktestResult;
 
@@ -14,6 +15,7 @@ pub struct MonteCarloConfig {
 }
 
 /// Monte Carlo results: historical baseline + all simulation results.
+#[derive(Serialize)]
 pub struct MonteCarloResult {
     pub historical: BacktestResult,
     pub simulations: Vec<BacktestResult>,

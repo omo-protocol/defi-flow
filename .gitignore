@@ -1,2 +1,7 @@
 /target
 /data
+*.json.bak
+backtest_output.json
+trajectory.png
+pnl_breakdown.png
+mc_distributions.png

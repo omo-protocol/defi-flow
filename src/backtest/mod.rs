@@ -3,6 +3,7 @@ pub mod monte_carlo;
 pub mod result;
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 
 use crate::data;
 use crate::engine::clock::SimClock;
@@ -13,6 +14,21 @@ use crate::venues::{self, BuildMode};
 
 use metrics::BacktestMetrics;
 use result::BacktestResult;
+
+/// Top-level JSON output for `--output`.
+#[derive(Serialize)]
+pub struct BacktestOutput {
+    pub historical: BacktestResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monte_carlo: Option<MonteCarloOutput>,
+}
+
+/// Monte Carlo section of JSON output.
+#[derive(Serialize)]
+pub struct MonteCarloOutput {
+    pub n_simulations: usize,
+    pub simulations: Vec<BacktestResult>,
+}
 
 /// Configuration for a backtest run.
 pub struct BacktestConfig {
@@ -30,19 +46,29 @@ pub struct BacktestConfig {
 pub fn run(config: &BacktestConfig) -> Result<()> {
     let historical = run_single_backtest(config)?;
 
-    if let Some(ref mc_config) = config.monte_carlo {
-        // Print historical first, then run MC
+    let mc_output = if let Some(ref mc_config) = config.monte_carlo {
         BacktestResult::print_table(&[historical.clone()]);
-        let mc_result = monte_carlo::run(config, mc_config, historical)?;
+        let mc_result = monte_carlo::run(config, mc_config, historical.clone())?;
         monte_carlo::print_results(&mc_result);
+        Some(MonteCarloOutput {
+            n_simulations: mc_result.simulations.len(),
+            simulations: mc_result.simulations,
+        })
     } else {
-        BacktestResult::print_table(&[historical]);
-    }
+        BacktestResult::print_table(&[historical.clone()]);
+        None
+    };
 
-    // Optional JSON output
     if let Some(ref output_path) = config.output {
-        let _ = output_path;
-        println!("  (JSON output: not yet implemented)");
+        let output = BacktestOutput {
+            historical,
+            monte_carlo: mc_output,
+        };
+        let file = std::fs::File::create(output_path)
+            .with_context(|| format!("creating output file {}", output_path.display()))?;
+        serde_json::to_writer_pretty(file, &output)
+            .context("writing JSON output")?;
+        println!("  JSON output written to {}", output_path.display());
     }
 
     Ok(())
@@ -107,7 +133,7 @@ async fn execute_backtest(
 
     let initial_tvl = engine.total_tvl().await;
     let mut bt_metrics = BacktestMetrics::new(initial_tvl, periods_per_year);
-    bt_metrics.record_tick(initial_tvl);
+    bt_metrics.record_tick(clock.current_timestamp(), initial_tvl);
 
     if config.verbose {
         println!("[deploy] TVL = {:.2}", initial_tvl);
@@ -124,7 +150,7 @@ async fn execute_backtest(
             .context("tick phase")?;
 
         let tvl = engine.total_tvl().await;
-        bt_metrics.record_tick(tvl);
+        bt_metrics.record_tick(now, tvl);
         tick_count += 1;
 
         if config.verbose && tick_count % 100 == 0 {
