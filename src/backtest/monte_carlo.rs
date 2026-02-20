@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use rand::prelude::*;
+use rayon::prelude::*;
 use serde::Serialize;
 
 use super::result::BacktestResult;
@@ -37,7 +38,6 @@ pub fn run(
         .map(|e| (e.file.clone(), e.kind.clone()))
         .collect();
 
-    let mut sim_results = Vec::with_capacity(mc_config.n_simulations as usize);
     let pb = indicatif::ProgressBar::new(mc_config.n_simulations as u64);
     pb.set_style(
         indicatif::ProgressStyle::default_bar()
@@ -45,58 +45,71 @@ pub fn run(
             .unwrap(),
     );
 
-    for i in 0..mc_config.n_simulations {
-        let sim_seed = config.seed.wrapping_add(i as u64 + 1);
+    let sim_results: Vec<BacktestResult> = (0..mc_config.n_simulations)
+        .into_par_iter()
+        .filter_map(|i| {
+            let sim_seed = config.seed.wrapping_add(i as u64 + 1);
 
-        // Create temp directory for this simulation's resampled data
-        let temp_dir = std::env::temp_dir().join(format!("defi-flow-mc-{}-{}", config.seed, i));
-        std::fs::create_dir_all(&temp_dir)
-            .with_context(|| format!("creating temp dir {}", temp_dir.display()))?;
-
-        // Resample each unique CSV file
-        let mut rng = StdRng::seed_from_u64(sim_seed);
-        for (file, kind) in &unique_files {
-            resample_csv(
-                &config.data_dir.join(file),
-                &temp_dir.join(file),
-                kind,
-                mc_config.block_size,
-                mc_config.gbm_vol_scale,
-                &mut rng,
-            )
-            .with_context(|| format!("resampling {}", file))?;
-        }
-
-        // Copy manifest.json to temp directory
-        std::fs::copy(
-            config.data_dir.join("manifest.json"),
-            temp_dir.join("manifest.json"),
-        )
-        .context("copying manifest.json")?;
-
-        // Run backtest on resampled data
-        let sim_config = super::BacktestConfig {
-            workflow_path: config.workflow_path.clone(),
-            data_dir: temp_dir.clone(),
-            capital: config.capital,
-            slippage_bps: config.slippage_bps,
-            seed: sim_seed,
-            verbose: false,
-            output: None,
-            monte_carlo: None,
-        };
-
-        match super::run_single_backtest(&sim_config) {
-            Ok(result) => sim_results.push(result),
-            Err(e) => {
-                eprintln!("  Warning: simulation {} failed: {}", i + 1, e);
+            // Create temp directory for this simulation's resampled data
+            let temp_dir =
+                std::env::temp_dir().join(format!("defi-flow-mc-{}-{}", config.seed, i));
+            if std::fs::create_dir_all(&temp_dir).is_err() {
+                pb.inc(1);
+                return None;
             }
-        }
 
-        // Clean up temp directory
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        pb.inc(1);
-    }
+            // Resample each unique CSV file
+            let mut rng = StdRng::seed_from_u64(sim_seed);
+            for (file, kind) in &unique_files {
+                if resample_csv(
+                    &config.data_dir.join(file),
+                    &temp_dir.join(file),
+                    kind,
+                    mc_config.block_size,
+                    mc_config.gbm_vol_scale,
+                    &mut rng,
+                )
+                .is_err()
+                {
+                    let _ = std::fs::remove_dir_all(&temp_dir);
+                    pb.inc(1);
+                    return None;
+                }
+            }
+
+            // Copy manifest.json to temp directory
+            if std::fs::copy(
+                config.data_dir.join("manifest.json"),
+                temp_dir.join("manifest.json"),
+            )
+            .is_err()
+            {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                pb.inc(1);
+                return None;
+            }
+
+            // Run backtest on resampled data
+            let sim_config = super::BacktestConfig {
+                workflow_path: config.workflow_path.clone(),
+                data_dir: temp_dir.clone(),
+                capital: config.capital,
+                slippage_bps: config.slippage_bps,
+                seed: sim_seed,
+                verbose: false,
+                output: None,
+                monte_carlo: None,
+            };
+
+            let result = super::run_single_backtest(&sim_config).ok();
+
+            // Clean up temp directory
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            pb.inc(1);
+            result
+        })
+        .collect();
+
     pb.finish_and_clear();
 
     Ok(MonteCarloResult {
