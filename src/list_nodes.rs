@@ -58,25 +58,26 @@ pub fn run() -> anyhow::Result<()> {
      - tick_spacing:  i32?    (pool tick spacing, e.g. 100 for CL100, 200 for CL200)
      - trigger:      Trigger? (optional, e.g. claim_rewards daily)
 
-6. swap
-   Token swap via aggregator.
+6. movement
+   Token movement — swap, bridge, or atomic swap+bridge.
+   Unifies same-chain swaps, cross-chain bridges, and atomic cross-chain swaps.
    Parameters:
-     - provider:   SwapProvider (LiFi)
-     - from_token: String       (e.g. "USDe")
-     - to_token:   String       (e.g. "USDC")
-     - chain:      Chain?       (optional — chain this swap executes on, for cross-chain validation)
-     - trigger:    Trigger?     (optional)
+     - movement_type: MovementType     (swap | bridge | swap_bridge)
+     - provider:      MovementProvider (LiFi | Stargate)
+     - from_token:    String           (e.g. "USDe", "AERO")
+     - to_token:      String           (e.g. "USDC" — same as from_token for bridge)
+     - from_chain:    Chain?           (source chain, optional for same-chain swaps)
+     - to_chain:      Chain?           (destination chain — required for bridge/swap_bridge)
+     - trigger:       Trigger?         (optional)
+   Movement types:
+     - swap:        Same-chain token conversion (e.g. AERO → USDC on Base).
+                    Providers: LiFi.
+     - bridge:      Cross-chain same-token transfer (e.g. USDe Mantle → USDe Hyperliquid).
+                    Providers: LiFi, Stargate.
+     - swap_bridge: Atomic cross-chain swap + bridge (e.g. AERO on Base → USDC on HyperEVM).
+                    Providers: LiFi.
 
-7. bridge
-   Cross-chain bridge transfer.
-   Parameters:
-     - provider:   BridgeProvider (LiFi | Stargate)
-     - from_chain: Chain          (object: {"name":"mantle","chain_id":5000,"rpc_url":"https://rpc.mantle.xyz"})
-     - to_chain:   Chain          (same format — non-EVM chains omit chain_id/rpc_url: {"name":"hyperliquid"})
-     - token:      String         (e.g. "USDe")
-     - trigger:    Trigger?       (optional)
-
-8. lending
+7. lending
    Lending protocol — supply, borrow, repay, withdraw, claim rewards.
    Execution layer handles protocol-specific details (Morpho market IDs,
    HyperLend E-mode, Init Capital vault shares, etc.)
@@ -90,7 +91,7 @@ pub fn run() -> anyhow::Result<()> {
      - defillama_slug:      String? (optional DefiLlama project slug for fetch-data)
      - trigger:             Trigger? (optional, e.g. claim_rewards daily)
 
-9. vault
+8. vault
    Yield-bearing vault — deposit, withdraw, claim rewards.
    Execution layer handles protocol-specific details (ERC4626 interface, etc.)
    Parameters:
@@ -102,7 +103,7 @@ pub fn run() -> anyhow::Result<()> {
      - defillama_slug:      String? (optional DefiLlama project slug for fetch-data)
      - trigger:             Trigger? (optional, e.g. claim_rewards daily)
 
-10. pendle
+9. pendle
    Pendle yield tokenization — mint/redeem principal tokens (PT) for fixed yield
    or yield tokens (YT) for variable yield. Used in strategies like PT-kHYPE looping.
    Execution layer handles Pendle router interactions and market lookups.
@@ -111,7 +112,7 @@ pub fn run() -> anyhow::Result<()> {
      - action:  PendleAction (mint_pt | redeem_pt | mint_yt | redeem_yt | claim_rewards)
      - trigger: Trigger?     (optional, e.g. claim_rewards weekly)
 
-11. optimizer
+10. optimizer
    Capital allocation optimizer using Kelly Criterion.
    With a trigger, periodically checks allocations and rebalances if drift > threshold.
    Parameters:

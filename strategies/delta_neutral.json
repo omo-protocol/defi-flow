@@ -41,8 +41,9 @@
       }
     },
     {
-      "type": "swap",
+      "type": "movement",
       "id": "buy_eth",
+      "movement_type": "swap",
       "provider": "LiFi",
       "from_token": "USDC",
       "to_token": "ETH"

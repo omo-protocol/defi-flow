@@ -36,16 +36,24 @@ pub enum LpVenue {
     Aerodrome,
 }
 
-/// Swap aggregator providers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum SwapProvider {
-    LiFi,
+/// Movement type — what kind of token transfer operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MovementType {
+    /// Same-chain token conversion (e.g. AERO → USDC on Base).
+    Swap,
+    /// Cross-chain same-token transfer (e.g. USDC Base → USDC HyperEVM).
+    Bridge,
+    /// Atomic cross-chain swap + bridge (e.g. AERO on Base → USDC on HyperEVM).
+    SwapBridge,
 }
 
-/// Cross-chain bridge providers.
+/// Movement provider — which aggregator/protocol to use.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum BridgeProvider {
+pub enum MovementProvider {
+    /// LiFi — supports swap, bridge, and swap+bridge atomically.
     LiFi,
+    /// Stargate — bridge only.
     Stargate,
 }
 
@@ -377,35 +385,29 @@ pub enum Node {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trigger: Option<Trigger>,
     },
-    /// Token swap via aggregator node.
-    Swap {
+    /// Token movement node — swap, bridge, or atomic swap+bridge.
+    /// Unifies same-chain swaps, cross-chain bridges, and atomic cross-chain swaps.
+    ///
+    /// - `swap`: same-chain token conversion (e.g. AERO → USDC on Base).
+    /// - `bridge`: cross-chain same-token transfer (e.g. USDC Base → USDC HyperEVM).
+    /// - `swap_bridge`: atomic cross-chain swap+bridge via LiFi.
+    Movement {
         /// Unique identifier for this node.
         id: NodeId,
-        /// Aggregator provider.
-        provider: SwapProvider,
+        /// What kind of movement operation.
+        movement_type: MovementType,
+        /// Which aggregator / protocol to use.
+        provider: MovementProvider,
         /// Source token symbol, e.g. "USDC".
         from_token: String,
-        /// Destination token symbol, e.g. "ETH".
+        /// Destination token symbol. Same as `from_token` for bridge-only.
         to_token: String,
-        /// Chain this swap executes on (used for cross-chain validation).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        chain: Option<Chain>,
-        /// Optional periodic trigger.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        trigger: Option<Trigger>,
-    },
-    /// Cross-chain bridge node.
-    Bridge {
-        /// Unique identifier for this node.
-        id: NodeId,
-        /// Bridge provider.
-        provider: BridgeProvider,
         /// Source chain.
-        from_chain: Chain,
-        /// Destination chain.
-        to_chain: Chain,
-        /// Token to bridge, e.g. "USDC".
-        token: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_chain: Option<Chain>,
+        /// Destination chain. Required for bridge and swap_bridge.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_chain: Option<Chain>,
         /// Optional periodic trigger.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trigger: Option<Trigger>,
@@ -515,8 +517,7 @@ impl Node {
             | Node::Options { id, .. }
             | Node::Spot { id, .. }
             | Node::Lp { id, .. }
-            | Node::Swap { id, .. }
-            | Node::Bridge { id, .. }
+            | Node::Movement { id, .. }
             | Node::Lending { id, .. }
             | Node::Vault { id, .. }
             | Node::Pendle { id, .. }
@@ -532,8 +533,7 @@ impl Node {
             Node::Options { .. } => "options",
             Node::Spot { .. } => "spot",
             Node::Lp { .. } => "lp",
-            Node::Swap { .. } => "swap",
-            Node::Bridge { .. } => "bridge",
+            Node::Movement { .. } => "movement",
             Node::Lending { .. } => "lending",
             Node::Vault { .. } => "vault",
             Node::Pendle { .. } => "pendle",
@@ -548,8 +548,7 @@ impl Node {
             | Node::Options { trigger, .. }
             | Node::Spot { trigger, .. }
             | Node::Lp { trigger, .. }
-            | Node::Swap { trigger, .. }
-            | Node::Bridge { trigger, .. }
+            | Node::Movement { trigger, .. }
             | Node::Lending { trigger, .. }
             | Node::Vault { trigger, .. }
             | Node::Pendle { trigger, .. }
@@ -625,26 +624,32 @@ impl Node {
                 };
                 format!("lp({venue:?} {action:?} {pool}{ticks}{t})")
             }
-            Node::Swap {
+            Node::Movement {
+                movement_type,
                 provider,
                 from_token,
                 to_token,
-                trigger,
-                ..
-            } => {
-                let t = trig_suffix(trigger);
-                format!("swap({provider:?} {from_token}->{to_token}{t})")
-            }
-            Node::Bridge {
-                provider,
                 from_chain,
                 to_chain,
-                token,
                 trigger,
                 ..
             } => {
                 let t = trig_suffix(trigger);
-                format!("bridge({provider:?} {token} {from_chain}->{to_chain}{t})")
+                match movement_type {
+                    MovementType::Swap => {
+                        format!("movement(swap {provider:?} {from_token}->{to_token}{t})")
+                    }
+                    MovementType::Bridge => {
+                        let fc = from_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
+                        let tc = to_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
+                        format!("movement(bridge {provider:?} {from_token} {fc}->{tc}{t})")
+                    }
+                    MovementType::SwapBridge => {
+                        let fc = from_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
+                        let tc = to_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
+                        format!("movement(swap+bridge {provider:?} {from_token}->{to_token} {fc}->{tc}{t})")
+                    }
+                }
             }
             Node::Lending {
                 archetype,
@@ -701,15 +706,18 @@ impl Node {
     }
 
     /// The chain this node's output is on. `None` for chain-agnostic nodes (Optimizer, Swap without chain).
+    /// For cross-chain Swaps (with `to_chain`), this returns `to_chain` (like Bridge).
     pub fn chain(&self) -> Option<Chain> {
         match self {
             Node::Wallet { chain, .. } => Some(chain.clone()),
-            Node::Bridge { to_chain, .. } => Some(to_chain.clone()),
+            Node::Movement { to_chain, from_chain, .. } => {
+                // Output chain: prefer to_chain, fallback to from_chain
+                to_chain.clone().or_else(|| from_chain.clone())
+            }
             Node::Perp { .. } => Some(Chain::hyperevm()),
             Node::Options { .. } => Some(Chain::hyperevm()),
             Node::Spot { .. } => Some(Chain::base()),
             Node::Lp { .. } => Some(Chain::base()),
-            Node::Swap { chain, .. } => chain.clone(),
             Node::Lending { chain, .. } => Some(chain.clone()),
             Node::Vault { chain, .. } => Some(chain.clone()),
             Node::Pendle { .. } => Some(Chain::hyperevm()),
@@ -718,10 +726,10 @@ impl Node {
     }
 
     /// The chain this node expects on its input side.
-    /// For Bridge nodes, this is `from_chain`; for all others, same as `chain()`.
+    /// For Bridge and cross-chain Swap nodes, this is the source chain.
     pub fn input_chain(&self) -> Option<Chain> {
         match self {
-            Node::Bridge { from_chain, .. } => Some(from_chain.clone()),
+            Node::Movement { from_chain, .. } => from_chain.clone(),
             other => other.chain(),
         }
     }
@@ -749,6 +757,212 @@ pub fn perp_venue_default_margin(venue: &PerpVenue) -> &'static str {
     match venue {
         PerpVenue::Hyperliquid => "USDC",
         PerpVenue::Hyena => "USDe",
+    }
+}
+
+// ── Token flow for validation ──────────────────────────────────────
+
+/// Describes a token on a specific chain, used for flow validation.
+#[derive(Debug, Clone)]
+pub struct TokenFlow {
+    /// Token symbol (e.g. "USDC", "AERO", "ETH").
+    pub token: String,
+    /// Chain this token is on. `None` for chain-agnostic contexts.
+    pub chain: Option<Chain>,
+}
+
+impl Node {
+    /// What token (and on what chain) this node produces after execution.
+    /// Returns `None` for position-update actions (no token leaves the venue)
+    /// and for passthrough nodes (Wallet, Optimizer) where the edge token is used.
+    pub fn output_token(&self) -> Option<TokenFlow> {
+        match self {
+            Node::Movement {
+                to_token,
+                to_chain,
+                from_chain,
+                ..
+            } => Some(TokenFlow {
+                token: to_token.clone(),
+                chain: to_chain.clone().or_else(|| from_chain.clone()),
+            }),
+            Node::Perp {
+                action,
+                venue,
+                margin_token,
+                ..
+            } => match action {
+                PerpAction::Close | PerpAction::CollectFunding => {
+                    let tok = margin_token
+                        .as_deref()
+                        .unwrap_or(perp_venue_default_margin(venue));
+                    Some(TokenFlow {
+                        token: tok.to_string(),
+                        chain: Some(Chain::hyperevm()),
+                    })
+                }
+                _ => None,
+            },
+            Node::Options { action, .. } => match action {
+                OptionsAction::SellCoveredCall
+                | OptionsAction::SellCashSecuredPut
+                | OptionsAction::CollectPremium
+                | OptionsAction::Close => Some(TokenFlow {
+                    token: "USDC".to_string(),
+                    chain: Some(Chain::hyperevm()),
+                }),
+                _ => None,
+            },
+            Node::Spot { pair, side, .. } => {
+                let parts: Vec<&str> = pair.split('/').collect();
+                if parts.len() == 2 {
+                    let tok = match side {
+                        SpotSide::Buy => parts[0],
+                        SpotSide::Sell => parts[1],
+                    };
+                    Some(TokenFlow {
+                        token: tok.to_string(),
+                        chain: Some(Chain::base()),
+                    })
+                } else {
+                    None
+                }
+            }
+            Node::Lp { action, .. } => match action {
+                LpAction::ClaimRewards => Some(TokenFlow {
+                    token: "AERO".to_string(),
+                    chain: Some(Chain::base()),
+                }),
+                LpAction::RemoveLiquidity => Some(TokenFlow {
+                    token: "USDC".to_string(),
+                    chain: Some(Chain::base()),
+                }),
+                _ => None,
+            },
+            Node::Lending {
+                action,
+                asset,
+                chain,
+                ..
+            } => match action {
+                LendingAction::Withdraw | LendingAction::Borrow => Some(TokenFlow {
+                    token: asset.clone(),
+                    chain: Some(chain.clone()),
+                }),
+                LendingAction::ClaimRewards => Some(TokenFlow {
+                    token: "USDC".to_string(),
+                    chain: Some(chain.clone()),
+                }),
+                _ => None,
+            },
+            Node::Vault {
+                action,
+                asset,
+                chain,
+                ..
+            } => match action {
+                VaultAction::Withdraw => Some(TokenFlow {
+                    token: asset.clone(),
+                    chain: Some(chain.clone()),
+                }),
+                VaultAction::ClaimRewards => Some(TokenFlow {
+                    token: "USDC".to_string(),
+                    chain: Some(chain.clone()),
+                }),
+                _ => None,
+            },
+            Node::Pendle { action, .. } => match action {
+                PendleAction::RedeemPt
+                | PendleAction::RedeemYt
+                | PendleAction::ClaimRewards => Some(TokenFlow {
+                    token: "USDC".to_string(),
+                    chain: Some(Chain::hyperevm()),
+                }),
+                _ => None,
+            },
+            Node::Wallet { .. } | Node::Optimizer { .. } => None,
+        }
+    }
+
+    /// What token (and on what chain) this node expects as input.
+    /// Returns `None` for nodes that accept any token contextually
+    /// or for actions that don't consume inbound tokens (Close, ClaimRewards, etc.).
+    pub fn expected_input_token(&self) -> Option<TokenFlow> {
+        match self {
+            Node::Movement { from_token, from_chain, .. } => Some(TokenFlow {
+                token: from_token.clone(),
+                chain: from_chain.clone(),
+            }),
+            Node::Perp {
+                venue,
+                margin_token,
+                action,
+                ..
+            } => match venue {
+                // Hyperliquid USDC lives on HyperCore — skip token validation.
+                PerpVenue::Hyperliquid => None,
+                _ => match action {
+                    PerpAction::Open | PerpAction::Adjust => {
+                        let tok = margin_token
+                            .as_deref()
+                            .unwrap_or(perp_venue_default_margin(venue));
+                        Some(TokenFlow {
+                            token: tok.to_string(),
+                            chain: Some(Chain::hyperevm()),
+                        })
+                    }
+                    _ => None,
+                },
+            },
+            Node::Lp { action, .. } => match action {
+                LpAction::AddLiquidity => Some(TokenFlow {
+                    token: "USDC".to_string(),
+                    chain: Some(Chain::base()),
+                }),
+                _ => None,
+            },
+            Node::Lending {
+                action,
+                asset,
+                chain,
+                ..
+            } => match action {
+                LendingAction::Supply | LendingAction::Repay => Some(TokenFlow {
+                    token: asset.clone(),
+                    chain: Some(chain.clone()),
+                }),
+                _ => None,
+            },
+            Node::Vault {
+                action,
+                asset,
+                chain,
+                ..
+            } => match action {
+                VaultAction::Deposit => Some(TokenFlow {
+                    token: asset.clone(),
+                    chain: Some(chain.clone()),
+                }),
+                _ => None,
+            },
+            Node::Options { action, .. } => match action {
+                OptionsAction::SellCashSecuredPut
+                | OptionsAction::BuyCall
+                | OptionsAction::BuyPut => Some(TokenFlow {
+                    token: "USDC".to_string(),
+                    chain: Some(Chain::hyperevm()),
+                }),
+                _ => None,
+            },
+            Node::Pendle { action, .. } => match action {
+                PendleAction::MintPt | PendleAction::MintYt => Some(TokenFlow {
+                    token: "USDC".to_string(),
+                    chain: Some(Chain::hyperevm()),
+                }),
+                _ => None,
+            },
+            Node::Wallet { .. } | Node::Spot { .. } | Node::Optimizer { .. } => None,
+        }
     }
 }
 

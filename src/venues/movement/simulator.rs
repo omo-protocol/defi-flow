@@ -71,8 +71,8 @@ impl Venue for SwapSimulator {
         input_amount: f64,
     ) -> Result<ExecutionResult> {
         let to_token = match node {
-            Node::Swap { to_token, .. } => to_token.clone(),
-            _ => bail!("SwapSimulator called on non-swap node"),
+            Node::Movement { to_token, .. } => to_token.clone(),
+            _ => bail!("SwapSimulator called on non-movement node"),
         };
 
         let cost_fraction = (self.slippage_bps + self.fee_bps) / 10_000.0;
@@ -155,8 +155,8 @@ impl Venue for BridgeSimulator {
         input_amount: f64,
     ) -> Result<ExecutionResult> {
         let token = match node {
-            Node::Bridge { token, .. } => token.clone(),
-            _ => bail!("BridgeSimulator called on non-bridge node"),
+            Node::Movement { to_token, .. } => to_token.clone(),
+            _ => bail!("BridgeSimulator called on non-movement node"),
         };
 
         let cost = input_amount * (self.fee_bps / 10_000.0);

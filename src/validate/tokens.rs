@@ -1,97 +1,223 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::model::node::{PerpAction, PerpVenue};
-use crate::model::{Node, Workflow};
+use crate::model::node::{MovementType, Node, PerpAction, TokenFlow};
+use crate::model::Workflow;
 
 use super::ValidationError;
 
-/// Check token compatibility and node-specific constraints.
+/// Check token compatibility, chain flow, and node-specific constraints.
 pub fn check_token_compatibility(workflow: &Workflow) -> Vec<ValidationError> {
-    let node_map: HashMap<&str, &Node> = workflow.nodes.iter().map(|n| (n.id(), n)).collect();
     let mut errors = Vec::new();
 
-    // Check bridge nodes don't bridge to same chain
-    for node in &workflow.nodes {
-        if let Node::Bridge {
-            id,
-            from_chain,
-            to_chain,
-            ..
-        } = node
-        {
-            if from_chain == to_chain {
-                errors.push(ValidationError::BridgeSameChain {
-                    node_id: id.clone(),
-                });
-            }
-        }
-    }
+    // Movement-specific checks (bridge same-chain, etc.)
+    errors.extend(check_movement_nodes(workflow));
 
-    // Check edge token compatibility with destination node's expected input
-    for edge in &workflow.edges {
-        if let Some(node) = node_map.get(edge.to_node.as_str()) {
-            if let Some(expected) = expected_input_token(node) {
-                if !tokens_compatible(&edge.token, expected) {
-                    errors.push(ValidationError::TokenMismatch {
-                        edge_token: edge.token.clone(),
-                        node_id: edge.to_node.clone(),
-                        node_token: expected.to_string(),
-                    });
-                }
-            }
-        }
-    }
+    // Unified edge flow validation (token + chain)
+    errors.extend(check_edge_flows(workflow));
 
-    // Check cross-chain edges (must go through a bridge)
-    errors.extend(check_cross_chain_edges(workflow, &node_map));
-
-    // Check optimizer-specific constraints
+    // Optimizer-specific constraints
     errors.extend(check_optimizer_nodes(workflow));
 
-    // Check perp-specific constraints
+    // Perp-specific constraints
     errors.extend(check_perp_nodes(workflow));
 
     errors
 }
 
-/// Check that edges don't cross chains without a bridge node.
-///
-/// Each node has an output chain (`node.chain()`) and an input chain (`node.input_chain()`).
-/// For bridges, input = from_chain and output = to_chain; for all other nodes they're the same.
-/// If the source node's output chain differs from the destination node's input chain,
-/// that edge crosses chains without a bridge and is invalid.
-///
-/// Nodes returning `None` for their chain (e.g. Optimizer, Swap without an explicit chain)
-/// are chain-agnostic and skip this check.
-fn check_cross_chain_edges(
-    workflow: &Workflow,
-    node_map: &HashMap<&str, &Node>,
-) -> Vec<ValidationError> {
+// ── Edge flow validation ────────────────────────────────────────────
+
+/// Validate every edge for token and chain compatibility.
+/// Produces actionable error messages suggesting intermediate nodes to insert.
+fn check_edge_flows(workflow: &Workflow) -> Vec<ValidationError> {
+    let node_map: HashMap<&str, &Node> = workflow.nodes.iter().map(|n| (n.id(), n)).collect();
     let mut errors = Vec::new();
 
     for edge in &workflow.edges {
         let from_node = match node_map.get(edge.from_node.as_str()) {
             Some(n) => n,
-            None => continue, // unknown-node error caught elsewhere
+            None => continue, // caught by reference checks
         };
         let to_node = match node_map.get(edge.to_node.as_str()) {
             Some(n) => n,
             None => continue,
         };
 
-        let from_chain = from_node.chain(); // output chain of source
-        let to_chain = to_node.input_chain(); // input chain of destination
+        // What the source node outputs (fallback: edge token on source's chain)
+        let source = from_node.output_token().unwrap_or_else(|| TokenFlow {
+            token: edge.token.clone(),
+            chain: from_node.chain(),
+        });
 
-        if let (Some(fc), Some(tc)) = (&from_chain, &to_chain) {
-            // Compare by name only — chain_id/rpc_url may differ between convenience
-            // constructors and user-supplied values for the same logical chain.
-            if fc.name != tc.name {
-                errors.push(ValidationError::CrossChainEdge {
-                    from_node: edge.from_node.clone(),
-                    to_node: edge.to_node.clone(),
-                    from_chain: fc.name.clone(),
-                    to_chain: tc.name.clone(),
-                });
+        // What the dest node expects (fallback: edge token on dest's input chain)
+        let dest = to_node.expected_input_token().unwrap_or_else(|| TokenFlow {
+            token: edge.token.clone(),
+            chain: to_node.input_chain(),
+        });
+
+        // Chain compatibility (skip if either is chain-agnostic)
+        let chain_ok = match (&source.chain, &dest.chain) {
+            (Some(sc), Some(dc)) => sc.name.eq_ignore_ascii_case(&dc.name),
+            _ => true,
+        };
+
+        // Token compatibility (source output vs dest expectation)
+        let token_ok = source.token.eq_ignore_ascii_case(&dest.token);
+
+        // Edge token vs source output
+        let edge_vs_source = source.token.eq_ignore_ascii_case(&edge.token);
+
+        // Edge token vs dest expectation
+        let edge_vs_dest = dest.token.eq_ignore_ascii_case(&edge.token);
+
+        if chain_ok && token_ok && edge_vs_source && edge_vs_dest {
+            continue;
+        }
+
+        let message = build_flow_suggestion(from_node, to_node, &edge.token, &source, &dest, chain_ok, token_ok, edge_vs_source);
+
+        errors.push(ValidationError::FlowMismatch {
+            from_node: edge.from_node.clone(),
+            to_node: edge.to_node.clone(),
+            message,
+        });
+    }
+
+    errors
+}
+
+/// Build an actionable error message suggesting what nodes to insert.
+fn build_flow_suggestion(
+    from_node: &Node,
+    to_node: &Node,
+    edge_token: &str,
+    source: &TokenFlow,
+    dest: &TokenFlow,
+    chain_ok: bool,
+    token_ok: bool,
+    edge_vs_source: bool,
+) -> String {
+    let from_id = from_node.id();
+    let to_id = to_node.id();
+    let sc = source
+        .chain
+        .as_ref()
+        .map(|c| c.name.as_str())
+        .unwrap_or("?");
+    let dc = dest
+        .chain
+        .as_ref()
+        .map(|c| c.name.as_str())
+        .unwrap_or("?");
+
+    // Special case: edge token doesn't match source output (but dest may be fine)
+    if !edge_vs_source && chain_ok {
+        return format!(
+            "edge declares token {} but '{}' outputs {} on {}. \
+             Insert a Movement(swap, from_token: {}, to_token: {}) between them",
+            edge_token, from_id, source.token, sc, source.token, edge_token,
+        );
+    }
+
+    match (chain_ok, token_ok) {
+        (false, true) => {
+            // Chain mismatch only
+            format!(
+                "chain mismatch: '{}' outputs {} on {}, but '{}' expects it on {}. \
+                 Insert a Movement(bridge, from_chain: {}, to_chain: {}, token: {})",
+                from_id, source.token, sc, to_id, dc, sc, dc, source.token,
+            )
+        }
+        (true, false) => {
+            // Token mismatch only (same chain)
+            let chain_name = if sc != "?" { sc } else { dc };
+            format!(
+                "token mismatch: '{}' outputs {} but '{}' expects {} (both on {}). \
+                 Insert a Movement(swap, from_token: {}, to_token: {})",
+                from_id, source.token, to_id, dest.token, chain_name,
+                source.token, dest.token,
+            )
+        }
+        (false, false) => {
+            // Both chain AND token mismatch
+            let bridge_tok = "USDC";
+
+            // If only token differs, can use a single swap_bridge Movement
+            if source.token.eq_ignore_ascii_case(bridge_tok) || dest.token.eq_ignore_ascii_case(bridge_tok) {
+                // One side is already USDC — suggest swap_bridge or bridge+swap
+                let mut steps = Vec::new();
+
+                if !source.token.eq_ignore_ascii_case(bridge_tok) {
+                    steps.push(format!(
+                        "Movement(swap, from_token: {}, to_token: {})",
+                        source.token, bridge_tok,
+                    ));
+                }
+
+                steps.push(format!(
+                    "Movement(bridge, from_chain: {}, to_chain: {}, token: {})",
+                    sc, dc, bridge_tok,
+                ));
+
+                if !dest.token.eq_ignore_ascii_case(bridge_tok) {
+                    steps.push(format!(
+                        "Movement(swap, from_token: {}, to_token: {})",
+                        bridge_tok, dest.token,
+                    ));
+                }
+
+                let numbered: Vec<String> = steps
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| format!("({}) {s}", i + 1))
+                    .collect();
+
+                format!(
+                    "chain+token mismatch: '{}' outputs {} on {}, but '{}' expects {} on {}. \
+                     Insert: {}",
+                    from_id, source.token, sc, to_id, dest.token, dc,
+                    numbered.join(", then "),
+                )
+            } else {
+                // Both tokens differ from USDC — suggest swap_bridge (atomic)
+                format!(
+                    "chain+token mismatch: '{}' outputs {} on {}, but '{}' expects {} on {}. \
+                     Insert a Movement(swap_bridge, from_token: {}, to_token: {}, from_chain: {}, to_chain: {})",
+                    from_id, source.token, sc, to_id, dest.token, dc,
+                    source.token, dest.token, sc, dc,
+                )
+            }
+        }
+        (true, true) => unreachable!(),
+    }
+}
+
+// ── Movement checks ────────────────────────────────────────────────
+
+fn check_movement_nodes(workflow: &Workflow) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+
+    for node in &workflow.nodes {
+        if let Node::Movement {
+            id,
+            movement_type,
+            from_chain,
+            to_chain,
+            ..
+        } = node
+        {
+            match movement_type {
+                MovementType::Bridge | MovementType::SwapBridge => {
+                    // Bridge / swap_bridge require both chains and they must differ
+                    match (from_chain, to_chain) {
+                        (Some(fc), Some(tc)) if fc.name.eq_ignore_ascii_case(&tc.name) => {
+                            errors.push(ValidationError::BridgeSameChain {
+                                node_id: id.clone(),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                MovementType::Swap => {}
             }
         }
     }
@@ -99,11 +225,11 @@ fn check_cross_chain_edges(
     errors
 }
 
-/// Validate optimizer nodes: fractions, allocations, and connectivity.
+// ── Optimizer checks (unchanged) ────────────────────────────────────
+
 fn check_optimizer_nodes(workflow: &Workflow) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
-    // Build set of outgoing edges per node
     let mut outgoing_targets: HashMap<&str, HashSet<&str>> = HashMap::new();
     for edge in &workflow.edges {
         outgoing_targets
@@ -121,14 +247,12 @@ fn check_optimizer_nodes(workflow: &Workflow) -> Vec<ValidationError> {
             ..
         } = node
         {
-            // Must have at least 1 allocation
             if allocations.is_empty() {
                 errors.push(ValidationError::OptimizerNoAllocations {
                     node_id: id.clone(),
                 });
             }
 
-            // kelly_fraction must be in 0.0..=1.0
             if !(*kelly_fraction >= 0.0 && *kelly_fraction <= 1.0) {
                 errors.push(ValidationError::OptimizerInvalidFraction {
                     node_id: id.clone(),
@@ -136,7 +260,6 @@ fn check_optimizer_nodes(workflow: &Workflow) -> Vec<ValidationError> {
                 });
             }
 
-            // max_allocation (if present) must be in 0.0..=1.0
             if let Some(max_alloc) = max_allocation {
                 if !(*max_alloc >= 0.0 && *max_alloc <= 1.0) {
                     errors.push(ValidationError::OptimizerInvalidMaxAllocation {
@@ -146,7 +269,6 @@ fn check_optimizer_nodes(workflow: &Workflow) -> Vec<ValidationError> {
                 }
             }
 
-            // Each allocation target must have an outgoing edge from this optimizer
             let targets = outgoing_targets.get(id.as_str());
             for alloc in allocations {
                 let connected = targets
@@ -165,7 +287,8 @@ fn check_optimizer_nodes(workflow: &Workflow) -> Vec<ValidationError> {
     errors
 }
 
-/// Validate perp nodes: open/adjust require direction + leverage.
+// ── Perp checks (unchanged) ────────────────────────────────────────
+
 fn check_perp_nodes(workflow: &Workflow) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
@@ -196,25 +319,4 @@ fn check_perp_nodes(workflow: &Workflow) -> Vec<ValidationError> {
     }
 
     errors
-}
-
-/// Determine the expected input token for a node, if it has a specific one.
-fn expected_input_token(node: &Node) -> Option<&str> {
-    match node {
-        Node::Swap { from_token, .. } => Some(from_token),
-        Node::Bridge { token, .. } => Some(token),
-        Node::Perp { venue, .. } => match venue {
-            // Hyperliquid USDC lives on HyperCore and is not LiFi-swappable.
-            // Skip input token validation — delivered via Stargate bridge.
-            PerpVenue::Hyperliquid => None,
-            _ => node.margin_token(),
-        },
-        // Wallet, Spot, Lp, Optimizer accept tokens contextually
-        _ => None,
-    }
-}
-
-/// Case-insensitive token comparison.
-fn tokens_compatible(edge_token: &str, node_token: &str) -> bool {
-    edge_token.eq_ignore_ascii_case(node_token)
 }

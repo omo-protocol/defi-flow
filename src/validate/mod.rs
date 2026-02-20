@@ -28,11 +28,11 @@ pub enum ValidationError {
     #[error("Duplicate node ID `{node_id}`")]
     DuplicateNodeId { node_id: String },
 
-    #[error("Token mismatch: edge carries `{edge_token}` but node `{node_id}` expects `{node_token}`")]
-    TokenMismatch {
-        edge_token: String,
-        node_id: String,
-        node_token: String,
+    #[error("Edge {from_node}->{to_node}: {message}")]
+    FlowMismatch {
+        from_node: String,
+        to_node: String,
+        message: String,
     },
 
     #[error("Bridge node `{node_id}` has identical from_chain and to_chain")]
@@ -59,15 +59,6 @@ pub enum ValidationError {
     #[error("Perp node `{node_id}` with action {action} requires `leverage` field")]
     PerpMissingLeverage { node_id: String, action: String },
 
-    #[error(
-        "Edge {from_node}->{to_node} crosses chains ({from_chain}->{to_chain}) without a bridge"
-    )]
-    CrossChainEdge {
-        from_node: String,
-        to_node: String,
-        from_chain: String,
-        to_chain: String,
-    },
 }
 
 /// Load and fully validate a workflow from a JSON file.

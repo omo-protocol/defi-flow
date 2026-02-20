@@ -26,20 +26,24 @@ pub fn run() -> anyhow::Result<()> {
                 chain: Chain::mantle(),
                 address: "0xYourWalletAddress".into(),
             },
-            Node::Bridge {
+            Node::Movement {
                 id: "bridge_hyper".into(),
-                provider: BridgeProvider::Stargate,
-                from_chain: Chain::mantle(),
-                to_chain: Chain::hyperliquid(),
-                token: "USDe".into(),
+                movement_type: MovementType::Bridge,
+                provider: MovementProvider::Stargate,
+                from_token: "USDe".into(),
+                to_token: "USDe".into(),
+                from_chain: Some(Chain::mantle()),
+                to_chain: Some(Chain::hyperliquid()),
                 trigger: None,
             },
-            Node::Swap {
+            Node::Movement {
                 id: "swap_usdc".into(),
-                provider: SwapProvider::LiFi,
+                movement_type: MovementType::Swap,
+                provider: MovementProvider::LiFi,
                 from_token: "USDe".into(),
                 to_token: "USDC".into(),
-                chain: None,
+                from_chain: None,
+                to_chain: None,
                 trigger: None,
             },
             Node::Optimizer {
@@ -101,12 +105,14 @@ pub fn run() -> anyhow::Result<()> {
                 trigger: None,
             },
             // ── Swap USDC→USDe for Hyena margin ──────────────────
-            Node::Swap {
+            Node::Movement {
                 id: "swap_usde_hyena".into(),
-                provider: SwapProvider::LiFi,
+                movement_type: MovementType::Swap,
+                provider: MovementProvider::LiFi,
                 from_token: "USDC".into(),
                 to_token: "USDe".into(),
-                chain: None,
+                from_chain: None,
+                to_chain: None,
                 trigger: None,
             },
             Node::Perp {
@@ -187,12 +193,14 @@ pub fn run() -> anyhow::Result<()> {
                     interval: CronInterval::Daily,
                 }),
             },
-            Node::Swap {
+            Node::Movement {
                 id: "swap_aero_usdc".into(),
-                provider: SwapProvider::LiFi,
+                movement_type: MovementType::Swap,
+                provider: MovementProvider::LiFi,
                 from_token: "AERO".into(),
                 to_token: "USDC".into(),
-                chain: None,
+                from_chain: None,
+                to_chain: None,
                 trigger: Some(Trigger::Cron {
                     interval: CronInterval::Daily,
                 }),

@@ -239,19 +239,31 @@ fn node_detail(node: &Node) -> String {
             action,
             ..
         } => format!("{venue:?} {action:?} {pool}"),
-        Node::Swap {
+        Node::Movement {
+            movement_type,
             provider,
             from_token,
             to_token,
-            ..
-        } => format!("{provider:?} {from_token} -> {to_token}"),
-        Node::Bridge {
-            provider,
             from_chain,
             to_chain,
-            token,
             ..
-        } => format!("{provider:?} {token} {from_chain} -> {to_chain}"),
+        } => {
+            match movement_type {
+                crate::model::node::MovementType::Swap => {
+                    format!("{provider:?} {from_token} -> {to_token}")
+                }
+                crate::model::node::MovementType::Bridge => {
+                    let fc = from_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
+                    let tc = to_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
+                    format!("{provider:?} {from_token} {fc} -> {tc}")
+                }
+                crate::model::node::MovementType::SwapBridge => {
+                    let fc = from_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
+                    let tc = to_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
+                    format!("{provider:?} {from_token}->{to_token} {fc}->{tc}")
+                }
+            }
+        }
         Node::Lending {
             archetype,
             chain,
@@ -290,8 +302,7 @@ fn node_dot_style(node: &Node) -> String {
         Node::Options { .. } => ("box", "#ad1457"),
         Node::Spot { .. } => ("box", "#1565c0"),
         Node::Lp { .. } => ("box", "#6a1b9a"),
-        Node::Swap { .. } => ("parallelogram", "#e65100"),
-        Node::Bridge { .. } => ("parallelogram", "#4e342e"),
+        Node::Movement { .. } => ("parallelogram", "#e65100"),
         Node::Lending { .. } => ("box", "#00838f"),
         Node::Vault { .. } => ("box", "#00695c"),
         Node::Pendle { .. } => ("box", "#37474f"),

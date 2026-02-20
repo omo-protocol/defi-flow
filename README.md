@@ -57,17 +57,24 @@ Workflow engine for DeFi quant strategies. An LLM describes a strategy as a JSON
 ## Features
 
 ### Validation
+- **Token + chain flow safety**: every edge is validated for both token and chain compatibility. Nodes declare what they output and what they expect as input. Mismatches produce actionable error messages telling the LLM exactly what movement nodes to insert (swap, bridge, or swap_bridge)
 - DAG cycle detection (triggered nodes exempt — they form periodic cycles by design)
-- Token compatibility: edge tokens must match destination node expectations (case-insensitive)
-- Cross-chain edge detection: edges can't cross chains without a bridge node
 - Optimizer constraints: kelly_fraction/max_allocation in [0,1], allocations wired to targets
 - Perp constraints: direction + leverage required for open/adjust actions
-- Duplicate node ID detection, edge reference checks
+- Duplicate node ID detection, edge reference checks, bridge same-chain rejection
+
+Example: connecting a wallet on HyperEVM directly to Aerodrome LP on Base:
+```
+Edge wallet->aero_lp: chain mismatch: 'wallet' outputs USDC on hyperevm,
+but 'aero_lp' expects it on base.
+Insert a Movement(bridge, from_chain: hyperevm, to_chain: base, token: USDC)
+```
 
 ### Backtesting
 - Two-phase execution: deploy (topological order) then tick loop
 - Per-venue metrics: TWRR, annualized return, max drawdown, Sharpe ratio, net PnL
 - Breakdown columns: funding, rewards, premium, LP fees, lending interest, swap costs, liquidations
+- **JSON output**: trajectory (timestamp + TVL per tick), full metrics, optional Monte Carlo results — pipe to `scripts/plot_backtest.py` for visualization
 - Configurable slippage and random seed for reproducibility
 
 ### Monte Carlo
@@ -84,11 +91,13 @@ Workflow engine for DeFi quant strategies. An LLM describes a strategy as a JSON
 
 **LP** — Uniswap V3 / Aerodrome Slipstream concentrated liquidity. Tick-to-sqrt-price math, fee concentration multiplier for tighter ranges, in/out-of-range tracking, IL simulation, reward token accrual. Actions: add_liquidity, remove_liquidity, claim_rewards, compound, stake_gauge, unstake_gauge.
 
-**Lending** — Supply APY accrual, borrow APY accrual, reward emissions. Actions: supply, withdraw, borrow, repay, claim_rewards. Venues: Aave, Lendle, Morpho, Compound, InitCapital, HyperLend.
+**Lending** — Supply APY accrual, borrow APY accrual, reward emissions. Actions: supply, withdraw, borrow, repay, claim_rewards. Archetype-based: `aave_v3`, `aave_v2`, `morpho`, `compound_v3`, `init_capital` — any Aave fork works with the right archetype + pool address. Addresses and chain specified per-deployment in the JSON, not hardcoded.
+
+**Vaults** — ERC4626 yield-bearing vaults. Deposit APY accrual, reward emissions. Actions: deposit, withdraw, claim_rewards. Currently supports Morpho Vaults V2. Live executor uses the ERC4626 interface (deposit/withdraw).
 
 **Pendle** — PT (principal token) price appreciation toward 1:1 at maturity. YT (yield token) variable yield accrual. Actions: mint_pt, redeem_pt, mint_yt, redeem_yt, claim_rewards.
 
-**Swap/Bridge** — Fixed slippage + fee model. Swap costs tracked as metric. Bridge fee deduction on cross-chain transfers.
+**Movement** — Unified swap/bridge/swap+bridge node. Fixed slippage + fee model. Swap costs tracked as metric. Bridge fee deduction on cross-chain transfers. Three movement types: `swap` (same-chain token conversion), `bridge` (cross-chain same-token), `swap_bridge` (atomic cross-chain swap via LiFi). Providers: LiFi (swap, bridge, swap_bridge), Stargate (bridge only).
 
 ### Kelly Optimizer
 - Per-venue Kelly fraction: f* = expected_return / volatility^2
@@ -124,7 +133,8 @@ Workflow engine for DeFi quant strategies. An LLM describes a strategy as a JSON
 - Perp data: mark/index price, bid/ask, funding APY, rewards APY
 - Options data: spot price, strike, expiry, delta, premium, APY
 - LP data: token prices, current tick, fee APY, reward rate
-- Lending data: supply/borrow/reward APY
+- Lending data: supply/borrow/reward APY (via DefiLlama, keyed by defillama_slug)
+- Vault data: base APY + reward APY (via DefiLlama)
 - Pendle data: PT/YT/underlying price, implied APY
 
 ### Multi-Chain
@@ -142,9 +152,9 @@ Workflow engine for DeFi quant strategies. An LLM describes a strategy as a JSON
 | `options` | Options via Rysk — covered calls, puts, premium, rolling |
 | `spot` | Spot DEX trades |
 | `lp` | Concentrated liquidity (Aerodrome Slipstream) |
-| `swap` | Token swap via aggregator (LiFi) |
-| `bridge` | Cross-chain transfer (LiFi, Stargate) |
-| `lending` | Supply, borrow, repay, withdraw, claim (Aave, Morpho, HyperLend, etc.) |
+| `movement` | Swap, bridge, or atomic swap+bridge (LiFi, Stargate) |
+| `lending` | Supply, borrow, repay, withdraw, claim (Aave forks, Morpho, Compound, etc.) |
+| `vault` | ERC4626 vault deposits — deposit, withdraw, claim (Morpho Vaults V2) |
 | `pendle` | Yield tokenization — mint/redeem PT and YT |
 | `optimizer` | Kelly Criterion capital allocation with drift-based rebalancing |
 
@@ -166,7 +176,7 @@ Triggered nodes can form cycles (e.g. claim rewards -> swap -> optimizer).
 **Options:** Rysk
 **Spot:** Aerodrome
 **LP:** Aerodrome Slipstream
-**Swap:** LiFi
-**Bridge:** LiFi, Stargate
-**Lending:** Aave, Lendle, Morpho, Compound, InitCapital, HyperLend
+**Movement (swap/bridge/swap+bridge):** LiFi, Stargate
+**Lending:** Any Aave V3/V2 fork (HyperLend, Lendle, Granary, Seamless, Spark, etc.), Morpho Blue, Compound V3, Init Capital
+**Vaults:** Morpho Vaults V2
 **Yield:** Pendle

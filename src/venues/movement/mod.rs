@@ -33,38 +33,41 @@ impl VenueCategory for MovementCategory {
 
     fn build(node: &Node, mode: &BuildMode) -> Result<Option<Box<dyn Venue>>> {
         match node {
-            Node::Swap { to_token, .. } => match mode {
+            Node::Movement {
+                movement_type,
+                to_token,
+                ..
+            } => match mode {
                 BuildMode::Backtest {
                     slippage_bps,
                     manifest,
                     data_dir,
                     ..
-                } => {
-                    let mut sim = simulator::SwapSimulator::new(*slippage_bps, 30.0);
+                } => match movement_type {
+                    crate::model::node::MovementType::Swap
+                    | crate::model::node::MovementType::SwapBridge => {
+                        let mut sim = simulator::SwapSimulator::new(*slippage_bps, 30.0);
 
-                    // If output token is non-stablecoin, try to find a price feed
-                    // from a perp node so the swap can track spot value.
-                    let is_stable = STABLECOINS
-                        .iter()
-                        .any(|s| s.eq_ignore_ascii_case(to_token));
+                        // If output token is non-stablecoin, try to find a price feed
+                        // from a perp node so the swap can track spot value.
+                        let is_stable = STABLECOINS
+                            .iter()
+                            .any(|s| s.eq_ignore_ascii_case(to_token));
 
-                    if !is_stable {
-                        if let Some(price_data) = find_perp_price_feed(manifest, data_dir, to_token)
-                        {
-                            sim = sim.with_price_feed(price_data);
+                        if !is_stable {
+                            if let Some(price_data) =
+                                find_perp_price_feed(manifest, data_dir, to_token)
+                            {
+                                sim = sim.with_price_feed(price_data);
+                            }
                         }
-                    }
 
-                    Ok(Some(Box::new(sim)))
-                }
-                BuildMode::Live { config } => {
-                    Ok(Some(Box::new(lifi::LiFiMovement::new(config)?)))
-                }
-            },
-            Node::Bridge { .. } => match mode {
-                BuildMode::Backtest { .. } => {
-                    Ok(Some(Box::new(simulator::BridgeSimulator::new(10.0))))
-                }
+                        Ok(Some(Box::new(sim)))
+                    }
+                    crate::model::node::MovementType::Bridge => {
+                        Ok(Some(Box::new(simulator::BridgeSimulator::new(10.0))))
+                    }
+                },
                 BuildMode::Live { config } => {
                     Ok(Some(Box::new(lifi::LiFiMovement::new(config)?)))
                 }

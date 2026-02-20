@@ -419,8 +419,7 @@ fn get_trigger(node: &Node) -> Option<&Trigger> {
         | Node::Options { trigger, .. }
         | Node::Spot { trigger, .. }
         | Node::Lp { trigger, .. }
-        | Node::Swap { trigger, .. }
-        | Node::Bridge { trigger, .. }
+        | Node::Movement { trigger, .. }
         | Node::Lending { trigger, .. }
         | Node::Vault { trigger, .. }
         | Node::Pendle { trigger, .. }

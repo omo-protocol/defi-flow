@@ -259,24 +259,35 @@ impl LiFiMovement {
 impl Venue for LiFiMovement {
     async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult> {
         match node {
-            Node::Swap {
+            Node::Movement {
+                movement_type,
                 from_token,
                 to_token,
-                chain,
-                ..
-            } => {
-                let swap_chain = chain.as_ref().cloned().unwrap_or_else(Chain::hyperevm);
-                self.execute_swap(&swap_chain, from_token, to_token, input_amount)
-                    .await
-            }
-            Node::Bridge {
                 from_chain,
                 to_chain,
-                token,
                 ..
             } => {
-                self.execute_bridge(from_chain, to_chain, token, input_amount)
-                    .await
+                use crate::model::node::MovementType;
+                match movement_type {
+                    MovementType::Swap => {
+                        let swap_chain = from_chain.as_ref().cloned().unwrap_or_else(Chain::hyperevm);
+                        self.execute_swap(&swap_chain, from_token, to_token, input_amount)
+                            .await
+                    }
+                    MovementType::Bridge => {
+                        let fc = from_chain.as_ref().ok_or_else(|| anyhow::anyhow!("bridge requires from_chain"))?;
+                        let tc = to_chain.as_ref().ok_or_else(|| anyhow::anyhow!("bridge requires to_chain"))?;
+                        self.execute_bridge(fc, tc, from_token, input_amount)
+                            .await
+                    }
+                    MovementType::SwapBridge => {
+                        // For now, LiFi handles swap+bridge atomically — same as swap
+                        // TODO: use LiFi's cross-chain swap endpoint
+                        let swap_chain = from_chain.as_ref().cloned().unwrap_or_else(Chain::hyperevm);
+                        self.execute_swap(&swap_chain, from_token, to_token, input_amount)
+                            .await
+                    }
+                }
             }
             _ => {
                 println!("  LiFi: unsupported node type '{}'", node.type_name());
