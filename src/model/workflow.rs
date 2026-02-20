@@ -35,6 +35,7 @@ pub struct Workflow {
     pub edges: Vec<Edge>,
 }
 
+#[allow(dead_code)]
 impl Workflow {
     /// Resolve a token symbol to its contract address for a given chain.
     /// Looks up the workflow's `tokens` manifest.
