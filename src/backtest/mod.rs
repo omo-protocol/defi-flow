@@ -202,9 +202,15 @@ async fn seed_wallet(engine: &mut Engine, capital: f64) {
 }
 
 fn estimate_periods_per_year(clock: &SimClock) -> f64 {
-    if clock.total_ticks() < 2 {
+    let n = clock.total_ticks();
+    if n < 2 {
         return 365.0; // default daily
     }
-    // Use total timespan to estimate
-    365.0 * 3.0 // default: 8-hour periods
+    let duration_secs = (clock.last_timestamp() - clock.first_timestamp()) as f64;
+    if duration_secs <= 0.0 {
+        return 365.0;
+    }
+    let avg_period_secs = duration_secs / (n - 1) as f64;
+    const SECS_PER_YEAR: f64 = 365.25 * 24.0 * 3600.0;
+    SECS_PER_YEAR / avg_period_secs
 }

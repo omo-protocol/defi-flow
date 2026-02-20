@@ -198,26 +198,26 @@ fn resample_csv(
         return Ok(());
     }
 
-    // Identify price columns for GBM perturbation
-    let price_cols = price_column_indices(&headers, kind);
+    // Group correlated price columns (same asset shares one GBM factor)
+    let price_groups = price_column_groups(&headers, kind);
 
-    // Compute historical volatility for each price column (from original data)
-    let sigmas: Vec<f64> = price_cols
+    // Compute historical volatility per group (from the primary/first column)
+    let group_sigmas: Vec<f64> = price_groups
         .iter()
-        .map(|&col| compute_volatility(&records, &periods, col))
+        .map(|group| compute_volatility(&records, &periods, group[0]))
         .collect();
 
     // Block bootstrap: select periods with replacement
     let bootstrapped_indices = block_bootstrap(n_periods, block_size, rng);
 
-    // Generate GBM scaling factors (one path per price column)
-    let gbm_factors: Vec<Vec<f64>> = if gbm_vol_scale > 0.0 && !price_cols.is_empty() {
-        sigmas
+    // Generate one GBM path per group (correlated columns share the same factor)
+    let group_factors: Vec<Vec<f64>> = if gbm_vol_scale > 0.0 && !price_groups.is_empty() {
+        group_sigmas
             .iter()
             .map(|sigma| generate_gbm_factors(n_periods, *sigma * gbm_vol_scale, rng))
             .collect()
     } else {
-        price_cols.iter().map(|_| vec![1.0; n_periods]).collect()
+        price_groups.iter().map(|_| vec![1.0; n_periods]).collect()
     };
 
     // Collect original timestamps per period (first row of each period)
@@ -256,12 +256,14 @@ fn resample_csv(
                 fields[snap_col] = (new_period_idx + 1).to_string();
             }
 
-            // Apply GBM perturbation to price columns
-            for (price_idx, &col) in price_cols.iter().enumerate() {
-                if let Ok(price) = fields[col].parse::<f64>() {
-                    if price > 0.0 {
-                        let factor = gbm_factors[price_idx][new_period_idx];
-                        fields[col] = format!("{}", price * factor);
+            // Apply GBM perturbation to price columns (correlated columns share one factor)
+            for (group_idx, group) in price_groups.iter().enumerate() {
+                let factor = group_factors[group_idx][new_period_idx];
+                for &col in group {
+                    if let Ok(price) = fields[col].parse::<f64>() {
+                        if price > 0.0 {
+                            fields[col] = format!("{}", price * factor);
+                        }
                     }
                 }
             }
@@ -311,27 +313,50 @@ fn group_into_periods(
     (0..records.len()).map(|i| vec![i]).collect()
 }
 
-/// Get the column indices for price fields that should receive GBM perturbation.
-fn price_column_indices(headers: &csv::StringRecord, kind: &str) -> Vec<usize> {
-    let price_names: &[&str] = match kind {
-        "perp" => &[
-            "mark_price",
-            "index_price",
-            "bid",
-            "ask",
-            "mid_price",
-            "last_price",
-        ],
-        "options" => &["spot_price"],
-        "lp" => &["price_a", "price_b", "reward_token_price"],
-        "pendle" => &["pt_price", "yt_price", "underlying_price"],
-        _ => &[], // lending has no price columns
-    };
+/// Group price columns that should share the same GBM factor.
+/// Correlated columns (e.g. mark/index/bid/ask for perps) share one factor
+/// so their relationships are preserved. Independent assets (e.g. LP token A vs B)
+/// get separate factors.
+fn price_column_groups(headers: &csv::StringRecord, kind: &str) -> Vec<Vec<usize>> {
+    let find = |name: &str| headers.iter().position(|h| h == name);
 
-    price_names
-        .iter()
-        .filter_map(|name| headers.iter().position(|h| h == *name))
-        .collect()
+    match kind {
+        "perp" => {
+            // All perp price columns are the same asset — share one GBM factor
+            let cols: Vec<usize> = [
+                "mark_price",
+                "index_price",
+                "bid",
+                "ask",
+                "mid_price",
+                "last_price",
+            ]
+            .iter()
+            .filter_map(|n| find(n))
+            .collect();
+            if cols.is_empty() { vec![] } else { vec![cols] }
+        }
+        "options" => {
+            // spot_price is one asset
+            if let Some(c) = find("spot_price") { vec![vec![c]] } else { vec![] }
+        }
+        "lp" => {
+            // Each LP token is a different asset — separate factors
+            ["price_a", "price_b", "reward_token_price"]
+                .iter()
+                .filter_map(|n| find(n).map(|c| vec![c]))
+                .collect()
+        }
+        "pendle" => {
+            // PT/YT/underlying derive from same asset — share one GBM factor
+            let cols: Vec<usize> = ["pt_price", "yt_price", "underlying_price"]
+                .iter()
+                .filter_map(|n| find(n))
+                .collect();
+            if cols.is_empty() { vec![] } else { vec![cols] }
+        }
+        _ => vec![], // lending/vault have no price columns
+    }
 }
 
 /// Compute per-period log-return volatility from a price column.

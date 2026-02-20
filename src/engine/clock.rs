@@ -56,4 +56,14 @@ impl SimClock {
         }
         self.timestamps[self.current_idx] - self.timestamps[self.current_idx - 1]
     }
+
+    /// First timestamp in the series.
+    pub fn first_timestamp(&self) -> u64 {
+        self.timestamps.first().copied().unwrap_or(0)
+    }
+
+    /// Last timestamp in the series.
+    pub fn last_timestamp(&self) -> u64 {
+        self.timestamps.last().copied().unwrap_or(0)
+    }
 }
