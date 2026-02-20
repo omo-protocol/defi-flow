@@ -59,9 +59,13 @@
     {
       "type": "lending",
       "id": "lend_idle",
-      "venue": "HyperLend",
+      "archetype": "aave_v3",
+      "chain": { "name": "hyperevm", "chain_id": 999 },
+      "pool_address": "0xC0EE4e7e60D0A1F9a9AfaE0706D1b5C5A7f5B9b4",
       "asset": "USDC",
-      "action": "supply"
+      "action": "supply",
+      "rewards_controller": "0x54586bE62E3c3580375aE3723C145253060Ca0C2",
+      "defillama_slug": "hyperlend-pooled"
     }
   ],
   "edges": [

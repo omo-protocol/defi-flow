@@ -4,14 +4,13 @@ use alloy::sol;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use crate::model::chain::Chain;
-use crate::model::node::{LendingAction, LendingVenue, Node};
+use crate::model::node::{LendingAction, Node};
 
 use crate::run::config::RuntimeConfig;
 use crate::venues::evm;
 use crate::venues::{ExecutionResult, SimMetrics, Venue};
 
-// ── Aave V3 Pool interface (works for HyperLend, Aave, Lendle) ────
+// ── Aave V3 Pool interface (works for any Aave fork) ────────────
 
 sol! {
     #[allow(missing_docs)]
@@ -65,53 +64,20 @@ impl AaveLending {
         })
     }
 
-    fn venue_chain(venue: &LendingVenue) -> Chain {
-        match venue {
-            LendingVenue::HyperLend => Chain::hyperevm(),
-            LendingVenue::Aave => Chain::ethereum(),
-            LendingVenue::Lendle => Chain::mantle(),
-            LendingVenue::Morpho => Chain::ethereum(),
-            LendingVenue::Compound => Chain::ethereum(),
-            LendingVenue::InitCapital => Chain::mantle(),
-        }
-    }
-
-    fn venue_name(venue: &LendingVenue) -> &'static str {
-        match venue {
-            LendingVenue::HyperLend => "hyperlend",
-            LendingVenue::Aave => "aave",
-            LendingVenue::Lendle => "lendle",
-            LendingVenue::Morpho => "morpho",
-            LendingVenue::Compound => "compound",
-            LendingVenue::InitCapital => "initcapital",
-        }
-    }
-
     async fn execute_supply(
         &mut self,
-        venue: &LendingVenue,
+        pool_addr: Address,
+        rpc_url: &str,
+        token_addr: Address,
         asset_symbol: &str,
         input_amount: f64,
     ) -> Result<ExecutionResult> {
-        let chain = Self::venue_chain(venue);
-        let venue_name = Self::venue_name(venue);
-
-        let pool_addr = evm::lending_pool_address(&chain, venue_name)
-            .with_context(|| format!("No pool address for {venue_name} on {chain}"))?;
-
-        let token_addr = evm::token_address(&chain, asset_symbol)
-            .with_context(|| format!("Unknown token '{asset_symbol}' on {chain}"))?;
-
         let decimals = token_decimals_for(asset_symbol);
         let amount_units = evm::to_token_units(input_amount, 1.0, decimals);
 
         println!(
-            "  LENDING SUPPLY: {} {} to {} on {} (pool: {})",
-            input_amount,
-            asset_symbol,
-            venue_name,
-            chain,
-            evm::short_addr(&pool_addr),
+            "  LENDING SUPPLY: {} {} to pool {}",
+            input_amount, asset_symbol, evm::short_addr(&pool_addr),
         );
 
         if self.dry_run {
@@ -123,14 +89,7 @@ impl AaveLending {
             });
         }
 
-        let signer: alloy::signers::local::PrivateKeySigner = self
-            .private_key
-            .parse()
-            .map_err(|e| anyhow::anyhow!("Invalid key: {e}"))?;
-        let wallet = alloy::network::EthereumWallet::from(signer);
-        let provider = ProviderBuilder::new()
-            .wallet(wallet)
-            .connect_http(chain.rpc_url().expect("lending chain requires RPC").parse()?);
+        let provider = make_provider(&self.private_key, rpc_url)?;
 
         let erc20 = IERC20::new(token_addr, &provider);
         let approve_tx = erc20.approve(pool_addr, amount_units);
@@ -153,25 +112,18 @@ impl AaveLending {
 
     async fn execute_withdraw(
         &mut self,
-        venue: &LendingVenue,
+        pool_addr: Address,
+        rpc_url: &str,
+        token_addr: Address,
         asset_symbol: &str,
         input_amount: f64,
     ) -> Result<ExecutionResult> {
-        let chain = Self::venue_chain(venue);
-        let venue_name = Self::venue_name(venue);
-
-        let pool_addr = evm::lending_pool_address(&chain, venue_name)
-            .with_context(|| format!("No pool address for {venue_name} on {chain}"))?;
-
-        let token_addr = evm::token_address(&chain, asset_symbol)
-            .with_context(|| format!("Unknown token '{asset_symbol}' on {chain}"))?;
-
         let decimals = token_decimals_for(asset_symbol);
         let amount_units = evm::to_token_units(input_amount, 1.0, decimals);
 
         println!(
-            "  LENDING WITHDRAW: {} {} from {} on {}",
-            input_amount, asset_symbol, venue_name, chain,
+            "  LENDING WITHDRAW: {} {} from pool {}",
+            input_amount, asset_symbol, evm::short_addr(&pool_addr),
         );
 
         if self.dry_run {
@@ -183,14 +135,7 @@ impl AaveLending {
             });
         }
 
-        let signer: alloy::signers::local::PrivateKeySigner = self
-            .private_key
-            .parse()
-            .map_err(|e| anyhow::anyhow!("Invalid key: {e}"))?;
-        let wallet = alloy::network::EthereumWallet::from(signer);
-        let provider = ProviderBuilder::new()
-            .wallet(wallet)
-            .connect_http(chain.rpc_url().expect("lending chain requires RPC").parse()?);
+        let provider = make_provider(&self.private_key, rpc_url)?;
 
         let pool = IAavePool::new(pool_addr, &provider);
         let withdraw_tx = pool.withdraw(token_addr, amount_units, self.wallet_address);
@@ -207,25 +152,18 @@ impl AaveLending {
 
     async fn execute_borrow(
         &mut self,
-        venue: &LendingVenue,
+        pool_addr: Address,
+        rpc_url: &str,
+        token_addr: Address,
         asset_symbol: &str,
         input_amount: f64,
     ) -> Result<ExecutionResult> {
-        let chain = Self::venue_chain(venue);
-        let venue_name = Self::venue_name(venue);
-
-        let pool_addr = evm::lending_pool_address(&chain, venue_name)
-            .with_context(|| format!("No pool address for {venue_name} on {chain}"))?;
-
-        let token_addr = evm::token_address(&chain, asset_symbol)
-            .with_context(|| format!("Unknown token '{asset_symbol}' on {chain}"))?;
-
         let decimals = token_decimals_for(asset_symbol);
         let amount_units = evm::to_token_units(input_amount, 1.0, decimals);
 
         println!(
-            "  LENDING BORROW: {} {} from {} on {}",
-            input_amount, asset_symbol, venue_name, chain,
+            "  LENDING BORROW: {} {} from pool {}",
+            input_amount, asset_symbol, evm::short_addr(&pool_addr),
         );
 
         if self.dry_run {
@@ -237,14 +175,7 @@ impl AaveLending {
             });
         }
 
-        let signer: alloy::signers::local::PrivateKeySigner = self
-            .private_key
-            .parse()
-            .map_err(|e| anyhow::anyhow!("Invalid key: {e}"))?;
-        let wallet = alloy::network::EthereumWallet::from(signer);
-        let provider = ProviderBuilder::new()
-            .wallet(wallet)
-            .connect_http(chain.rpc_url().expect("lending chain requires RPC").parse()?);
+        let provider = make_provider(&self.private_key, rpc_url)?;
 
         let pool = IAavePool::new(pool_addr, &provider);
         let borrow_tx = pool.borrow(token_addr, amount_units, U256::from(2), 0, self.wallet_address);
@@ -261,25 +192,18 @@ impl AaveLending {
 
     async fn execute_repay(
         &mut self,
-        venue: &LendingVenue,
+        pool_addr: Address,
+        rpc_url: &str,
+        token_addr: Address,
         asset_symbol: &str,
         input_amount: f64,
     ) -> Result<ExecutionResult> {
-        let chain = Self::venue_chain(venue);
-        let venue_name = Self::venue_name(venue);
-
-        let pool_addr = evm::lending_pool_address(&chain, venue_name)
-            .with_context(|| format!("No pool address for {venue_name} on {chain}"))?;
-
-        let token_addr = evm::token_address(&chain, asset_symbol)
-            .with_context(|| format!("Unknown token '{asset_symbol}' on {chain}"))?;
-
         let decimals = token_decimals_for(asset_symbol);
         let amount_units = evm::to_token_units(input_amount, 1.0, decimals);
 
         println!(
-            "  LENDING REPAY: {} {} to {} on {}",
-            input_amount, asset_symbol, venue_name, chain,
+            "  LENDING REPAY: {} {} to pool {}",
+            input_amount, asset_symbol, evm::short_addr(&pool_addr),
         );
 
         if self.dry_run {
@@ -291,14 +215,7 @@ impl AaveLending {
             });
         }
 
-        let signer: alloy::signers::local::PrivateKeySigner = self
-            .private_key
-            .parse()
-            .map_err(|e| anyhow::anyhow!("Invalid key: {e}"))?;
-        let wallet = alloy::network::EthereumWallet::from(signer);
-        let provider = ProviderBuilder::new()
-            .wallet(wallet)
-            .connect_http(chain.rpc_url().expect("lending chain requires RPC").parse()?);
+        let provider = make_provider(&self.private_key, rpc_url)?;
 
         let erc20 = IERC20::new(token_addr, &provider);
         let approve_tx = erc20.approve(pool_addr, amount_units);
@@ -320,40 +237,33 @@ impl AaveLending {
 
     async fn execute_claim_rewards(
         &mut self,
-        venue: &LendingVenue,
-        asset_symbol: &str,
+        rewards_controller: Option<&str>,
+        rpc_url: &str,
+        token_addr: Address,
     ) -> Result<ExecutionResult> {
-        let chain = Self::venue_chain(venue);
-        let venue_name = Self::venue_name(venue);
+        let rewards_addr_str = match rewards_controller {
+            Some(addr) => addr,
+            None => {
+                println!("  LENDING: no rewards_controller address, skipping claim");
+                return Ok(ExecutionResult::Noop);
+            }
+        };
 
-        let rewards_addr = evm::rewards_controller_address(&chain, venue_name);
+        let rewards_addr: Address = rewards_addr_str
+            .parse()
+            .with_context(|| format!("invalid rewards_controller address: {rewards_addr_str}"))?;
 
         println!(
-            "  LENDING CLAIM: rewards from {} on {} for {}",
-            venue_name, chain, asset_symbol,
+            "  LENDING CLAIM: rewards from {}",
+            evm::short_addr(&rewards_addr),
         );
 
-        if self.dry_run || rewards_addr.is_none() {
-            if rewards_addr.is_none() {
-                println!("  LENDING: no rewards controller address for {venue_name}, skipping");
-            } else {
-                println!("  LENDING: [DRY RUN] would claim rewards");
-            }
+        if self.dry_run {
+            println!("  LENDING: [DRY RUN] would claim rewards");
             return Ok(ExecutionResult::Noop);
         }
 
-        let rewards_addr = rewards_addr.unwrap();
-        let token_addr = evm::token_address(&chain, asset_symbol)
-            .unwrap_or(Address::ZERO);
-
-        let signer: alloy::signers::local::PrivateKeySigner = self
-            .private_key
-            .parse()
-            .map_err(|e| anyhow::anyhow!("Invalid key: {e}"))?;
-        let wallet = alloy::network::EthereumWallet::from(signer);
-        let provider = ProviderBuilder::new()
-            .wallet(wallet)
-            .connect_http(chain.rpc_url().expect("lending chain requires RPC").parse()?);
+        let provider = make_provider(&self.private_key, rpc_url)?;
 
         let rewards = IRewardsController::new(rewards_addr, &provider);
         let assets = vec![token_addr];
@@ -371,27 +281,40 @@ impl Venue for AaveLending {
     async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult> {
         match node {
             Node::Lending {
-                venue,
+                chain,
+                pool_address,
                 asset,
                 action,
+                rewards_controller,
                 ..
-            } => match action {
-                LendingAction::Supply => {
-                    self.execute_supply(venue, asset, input_amount).await
+            } => {
+                let rpc_url = chain
+                    .rpc_url()
+                    .context("lending chain requires RPC URL")?;
+                let pool_addr: Address = pool_address
+                    .parse()
+                    .with_context(|| format!("invalid pool_address: {pool_address}"))?;
+                let token_addr = evm::token_address(chain, asset)
+                    .with_context(|| format!("Unknown token '{asset}' on {chain}"))?;
+
+                match action {
+                    LendingAction::Supply => {
+                        self.execute_supply(pool_addr, rpc_url, token_addr, asset, input_amount).await
+                    }
+                    LendingAction::Withdraw => {
+                        self.execute_withdraw(pool_addr, rpc_url, token_addr, asset, input_amount).await
+                    }
+                    LendingAction::Borrow => {
+                        self.execute_borrow(pool_addr, rpc_url, token_addr, asset, input_amount).await
+                    }
+                    LendingAction::Repay => {
+                        self.execute_repay(pool_addr, rpc_url, token_addr, asset, input_amount).await
+                    }
+                    LendingAction::ClaimRewards => {
+                        self.execute_claim_rewards(rewards_controller.as_deref(), rpc_url, token_addr).await
+                    }
                 }
-                LendingAction::Withdraw => {
-                    self.execute_withdraw(venue, asset, input_amount).await
-                }
-                LendingAction::Borrow => {
-                    self.execute_borrow(venue, asset, input_amount).await
-                }
-                LendingAction::Repay => {
-                    self.execute_repay(venue, asset, input_amount).await
-                }
-                LendingAction::ClaimRewards => {
-                    self.execute_claim_rewards(venue, asset).await
-                }
-            },
+            }
             _ => {
                 println!("  LENDING: unsupported node type '{}'", node.type_name());
                 Ok(ExecutionResult::Noop)
@@ -421,6 +344,19 @@ impl Venue for AaveLending {
             ..SimMetrics::default()
         }
     }
+}
+
+fn make_provider(
+    private_key: &str,
+    rpc_url: &str,
+) -> Result<impl alloy::providers::Provider + Clone> {
+    let signer: alloy::signers::local::PrivateKeySigner = private_key
+        .parse()
+        .map_err(|e| anyhow::anyhow!("Invalid key: {e}"))?;
+    let wallet = alloy::network::EthereumWallet::from(signer);
+    Ok(ProviderBuilder::new()
+        .wallet(wallet)
+        .connect_http(rpc_url.parse()?))
 }
 
 fn token_decimals_for(symbol: &str) -> u8 {

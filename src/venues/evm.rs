@@ -105,16 +105,6 @@ use lazy_static_token_registry;
 
 // ── Known contract addresses ───────────────────────────────────────
 
-pub fn lending_pool_address(chain: &Chain, venue: &str) -> Option<Address> {
-    match (chain.chain_id()?, venue.to_lowercase().as_str()) {
-        (999, "hyperlend") => Some("0xC0EE4e7e60D0A1F9a9AfaE0706D1b5C5A7f5B9b4".parse().unwrap()),
-        (8453, "aave") => Some("0xA238Dd80C7A0845DA4b9e9146FF76C97a7aEcE89".parse().unwrap()),
-        (42161, "aave") => Some("0x794a61358D6845594F94dc1DB02A252b5b4814aD".parse().unwrap()),
-        (1, "aave") => Some("0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2".parse().unwrap()),
-        _ => None,
-    }
-}
-
 pub fn aerodrome_position_manager() -> Address {
     "0x827922686190790b37229fd06084350E74485b72".parse().unwrap()
 }
@@ -128,9 +118,3 @@ pub fn pendle_router(chain: &Chain) -> Option<Address> {
     }
 }
 
-pub fn rewards_controller_address(chain: &Chain, venue: &str) -> Option<Address> {
-    match (chain.chain_id()?, venue.to_lowercase().as_str()) {
-        (999, "hyperlend") => Some("0x54586bE62E3c3580375aE3723C145253060Ca0C2".parse().unwrap()),
-        _ => None,
-    }
-}

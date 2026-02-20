@@ -3,14 +3,14 @@ use anyhow::{Context, Result};
 use crate::data::csv_types::LendingCsvRow;
 use crate::fetch_data::providers::defillama;
 use crate::fetch_data::types::{sanitize, DataSource, FetchConfig, FetchJob, FetchResult};
-use crate::model::node::{LendingVenue, Node};
+use crate::model::node::Node;
 
 // ── Plan ────────────────────────────────────────────────────────────
 
 pub fn fetch_plan(node: &Node) -> Option<FetchJob> {
     match node {
-        Node::Lending { id, venue, asset, .. } => {
-            let slug = lending_venue_slug(venue);
+        Node::Lending { id, defillama_slug, asset, .. } => {
+            let slug = defillama_slug.as_deref()?;
             let key = format!("{slug}:{asset}");
             let source = DataSource::DefiLlamaYield;
             let filename = format!("{}_{}.csv", source.name(), sanitize(&key));
@@ -45,18 +45,6 @@ pub async fn fetch(
 }
 
 // ── Internal ────────────────────────────────────────────────────────
-
-/// Map a LendingVenue to its DefiLlama project slug.
-pub fn lending_venue_slug(venue: &LendingVenue) -> &'static str {
-    match venue {
-        LendingVenue::Aave => "aave-v3",
-        LendingVenue::Lendle => "lendle",
-        LendingVenue::Morpho => "morpho-blue",
-        LendingVenue::Compound => "compound-v3",
-        LendingVenue::InitCapital => "init-capital",
-        LendingVenue::HyperLend => "hyperlend-pooled",
-    }
-}
 
 /// Fetch lending rate history from DefiLlama yields API.
 async fn fetch_lending(

@@ -49,21 +49,22 @@ pub enum BridgeProvider {
     Stargate,
 }
 
-/// Lending protocol venues.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum LendingVenue {
-    /// Aave V3.
-    Aave,
-    /// Lendle — Aave V2 fork on Mantle.
-    Lendle,
-    /// Morpho Blue — modular lending with isolated markets.
+/// Lending protocol interface archetypes.
+/// Determines which ABI / contract interaction pattern to use for live execution.
+/// Aave forks (HyperLend, Lendle, Seamless, Granary, etc.) all use `AaveV3` or `AaveV2`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LendingArchetype {
+    /// Aave V3 Pool ABI (also used by HyperLend, Granary, Spark, Seamless, etc.)
+    AaveV3,
+    /// Aave V2 Pool ABI (Lendle, Geist, etc.)
+    AaveV2,
+    /// Morpho Blue.
     Morpho,
-    /// Compound V3 (Comet) — single-asset markets.
-    Compound,
-    /// Init Capital — isolated lending pools (ERC4626 vault-style).
+    /// Compound V3 (Comet).
+    CompoundV3,
+    /// Init Capital (ERC4626 vault-style).
     InitCapital,
-    /// HyperLend — Aave V3 fork on HyperEVM.
-    HyperLend,
 }
 
 /// Lending protocol actions.
@@ -390,17 +391,27 @@ pub enum Node {
     },
     /// Lending protocol node.
     /// Supply collateral, borrow, repay, withdraw, or claim rewards.
-    /// The execution layer handles protocol-specific details (e.g. Morpho market IDs,
-    /// HyperLend E-mode, Init Capital vault shares).
+    /// The archetype determines which ABI to use; addresses are provided per-deployment.
+    /// Any Aave fork works with `aave_v3` archetype + its pool address.
     Lending {
         /// Unique identifier for this node.
         id: NodeId,
-        /// Lending protocol venue.
-        venue: LendingVenue,
+        /// Which protocol interface to use (determines the ABI).
+        archetype: LendingArchetype,
+        /// The chain this lending deployment is on.
+        chain: Chain,
+        /// Pool / lending contract address (0x-prefixed).
+        pool_address: String,
         /// Asset token symbol, e.g. "USDC", "WETH", "USDe".
         asset: String,
         /// What action to perform.
         action: LendingAction,
+        /// Rewards controller address for claim_rewards (optional, 0x-prefixed).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rewards_controller: Option<String>,
+        /// DefiLlama project slug for fetch-data (e.g. "hyperlend-pooled", "aave-v3").
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        defillama_slug: Option<String>,
         /// Optional periodic trigger (e.g. claim rewards daily).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trigger: Option<Trigger>,
@@ -589,14 +600,15 @@ impl Node {
                 format!("bridge({provider:?} {token} {from_chain}->{to_chain}{t})")
             }
             Node::Lending {
-                venue,
+                archetype,
+                chain,
                 asset,
                 action,
                 trigger,
                 ..
             } => {
                 let t = trig_suffix(trigger);
-                format!("lending({venue:?} {action:?} {asset}{t})")
+                format!("lending({archetype:?} {action:?} {asset} on {chain}{t})")
             }
             Node::Pendle {
                 market,
@@ -640,7 +652,7 @@ impl Node {
             Node::Spot { .. } => Some(Chain::base()),
             Node::Lp { .. } => Some(Chain::base()),
             Node::Swap { chain, .. } => chain.clone(),
-            Node::Lending { venue, .. } => Some(lending_venue_chain(venue)),
+            Node::Lending { chain, .. } => Some(chain.clone()),
             Node::Pendle { .. } => Some(Chain::hyperevm()),
             Node::Optimizer { .. } => None,
         }
@@ -681,14 +693,3 @@ pub fn perp_venue_default_margin(venue: &PerpVenue) -> &'static str {
     }
 }
 
-/// Map a lending venue to the chain it operates on.
-fn lending_venue_chain(venue: &LendingVenue) -> Chain {
-    match venue {
-        LendingVenue::HyperLend => Chain::hyperevm(),
-        LendingVenue::Aave => Chain::ethereum(),
-        LendingVenue::Lendle => Chain::mantle(),
-        LendingVenue::Morpho => Chain::ethereum(),
-        LendingVenue::Compound => Chain::ethereum(),
-        LendingVenue::InitCapital => Chain::mantle(),
-    }
-}

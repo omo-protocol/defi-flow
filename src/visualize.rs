@@ -253,11 +253,12 @@ fn node_detail(node: &Node) -> String {
             ..
         } => format!("{provider:?} {token} {from_chain} -> {to_chain}"),
         Node::Lending {
-            venue,
+            archetype,
+            chain,
             asset,
             action,
             ..
-        } => format!("{venue:?} {action:?} {asset}"),
+        } => format!("{archetype:?} {action:?} {asset} on {chain}"),
         Node::Pendle {
             market, action, ..
         } => format!("{action:?} {market}"),

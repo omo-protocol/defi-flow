@@ -81,10 +81,14 @@ pub fn run() -> anyhow::Result<()> {
    Execution layer handles protocol-specific details (Morpho market IDs,
    HyperLend E-mode, Init Capital vault shares, etc.)
    Parameters:
-     - venue:   LendingVenue (Aave | Lendle | Morpho | Compound | InitCapital | HyperLend)
-     - asset:   String       (e.g. "USDC", "WETH", "USDe")
-     - action:  LendingAction (supply | withdraw | borrow | repay | claim_rewards)
-     - trigger: Trigger?     (optional, e.g. claim_rewards daily)
+     - archetype:           LendingArchetype (aave_v3 | aave_v2 | morpho | compound_v3 | init_capital)
+     - chain:               Chain   (e.g. {{"name":"hyperevm","chain_id":999}})
+     - pool_address:        String  (0x-prefixed lending pool contract address)
+     - asset:               String  (e.g. "USDC", "WETH", "USDe")
+     - action:              LendingAction (supply | withdraw | borrow | repay | claim_rewards)
+     - rewards_controller:  String? (optional 0x-prefixed rewards controller address)
+     - defillama_slug:      String? (optional DefiLlama project slug for fetch-data)
+     - trigger:             Trigger? (optional, e.g. claim_rewards daily)
 
 9. pendle
    Pendle yield tokenization — mint/redeem principal tokens (PT) for fixed yield

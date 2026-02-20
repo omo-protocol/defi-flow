@@ -145,9 +145,13 @@ pub fn run() -> anyhow::Result<()> {
             // ── Deploy: lending supply on HyperLend ───────────────
             Node::Lending {
                 id: "lend_usdc".into(),
-                venue: LendingVenue::HyperLend,
+                archetype: LendingArchetype::AaveV3,
+                chain: Chain::hyperevm(),
+                pool_address: "0xC0EE4e7e60D0A1F9a9AfaE0706D1b5C5A7f5B9b4".into(),
                 asset: "USDC".into(),
                 action: LendingAction::Supply,
+                rewards_controller: Some("0x54586bE62E3c3580375aE3723C145253060Ca0C2".into()),
+                defillama_slug: Some("hyperlend-pooled".into()),
                 trigger: None,
             },
             // ── Deploy: Pendle PT-kHYPE for fixed yield ───────────
@@ -226,9 +230,13 @@ pub fn run() -> anyhow::Result<()> {
             // ── Periodic: claim HyperLend rewards weekly ─────────
             Node::Lending {
                 id: "claim_lend_rewards".into(),
-                venue: LendingVenue::HyperLend,
+                archetype: LendingArchetype::AaveV3,
+                chain: Chain::hyperevm(),
+                pool_address: "0xC0EE4e7e60D0A1F9a9AfaE0706D1b5C5A7f5B9b4".into(),
                 asset: "USDC".into(),
                 action: LendingAction::ClaimRewards,
+                rewards_controller: Some("0x54586bE62E3c3580375aE3723C145253060Ca0C2".into()),
+                defillama_slug: Some("hyperlend-pooled".into()),
                 trigger: Some(Trigger::Cron {
                     interval: CronInterval::Weekly,
                 }),
