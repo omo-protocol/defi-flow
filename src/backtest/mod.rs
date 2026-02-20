@@ -183,6 +183,8 @@ async fn execute_backtest(
 }
 
 /// Seed the first wallet node with initial capital.
+/// Only sets the balance tracker — the wallet venue stays at zero.
+/// Deploy phase will transfer the balance through edges to downstream venues.
 async fn seed_wallet(engine: &mut Engine, capital: f64) {
     let wallet_node = engine
         .workflow
@@ -194,10 +196,6 @@ async fn seed_wallet(engine: &mut Engine, capital: f64) {
     if let Some(ref node) = wallet_node {
         let id = node.id().to_string();
         engine.balances.add(&id, "USDC", capital);
-        // Also seed the wallet venue so its total_value() reports correctly
-        if let Some(venue) = engine.venues.get_mut(id.as_str()) {
-            let _ = venue.execute(node, capital).await;
-        }
     }
 }
 

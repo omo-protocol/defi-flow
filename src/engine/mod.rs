@@ -296,12 +296,13 @@ impl Engine {
         &mut self,
         node: &Node,
         node_id: &str,
-        input_amount: f64,
+        _input_amount: f64,
         drift_threshold: f64,
     ) -> Result<()> {
-        // Get total capital available at this optimizer
-        let existing_balance = self.balances.get(node_id, "USDC");
-        let total_capital = existing_balance + input_amount;
+        // Get total capital available at this optimizer.
+        // Note: gather_inputs() already deposited input_amount into our balance,
+        // so existing_balance already includes it. Don't add input_amount again.
+        let total_capital = self.balances.get(node_id, "USDC");
 
         if total_capital <= 0.0 {
             return Ok(());
