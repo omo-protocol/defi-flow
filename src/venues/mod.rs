@@ -83,6 +83,8 @@ pub enum BuildMode<'a> {
     },
     Live {
         config: &'a RuntimeConfig,
+        tokens: &'a evm::TokenManifest,
+        contracts: &'a evm::ContractManifest,
     },
 }
 

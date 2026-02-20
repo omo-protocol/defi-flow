@@ -44,8 +44,8 @@ impl VenueCategory for LpCategory {
                     };
                     Ok(Some(Box::new(simulator::LpSimulator::new(rows))))
                 }
-                BuildMode::Live { config } => {
-                    Ok(Some(Box::new(aerodrome::AerodromeLp::new(config)?)))
+                BuildMode::Live { config, tokens, contracts } => {
+                    Ok(Some(Box::new(aerodrome::AerodromeLp::new(config, tokens, contracts)?)))
                 }
             },
             _ => Ok(None),

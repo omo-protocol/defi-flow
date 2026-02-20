@@ -50,7 +50,7 @@ impl VenueCategory for PerpsCategory {
                         *seed,
                     ))))
                 }
-                BuildMode::Live { config } => match venue {
+                BuildMode::Live { config, .. } => match venue {
                     PerpVenue::Hyperliquid | PerpVenue::Hyena => {
                         Ok(Some(Box::new(hyperliquid::HyperliquidPerp::new(config)?)))
                     }
@@ -74,7 +74,7 @@ impl VenueCategory for PerpsCategory {
                         *slippage_bps,
                     ))))
                 }
-                BuildMode::Live { config } => {
+                BuildMode::Live { config, .. } => {
                     Ok(Some(Box::new(hyperliquid::HyperliquidPerp::new(config)?)))
                 }
             },

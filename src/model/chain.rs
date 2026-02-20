@@ -94,6 +94,21 @@ impl Chain {
         }
     }
 
+    /// Construct a chain from its name, matching known chains.
+    /// Falls back to a name-only chain (no chain_id/rpc_url) for unknown names.
+    pub fn from_name(name: &str) -> Self {
+        match name.to_lowercase().as_str() {
+            "ethereum" => Self::ethereum(),
+            "arbitrum" => Self::arbitrum(),
+            "optimism" => Self::optimism(),
+            "base" => Self::base(),
+            "mantle" => Self::mantle(),
+            "hyperevm" => Self::hyperevm(),
+            "hyperliquid" => Self::hyperliquid(),
+            _ => Self::named(name),
+        }
+    }
+
     /// Custom EVM chain with chain_id + rpc_url.
     pub fn custom(name: impl Into<String>, chain_id: u64, rpc_url: impl Into<String>) -> Self {
         Chain {

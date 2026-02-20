@@ -57,7 +57,16 @@ async fn run_async(workflow: Workflow, config: RuntimeConfig, workflow_path: &Pa
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     // Build venues using the unified factory
-    let venue_map = venues::build_all(&workflow, &BuildMode::Live { config: &config })?;
+    let tokens = workflow.token_manifest();
+    let contracts = workflow.contracts.clone().unwrap_or_default();
+    let venue_map = venues::build_all(
+        &workflow,
+        &BuildMode::Live {
+            config: &config,
+            tokens: &tokens,
+            contracts: &contracts,
+        },
+    )?;
 
     // Build engine
     let mut engine = Engine::new(workflow, venue_map);

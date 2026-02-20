@@ -1,3 +1,4 @@
+mod contracts;
 mod graph;
 mod references;
 mod tokens;
@@ -59,6 +60,15 @@ pub enum ValidationError {
     #[error("Perp node `{node_id}` with action {action} requires `leverage` field")]
     PerpMissingLeverage { node_id: String, action: String },
 
+    #[error("Token `{token}` on chain `{chain}` has no address in the tokens manifest")]
+    TokenNotInManifest { token: String, chain: String },
+
+    #[error("Contract `{contract}` on {chain} not in contracts manifest (node `{node_id}`)")]
+    ContractNotInManifest {
+        contract: String,
+        chain: String,
+        node_id: String,
+    },
 }
 
 /// Load and fully validate a workflow from a JSON file.
@@ -78,6 +88,7 @@ pub fn validate(workflow: &Workflow) -> Result<(), Vec<ValidationError>> {
     errors.extend(references::check_edge_references(workflow));
     errors.extend(graph::check_dag(workflow));
     errors.extend(tokens::check_token_compatibility(workflow));
+    errors.extend(contracts::check_contract_manifest(workflow));
 
     if errors.is_empty() {
         Ok(())

@@ -7,6 +7,7 @@ pub fn run() -> anyhow::Result<()> {
    Source or sink for funds on a specific chain.
    Parameters:
      - chain:   Chain   (object: {"name":"ethereum","chain_id":1,"rpc_url":"https://eth.llamarpc.com"} — chain_id and rpc_url optional for non-EVM chains like {"name":"hyperliquid"})
+     - token:   String  (token symbol, e.g. "USDC", "USDT0" — must match an entry in the workflow tokens manifest)
      - address: String  (0x-prefixed wallet address)
 
 2. perp
@@ -84,10 +85,10 @@ pub fn run() -> anyhow::Result<()> {
    Parameters:
      - archetype:           LendingArchetype (aave_v3 | aave_v2 | morpho | compound_v3 | init_capital)
      - chain:               Chain   (e.g. {{"name":"hyperevm","chain_id":999}})
-     - pool_address:        String  (0x-prefixed lending pool contract address)
+     - pool_address:        String  (contracts manifest key, e.g. "hyperlend_pool")
      - asset:               String  (e.g. "USDC", "WETH", "USDe")
      - action:              LendingAction (supply | withdraw | borrow | repay | claim_rewards)
-     - rewards_controller:  String? (optional 0x-prefixed rewards controller address)
+     - rewards_controller:  String? (optional contracts manifest key, e.g. "hyperlend_rewards")
      - defillama_slug:      String? (optional DefiLlama project slug for fetch-data)
      - trigger:             Trigger? (optional, e.g. claim_rewards daily)
 
@@ -97,7 +98,7 @@ pub fn run() -> anyhow::Result<()> {
    Parameters:
      - archetype:           VaultArchetype (morpho_v2)
      - chain:               Chain   (e.g. {{"name":"ethereum","chain_id":1}})
-     - vault_address:       String  (0x-prefixed vault contract address)
+     - vault_address:       String  (contracts manifest key, e.g. "morpho_usdc_vault")
      - asset:               String  (e.g. "USDC", "WETH")
      - action:              VaultAction (deposit | withdraw | claim_rewards)
      - defillama_slug:      String? (optional DefiLlama project slug for fetch-data)

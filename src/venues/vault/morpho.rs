@@ -41,16 +41,24 @@ pub struct MorphoVault {
     wallet_address: Address,
     private_key: String,
     dry_run: bool,
+    tokens: evm::TokenManifest,
+    contracts: evm::ContractManifest,
     deposited_value: f64,
     metrics: SimMetrics,
 }
 
 impl MorphoVault {
-    pub fn new(config: &RuntimeConfig) -> Result<Self> {
+    pub fn new(
+        config: &RuntimeConfig,
+        tokens: &evm::TokenManifest,
+        contracts: &evm::ContractManifest,
+    ) -> Result<Self> {
         Ok(MorphoVault {
             wallet_address: config.wallet_address,
             private_key: config.private_key.clone(),
             dry_run: config.dry_run,
+            tokens: tokens.clone(),
+            contracts: contracts.clone(),
             deposited_value: 0.0,
             metrics: SimMetrics::default(),
         })
@@ -158,11 +166,10 @@ impl Venue for MorphoVault {
                 let rpc_url = chain
                     .rpc_url()
                     .context("vault chain requires RPC URL")?;
-                let vault_addr: Address = vault_address
-                    .parse()
-                    .with_context(|| format!("invalid vault_address: {vault_address}"))?;
-                let token_addr = evm::token_address(chain, asset)
-                    .with_context(|| format!("Unknown token '{asset}' on {chain}"))?;
+                let vault_addr = evm::resolve_contract(&self.contracts, vault_address, chain)
+                    .with_context(|| format!("Contract '{}' on {} not in contracts manifest", vault_address, chain))?;
+                let token_addr = evm::resolve_token(&self.tokens, chain, asset)
+                    .with_context(|| format!("Token '{asset}' on {chain} not in tokens manifest"))?;
 
                 match action {
                     VaultAction::Deposit => {

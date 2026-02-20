@@ -44,8 +44,8 @@ impl VenueCategory for VaultCategory {
                     };
                     Ok(Some(Box::new(simulator::VaultSimulator::new(rows))))
                 }
-                BuildMode::Live { config } => {
-                    Ok(Some(Box::new(morpho::MorphoVault::new(config)?)))
+                BuildMode::Live { config, tokens, contracts } => {
+                    Ok(Some(Box::new(morpho::MorphoVault::new(config, tokens, contracts)?)))
                 }
             },
             _ => Ok(None),

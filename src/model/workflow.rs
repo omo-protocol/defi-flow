@@ -1,6 +1,10 @@
+use std::collections::HashMap;
+
+use alloy::primitives::Address;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::chain::Chain;
 use super::edge::Edge;
 use super::node::Node;
 
@@ -13,8 +17,46 @@ pub struct Workflow {
     /// Optional description of the strategy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Token manifest: maps token symbols to contract addresses per chain.
+    /// Example: `{"USDC": {"hyperevm": "0x...", "base": "0x..."}}`.
+    /// Used by the live executor to resolve ERC20 addresses.
+    /// When present, the validator checks that all tokens used in edges/nodes
+    /// have entries for the relevant chains.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<HashMap<String, HashMap<String, String>>>,
+    /// Protocol contract addresses per chain.
+    /// Example: `{"aerodrome_position_manager": {"base": "0x..."}, "pendle_router": {"hyperevm": "0x..."}}`.
+    /// Used by live executors to resolve protocol-specific contract addresses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contracts: Option<HashMap<String, HashMap<String, String>>>,
     /// The nodes (operations) in this workflow.
     pub nodes: Vec<Node>,
     /// The edges (token flows) connecting nodes.
     pub edges: Vec<Edge>,
+}
+
+impl Workflow {
+    /// Resolve a token symbol to its contract address for a given chain.
+    /// Looks up the workflow's `tokens` manifest.
+    pub fn resolve_token_address(&self, chain: &Chain, symbol: &str) -> Option<Address> {
+        let manifest = self.tokens.as_ref()?;
+        crate::venues::evm::resolve_token(manifest, chain, symbol)
+    }
+
+    /// Return the token manifest (empty if not set).
+    pub fn token_manifest(&self) -> crate::venues::evm::TokenManifest {
+        self.tokens.clone().unwrap_or_default()
+    }
+
+    /// Return the contracts manifest (empty if not set).
+    pub fn contract_manifest(&self) -> crate::venues::evm::ContractManifest {
+        self.contracts.clone().unwrap_or_default()
+    }
+
+    /// Resolve a protocol contract address by name and chain.
+    /// Looks up the workflow's `contracts` manifest.
+    pub fn resolve_contract(&self, name: &str, chain: &Chain) -> Option<Address> {
+        let manifest = self.contract_manifest();
+        crate::venues::evm::resolve_contract(&manifest, name, chain)
+    }
 }

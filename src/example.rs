@@ -9,6 +9,49 @@ use crate::model::workflow::Workflow;
 pub fn run() -> anyhow::Result<()> {
     let workflow = Workflow {
         name: "Kelly-Optimized Multi-Venue with Auto-Compound".to_string(),
+        tokens: None,
+        contracts: Some({
+            let mut c = std::collections::HashMap::new();
+            // Lending contracts
+            c.insert("hyperlend_pool".to_string(), {
+                let mut m = std::collections::HashMap::new();
+                m.insert("hyperevm".to_string(), "0xC0EE4e7e60D0A1F9a9AfaE0706D1b5C5A7f5B9b4".to_string());
+                m
+            });
+            c.insert("hyperlend_rewards".to_string(), {
+                let mut m = std::collections::HashMap::new();
+                m.insert("hyperevm".to_string(), "0x54586bE62E3c3580375aE3723C145253060Ca0C2".to_string());
+                m
+            });
+            // Aerodrome
+            c.insert("aerodrome_position_manager".to_string(), {
+                let mut m = std::collections::HashMap::new();
+                m.insert("base".to_string(), "0x827922686190790b37229fd06084350E74485b72".to_string());
+                m
+            });
+            // Pendle
+            c.insert("pendle_router".to_string(), {
+                let mut m = std::collections::HashMap::new();
+                m.insert("hyperevm".to_string(), "0x00000000005BBB0EF59571E58418F9a4357b68A0".to_string());
+                m
+            });
+            c.insert("pendle_pt_khype_market".to_string(), {
+                let mut m = std::collections::HashMap::new();
+                m.insert("hyperevm".to_string(), "0x0000000000000000000000000000000000000001".to_string());
+                m
+            });
+            c.insert("pendle_pt_khype_sy".to_string(), {
+                let mut m = std::collections::HashMap::new();
+                m.insert("hyperevm".to_string(), "0x0000000000000000000000000000000000000002".to_string());
+                m
+            });
+            c.insert("pendle_pt_khype_yt".to_string(), {
+                let mut m = std::collections::HashMap::new();
+                m.insert("hyperevm".to_string(), "0x0000000000000000000000000000000000000003".to_string());
+                m
+            });
+            c
+        }),
         description: Some(
             "Bridge USDe from Mantle to HyperCore via Stargate, swap to USDC via LiFi, \
              then Kelly-optimize across: Hyperliquid ETH long perp, Hyena BTC short hedge, \
@@ -24,6 +67,7 @@ pub fn run() -> anyhow::Result<()> {
             Node::Wallet {
                 id: "wallet_src".into(),
                 chain: Chain::mantle(),
+                token: "USDe".into(),
                 address: "0xYourWalletAddress".into(),
             },
             Node::Movement {
@@ -153,10 +197,10 @@ pub fn run() -> anyhow::Result<()> {
                 id: "lend_usdc".into(),
                 archetype: LendingArchetype::AaveV3,
                 chain: Chain::hyperevm(),
-                pool_address: "0xC0EE4e7e60D0A1F9a9AfaE0706D1b5C5A7f5B9b4".into(),
+                pool_address: "hyperlend_pool".into(),
                 asset: "USDC".into(),
                 action: LendingAction::Supply,
-                rewards_controller: Some("0x54586bE62E3c3580375aE3723C145253060Ca0C2".into()),
+                rewards_controller: Some("hyperlend_rewards".into()),
                 defillama_slug: Some("hyperlend-pooled".into()),
                 trigger: None,
             },
@@ -240,10 +284,10 @@ pub fn run() -> anyhow::Result<()> {
                 id: "claim_lend_rewards".into(),
                 archetype: LendingArchetype::AaveV3,
                 chain: Chain::hyperevm(),
-                pool_address: "0xC0EE4e7e60D0A1F9a9AfaE0706D1b5C5A7f5B9b4".into(),
+                pool_address: "hyperlend_pool".into(),
                 asset: "USDC".into(),
                 action: LendingAction::ClaimRewards,
-                rewards_controller: Some("0x54586bE62E3c3580375aE3723C145253060Ca0C2".into()),
+                rewards_controller: Some("hyperlend_rewards".into()),
                 defillama_slug: Some("hyperlend-pooled".into()),
                 trigger: Some(Trigger::Cron {
                     interval: CronInterval::Weekly,

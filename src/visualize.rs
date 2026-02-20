@@ -119,6 +119,8 @@ fn scope_workflow(
     Ok(Workflow {
         name: format!("{} (scope: {from_id}:{to_id})", workflow.name),
         description: workflow.description.clone(),
+        tokens: workflow.tokens.clone(),
+        contracts: workflow.contracts.clone(),
         nodes,
         edges,
     })

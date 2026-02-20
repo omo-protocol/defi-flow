@@ -275,6 +275,9 @@ pub enum Node {
         id: NodeId,
         /// The chain this wallet resides on.
         chain: Chain,
+        /// Token symbol (e.g. "USDC", "USDT0", "ETH").
+        /// Must have a matching entry in the workflow `tokens` manifest.
+        token: String,
         /// Wallet address (0x-prefixed hex).
         address: String,
     },
@@ -423,13 +426,15 @@ pub enum Node {
         archetype: LendingArchetype,
         /// The chain this lending deployment is on.
         chain: Chain,
-        /// Pool / lending contract address (0x-prefixed).
+        /// Contract manifest key for the pool (e.g. `hyperlend_pool`).
+        /// Must have a matching entry in the workflow `contracts` manifest for this chain.
         pool_address: String,
         /// Asset token symbol, e.g. "USDC", "WETH", "USDe".
         asset: String,
         /// What action to perform.
         action: LendingAction,
-        /// Rewards controller address for claim_rewards (optional, 0x-prefixed).
+        /// Contract manifest key for rewards controller (e.g. `hyperlend_rewards`).
+        /// Must have a matching entry in the workflow `contracts` manifest for this chain.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rewards_controller: Option<String>,
         /// DefiLlama project slug for fetch-data (e.g. "hyperlend-pooled", "aave-v3").
@@ -449,7 +454,8 @@ pub enum Node {
         archetype: VaultArchetype,
         /// The chain this vault deployment is on.
         chain: Chain,
-        /// Vault contract address (0x-prefixed).
+        /// Contract manifest key for the vault (e.g. `morpho_usdc_vault`).
+        /// Must have a matching entry in the workflow `contracts` manifest for this chain.
         vault_address: String,
         /// Asset token symbol, e.g. "USDC", "WETH".
         asset: String,
@@ -564,7 +570,7 @@ impl Node {
         };
 
         match self {
-            Node::Wallet { chain, .. } => format!("wallet({})", chain),
+            Node::Wallet { token, chain, .. } => format!("wallet({}@{})", token, chain),
             Node::Perp {
                 venue,
                 pair,
@@ -880,7 +886,11 @@ impl Node {
                 }),
                 _ => None,
             },
-            Node::Wallet { .. } | Node::Optimizer { .. } => None,
+            Node::Wallet { token, chain, .. } => Some(TokenFlow {
+                token: token.clone(),
+                chain: Some(chain.clone()),
+            }),
+            Node::Optimizer { .. } => None,
         }
     }
 
@@ -961,7 +971,11 @@ impl Node {
                 }),
                 _ => None,
             },
-            Node::Wallet { .. } | Node::Spot { .. } | Node::Optimizer { .. } => None,
+            Node::Wallet { token, chain, .. } => Some(TokenFlow {
+                token: token.clone(),
+                chain: Some(chain.clone()),
+            }),
+            Node::Spot { .. } | Node::Optimizer { .. } => None,
         }
     }
 }

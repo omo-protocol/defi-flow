@@ -1,11 +1,26 @@
 {
   "name": "ETH Delta-Neutral Funding Arb",
   "description": "Delta-neutral with Kelly optimizer: Kelly decides allocation between active hedge (spot+perp pair) and idle lending. Spot and perp legs receive equal capital via percentage edges for perfect delta neutrality. Yield = funding + lending APY. Weekly rebalance on 5% drift.",
+  "tokens": {
+    "USDC": {
+      "hyperevm": "0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7",
+      "base": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    }
+  },
+  "contracts": {
+    "hyperlend_pool": {
+      "hyperevm": "0xC0EE4e7e60D0A1F9a9AfaE0706D1b5C5A7f5B9b4"
+    },
+    "hyperlend_rewards": {
+      "hyperevm": "0x54586bE62E3c3580375aE3723C145253060Ca0C2"
+    }
+  },
   "nodes": [
     {
       "type": "wallet",
       "id": "wallet",
       "chain": { "name": "hyperevm", "chain_id": 999 },
+      "token": "USDC",
       "address": "0xYourWalletAddress"
     },
     {
@@ -62,10 +77,10 @@
       "id": "lend_idle",
       "archetype": "aave_v3",
       "chain": { "name": "hyperevm", "chain_id": 999 },
-      "pool_address": "0xC0EE4e7e60D0A1F9a9AfaE0706D1b5C5A7f5B9b4",
+      "pool_address": "hyperlend_pool",
       "asset": "USDC",
       "action": "supply",
-      "rewards_controller": "0x54586bE62E3c3580375aE3723C145253060Ca0C2",
+      "rewards_controller": "hyperlend_rewards",
       "defillama_slug": "hyperlend-pooled"
     }
   ],

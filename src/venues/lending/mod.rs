@@ -44,8 +44,8 @@ impl VenueCategory for LendingCategory {
                     };
                     Ok(Some(Box::new(simulator::LendingSimulator::new(rows))))
                 }
-                BuildMode::Live { config } => {
-                    Ok(Some(Box::new(aave::AaveLending::new(config)?)))
+                BuildMode::Live { config, tokens, contracts } => {
+                    Ok(Some(Box::new(aave::AaveLending::new(config, tokens, contracts)?)))
                 }
             },
             _ => Ok(None),

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::LazyLock;
 
 use alloy::primitives::{Address, U256};
 use alloy::providers::ProviderBuilder;
@@ -51,34 +50,22 @@ sol! {
     }
 }
 
-// ── Known Pendle markets ───────────────────────────────────────────
+// ── Contract key derivation ──────────────────────────────────────
 
-struct PendleMarket {
-    chain: Chain,
-    market_address: Address,
-    sy_address: Address,
-    yt_address: Address,
+/// Derive a contracts manifest key from a Pendle market name.
+/// E.g. `pendle_contract_key("PT-kHYPE", "market")` → `"pendle_pt_khype_market"`.
+pub fn pendle_contract_key(market: &str, suffix: &str) -> String {
+    let normalized = market.to_lowercase().replace('-', "_");
+    format!("pendle_{}_{}", normalized, suffix)
 }
 
-static PENDLE_MARKETS: LazyLock<HashMap<String, PendleMarket>> = LazyLock::new(|| {
-    let mut m = HashMap::new();
-    m.insert(
-        "PT-kHYPE".to_string(),
-        PendleMarket {
-            chain: Chain::hyperevm(),
-            market_address: "0x0000000000000000000000000000000000000001"
-                .parse()
-                .unwrap(),
-            sy_address: "0x0000000000000000000000000000000000000002"
-                .parse()
-                .unwrap(),
-            yt_address: "0x0000000000000000000000000000000000000003"
-                .parse()
-                .unwrap(),
-        },
-    );
-    m
-});
+/// Determine the chain for a Pendle market by inspecting the contracts manifest.
+fn pendle_chain(contracts: &evm::ContractManifest, market: &str) -> Option<Chain> {
+    let market_key = pendle_contract_key(market, "market");
+    let chains = contracts.get(&market_key)?;
+    let (chain_name, _) = chains.iter().next()?;
+    Some(Chain::from_name(chain_name))
+}
 
 // ── Pendle Yield ──────────────────────────────────────────────────
 
@@ -86,16 +73,18 @@ pub struct PendleYield {
     wallet_address: Address,
     private_key: String,
     dry_run: bool,
+    contracts: evm::ContractManifest,
     pt_holdings: HashMap<String, f64>,
     yt_holdings: HashMap<String, f64>,
 }
 
 impl PendleYield {
-    pub fn new(config: &RuntimeConfig) -> Result<Self> {
+    pub fn new(config: &RuntimeConfig, contracts: &evm::ContractManifest) -> Result<Self> {
         Ok(PendleYield {
             wallet_address: config.wallet_address,
             private_key: config.private_key.clone(),
             dry_run: config.dry_run,
+            contracts: contracts.clone(),
             pt_holdings: HashMap::new(),
             yt_holdings: HashMap::new(),
         })
@@ -106,19 +95,26 @@ impl PendleYield {
         market_name: &str,
         input_amount: f64,
     ) -> Result<ExecutionResult> {
-        let market_info = PENDLE_MARKETS.get(market_name);
+        let market_key = pendle_contract_key(market_name, "market");
+        let sy_key = pendle_contract_key(market_name, "sy");
+        let yt_key = pendle_contract_key(market_name, "yt");
+
+        let chain = pendle_chain(&self.contracts, market_name);
 
         println!(
             "  PENDLE MINT_PT: {} with ${:.2}",
             market_name, input_amount,
         );
 
-        if let Some(info) = market_info {
-            let router = evm::pendle_router(&info.chain);
+        if let Some(ref ch) = chain {
+            let market_addr = evm::resolve_contract(&self.contracts, &market_key, ch);
+            let router = evm::resolve_contract(&self.contracts, "pendle_router", ch);
             println!(
                 "  PENDLE: chain={}, market={}, router={}",
-                info.chain,
-                evm::short_addr(&info.market_address),
+                ch,
+                market_addr
+                    .map(|a| evm::short_addr(&a))
+                    .unwrap_or("none".to_string()),
                 router
                     .map(|r| evm::short_addr(&r))
                     .unwrap_or("none".to_string()),
@@ -135,17 +131,19 @@ impl PendleYield {
             });
         }
 
-        let Some(info) = market_info else {
-            println!("  PENDLE: unknown market '{market_name}', treating as dry-run");
-            return Ok(ExecutionResult::PositionUpdate {
-                consumed: input_amount,
-                output: None,
-            });
+        let Some(ch) = chain else {
+            anyhow::bail!(
+                "Pendle market '{}' not in contracts manifest (key: {})",
+                market_name, market_key,
+            );
         };
 
-        let Some(router_addr) = evm::pendle_router(&info.chain) else {
-            anyhow::bail!("No Pendle router for chain {}", info.chain);
-        };
+        let sy_addr = evm::resolve_contract(&self.contracts, &sy_key, &ch)
+            .with_context(|| format!("'{}' not in contracts manifest for chain {}", sy_key, ch))?;
+        let yt_addr = evm::resolve_contract(&self.contracts, &yt_key, &ch)
+            .with_context(|| format!("'{}' not in contracts manifest for chain {}", yt_key, ch))?;
+        let router_addr = evm::resolve_contract(&self.contracts, "pendle_router", &ch)
+            .with_context(|| format!("'pendle_router' not in contracts manifest for chain {}", ch))?;
 
         let signer: alloy::signers::local::PrivateKeySigner = self
             .private_key
@@ -154,11 +152,11 @@ impl PendleYield {
         let wallet = alloy::network::EthereumWallet::from(signer);
         let provider = ProviderBuilder::new()
             .wallet(wallet)
-            .connect_http(info.chain.rpc_url().expect("Pendle chain requires RPC").parse()?);
+            .connect_http(ch.rpc_url().expect("Pendle chain requires RPC").parse()?);
 
         let amount_units = evm::to_token_units(input_amount, 1.0, 18);
 
-        let erc20 = IERC20::new(info.sy_address, &provider);
+        let erc20 = IERC20::new(sy_addr, &provider);
         erc20
             .approve(router_addr, amount_units)
             .send()
@@ -169,7 +167,7 @@ impl PendleYield {
 
         let router = IPendleRouter::new(router_addr, &provider);
         let result = router
-            .mintPyFromSy(self.wallet_address, info.yt_address, amount_units, U256::ZERO)
+            .mintPyFromSy(self.wallet_address, yt_addr, amount_units, U256::ZERO)
             .send()
             .await
             .context("mintPyFromSy")?;
@@ -291,5 +289,4 @@ impl Venue for PendleYield {
         }
         Ok(())
     }
-
 }

@@ -50,12 +50,13 @@ pub struct LiFiMovement {
     client: reqwest::Client,
     wallet_address: String,
     dry_run: bool,
+    tokens: evm::TokenManifest,
     slippage_bps: f64,
     metrics: SimMetrics,
 }
 
 impl LiFiMovement {
-    pub fn new(config: &RuntimeConfig) -> Result<Self> {
+    pub fn new(config: &RuntimeConfig, tokens: &evm::TokenManifest) -> Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .user_agent("defi-flow/0.1")
@@ -66,6 +67,7 @@ impl LiFiMovement {
             client,
             wallet_address: format!("{:?}", config.wallet_address),
             dry_run: config.dry_run,
+            tokens: tokens.clone(),
             slippage_bps: config.slippage_bps,
             metrics: SimMetrics::default(),
         })
@@ -82,10 +84,10 @@ impl LiFiMovement {
         let from_chain_id = from_chain.chain_id().expect("LiFi requires chain_id");
         let to_chain_id = to_chain.chain_id().expect("LiFi requires chain_id");
 
-        let from_addr = evm::token_address(from_chain, from_token)
+        let from_addr = evm::resolve_token(&self.tokens, from_chain, from_token)
             .map(|a| format!("{a:?}"))
             .unwrap_or_else(|| from_token.to_string());
-        let to_addr = evm::token_address(to_chain, to_token)
+        let to_addr = evm::resolve_token(&self.tokens, to_chain, to_token)
             .map(|a| format!("{a:?}"))
             .unwrap_or_else(|| to_token.to_string());
 

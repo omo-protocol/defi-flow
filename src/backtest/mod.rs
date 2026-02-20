@@ -186,16 +186,11 @@ async fn execute_backtest(
 /// Only sets the balance tracker — the wallet venue stays at zero.
 /// Deploy phase will transfer the balance through edges to downstream venues.
 async fn seed_wallet(engine: &mut Engine, capital: f64) {
-    let wallet_node = engine
-        .workflow
-        .nodes
-        .iter()
-        .find(|n| matches!(n, Node::Wallet { .. }))
-        .cloned();
-
-    if let Some(ref node) = wallet_node {
-        let id = node.id().to_string();
-        engine.balances.add(&id, "USDC", capital);
+    for node in &engine.workflow.nodes {
+        if let Node::Wallet { id, token, .. } = node {
+            engine.balances.add(id, token, capital);
+            return;
+        }
     }
 }
 

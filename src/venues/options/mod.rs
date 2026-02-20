@@ -44,7 +44,7 @@ impl VenueCategory for OptionsCategory {
                     };
                     Ok(Some(Box::new(simulator::OptionsSimulator::new(rows))))
                 }
-                BuildMode::Live { config } => {
+                BuildMode::Live { config, .. } => {
                     Ok(Some(Box::new(rysk::RyskOptions::new(config)?)))
                 }
             },

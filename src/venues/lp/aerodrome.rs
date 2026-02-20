@@ -78,6 +78,8 @@ pub struct AerodromeLp {
     wallet_address: Address,
     private_key: String,
     dry_run: bool,
+    tokens: evm::TokenManifest,
+    contracts: evm::ContractManifest,
     position_token_id: Option<U256>,
     gauge_address: Option<Address>,
     deposited_value: f64,
@@ -85,11 +87,17 @@ pub struct AerodromeLp {
 }
 
 impl AerodromeLp {
-    pub fn new(config: &RuntimeConfig) -> Result<Self> {
+    pub fn new(
+        config: &RuntimeConfig,
+        tokens: &evm::TokenManifest,
+        contracts: &evm::ContractManifest,
+    ) -> Result<Self> {
         Ok(AerodromeLp {
             wallet_address: config.wallet_address,
             private_key: config.private_key.clone(),
             dry_run: config.dry_run,
+            tokens: tokens.clone(),
+            contracts: contracts.clone(),
             position_token_id: None,
             gauge_address: None,
             deposited_value: 0.0,
@@ -97,16 +105,16 @@ impl AerodromeLp {
         })
     }
 
-    fn parse_pool_tokens(pool: &str) -> Result<(Address, Address)> {
+    fn parse_pool_tokens(&self, pool: &str) -> Result<(Address, Address)> {
         let parts: Vec<&str> = pool.split('/').collect();
         if parts.len() != 2 {
             anyhow::bail!("Invalid pool format '{}', expected 'TOKEN0/TOKEN1'", pool);
         }
         let chain = Chain::base();
-        let token0 = evm::token_address(&chain, parts[0])
-            .with_context(|| format!("Unknown token '{}' on Base", parts[0]))?;
-        let token1 = evm::token_address(&chain, parts[1])
-            .with_context(|| format!("Unknown token '{}' on Base", parts[1]))?;
+        let token0 = evm::resolve_token(&self.tokens, &chain, parts[0])
+            .with_context(|| format!("Token '{}' on base not in tokens manifest", parts[0]))?;
+        let token1 = evm::resolve_token(&self.tokens, &chain, parts[1])
+            .with_context(|| format!("Token '{}' on base not in tokens manifest", parts[1]))?;
         Ok((token0, token1))
     }
 
@@ -118,11 +126,16 @@ impl AerodromeLp {
         tick_spacing: Option<i32>,
         input_amount: f64,
     ) -> Result<ExecutionResult> {
-        let (token0, token1) = Self::parse_pool_tokens(pool)?;
+        let (token0, token1) = self.parse_pool_tokens(pool)?;
         let spacing = tick_spacing.unwrap_or(100) as i32;
         let lower = tick_lower.unwrap_or(-887220);
         let upper = tick_upper.unwrap_or(887220);
-        let position_manager = evm::aerodrome_position_manager();
+        let position_manager = evm::resolve_contract(
+            &self.contracts,
+            "aerodrome_position_manager",
+            &Chain::base(),
+        )
+        .context("aerodrome_position_manager not in contracts manifest and no hardcoded default")?;
 
         let half_amount = input_amount / 2.0;
         let amount0 = evm::to_token_units(half_amount, 1.0, 18);

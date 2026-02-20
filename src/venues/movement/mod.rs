@@ -68,8 +68,8 @@ impl VenueCategory for MovementCategory {
                         Ok(Some(Box::new(simulator::BridgeSimulator::new(10.0))))
                     }
                 },
-                BuildMode::Live { config } => {
-                    Ok(Some(Box::new(lifi::LiFiMovement::new(config)?)))
+                BuildMode::Live { config, tokens, .. } => {
+                    Ok(Some(Box::new(lifi::LiFiMovement::new(config, tokens)?)))
                 }
             },
             _ => Ok(None),

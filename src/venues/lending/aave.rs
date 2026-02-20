@@ -4,6 +4,7 @@ use alloy::sol;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
+use crate::model::chain::Chain;
 use crate::model::node::{LendingAction, Node};
 
 use crate::run::config::RuntimeConfig;
@@ -47,17 +48,25 @@ pub struct AaveLending {
     wallet_address: Address,
     private_key: String,
     dry_run: bool,
+    tokens: evm::TokenManifest,
+    contracts: evm::ContractManifest,
     supplied_value: f64,
     borrowed_value: f64,
     metrics: SimMetrics,
 }
 
 impl AaveLending {
-    pub fn new(config: &RuntimeConfig) -> Result<Self> {
+    pub fn new(
+        config: &RuntimeConfig,
+        tokens: &evm::TokenManifest,
+        contracts: &evm::ContractManifest,
+    ) -> Result<Self> {
         Ok(AaveLending {
             wallet_address: config.wallet_address,
             private_key: config.private_key.clone(),
             dry_run: config.dry_run,
+            tokens: tokens.clone(),
+            contracts: contracts.clone(),
             supplied_value: 0.0,
             borrowed_value: 0.0,
             metrics: SimMetrics::default(),
@@ -238,20 +247,20 @@ impl AaveLending {
     async fn execute_claim_rewards(
         &mut self,
         rewards_controller: Option<&str>,
+        chain: &Chain,
         rpc_url: &str,
         token_addr: Address,
     ) -> Result<ExecutionResult> {
-        let rewards_addr_str = match rewards_controller {
-            Some(addr) => addr,
+        let rc_name = match rewards_controller {
+            Some(name) => name,
             None => {
-                println!("  LENDING: no rewards_controller address, skipping claim");
+                println!("  LENDING: no rewards_controller configured, skipping claim");
                 return Ok(ExecutionResult::Noop);
             }
         };
 
-        let rewards_addr: Address = rewards_addr_str
-            .parse()
-            .with_context(|| format!("invalid rewards_controller address: {rewards_addr_str}"))?;
+        let rewards_addr = evm::resolve_contract(&self.contracts, rc_name, chain)
+            .with_context(|| format!("Contract '{}' on {} not in contracts manifest", rc_name, chain))?;
 
         println!(
             "  LENDING CLAIM: rewards from {}",
@@ -291,11 +300,10 @@ impl Venue for AaveLending {
                 let rpc_url = chain
                     .rpc_url()
                     .context("lending chain requires RPC URL")?;
-                let pool_addr: Address = pool_address
-                    .parse()
-                    .with_context(|| format!("invalid pool_address: {pool_address}"))?;
-                let token_addr = evm::token_address(chain, asset)
-                    .with_context(|| format!("Unknown token '{asset}' on {chain}"))?;
+                let pool_addr = evm::resolve_contract(&self.contracts, pool_address, chain)
+                    .with_context(|| format!("Contract '{}' on {} not in contracts manifest", pool_address, chain))?;
+                let token_addr = evm::resolve_token(&self.tokens, chain, asset)
+                    .with_context(|| format!("Token '{asset}' on {chain} not in tokens manifest"))?;
 
                 match action {
                     LendingAction::Supply => {
@@ -311,7 +319,7 @@ impl Venue for AaveLending {
                         self.execute_repay(pool_addr, rpc_url, token_addr, asset, input_amount).await
                     }
                     LendingAction::ClaimRewards => {
-                        self.execute_claim_rewards(rewards_controller.as_deref(), rpc_url, token_addr).await
+                        self.execute_claim_rewards(rewards_controller.as_deref(), chain, rpc_url, token_addr).await
                     }
                 }
             }

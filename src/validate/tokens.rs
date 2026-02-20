@@ -15,6 +15,9 @@ pub fn check_token_compatibility(workflow: &Workflow) -> Vec<ValidationError> {
     // Unified edge flow validation (token + chain)
     errors.extend(check_edge_flows(workflow));
 
+    // Token manifest validation (when manifest is present)
+    errors.extend(check_token_manifest(workflow));
+
     // Optimizer-specific constraints
     errors.extend(check_optimizer_nodes(workflow));
 
@@ -189,6 +192,97 @@ fn build_flow_suggestion(
         }
         (true, true) => unreachable!(),
     }
+}
+
+// ── Token manifest validation ──────────────────────────────────────
+
+/// When a `tokens` manifest is present, verify that every token used in
+/// edges and wallet nodes has a contract address for the relevant chain.
+fn check_token_manifest(workflow: &Workflow) -> Vec<ValidationError> {
+    let manifest = match &workflow.tokens {
+        Some(m) => m,
+        None => return Vec::new(),
+    };
+
+    let node_map: HashMap<&str, &Node> = workflow.nodes.iter().map(|n| (n.id(), n)).collect();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut errors = Vec::new();
+
+    let mut check = |token: &str, chain: &str| {
+        let key = (token.to_string(), chain.to_lowercase());
+        if seen.contains(&key) {
+            return;
+        }
+        seen.insert(key);
+
+        let missing = match manifest.get(token) {
+            Some(chains) => !chains.keys().any(|c| c.eq_ignore_ascii_case(chain)),
+            None => true,
+        };
+        if missing {
+            errors.push(ValidationError::TokenNotInManifest {
+                token: token.to_string(),
+                chain: chain.to_string(),
+            });
+        }
+    };
+
+    // Check all node tokens
+    for node in &workflow.nodes {
+        match node {
+            Node::Wallet { token, chain, .. } => {
+                check(token, &chain.name);
+            }
+            Node::Movement {
+                from_token,
+                to_token,
+                from_chain,
+                to_chain,
+                ..
+            } => {
+                if let Some(fc) = from_chain {
+                    check(from_token, &fc.name);
+                }
+                if let Some(tc) = to_chain {
+                    check(to_token, &tc.name);
+                }
+            }
+            Node::Lending { asset, chain, .. } => {
+                check(asset, &chain.name);
+            }
+            Node::Vault { asset, chain, .. } => {
+                check(asset, &chain.name);
+            }
+            Node::Perp { margin_token, .. } => {
+                if let Some(mt) = margin_token {
+                    check(mt, "hyperevm");
+                }
+            }
+            Node::Lp { pool, .. } => {
+                // Parse "TOKEN0/TOKEN1" pool format
+                for part in pool.split('/') {
+                    check(part.trim(), "base");
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Check edge tokens against the chain of the source/dest node
+    for edge in &workflow.edges {
+        if let Some(from_node) = node_map.get(edge.from_node.as_str()) {
+            if let Some(chain) = from_node.chain() {
+                check(&edge.token, &chain.name);
+            }
+        }
+        if let Some(to_node) = node_map.get(edge.to_node.as_str()) {
+            if let Some(chain) = to_node.input_chain() {
+                check(&edge.token, &chain.name);
+            }
+        }
+    }
+
+    errors
 }
 
 // ── Movement checks ────────────────────────────────────────────────
