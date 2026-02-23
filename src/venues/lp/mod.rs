@@ -9,6 +9,7 @@ use anyhow::Result;
 
 use crate::data as crate_data;
 use crate::fetch_data::types::{FetchConfig, FetchJob, FetchResult};
+use crate::model::chain::Chain;
 use crate::model::node::Node;
 
 use super::{BuildMode, Venue, VenueCategory};
@@ -45,7 +46,8 @@ impl VenueCategory for LpCategory {
                     Ok(Some(Box::new(simulator::LpSimulator::new(rows))))
                 }
                 BuildMode::Live { config, tokens, contracts } => {
-                    Ok(Some(Box::new(aerodrome::AerodromeLp::new(config, tokens, contracts)?)))
+                    let chain = node.chain().unwrap_or_else(Chain::base);
+                    Ok(Some(Box::new(aerodrome::AerodromeLp::new(config, tokens, contracts, chain)?)))
                 }
             },
             _ => Ok(None),

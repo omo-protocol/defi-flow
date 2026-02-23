@@ -1,0 +1,443 @@
+use std::collections::HashMap;
+use std::time::Duration;
+
+use alloy::primitives::Address;
+use alloy::providers::{Provider, ProviderBuilder};
+use alloy::sol;
+
+use crate::model::chain::Chain;
+use crate::model::node::{LpVenue, Node};
+use crate::model::Workflow;
+
+use super::ValidationError;
+
+// ── Minimal ABI interfaces for validation probes ─────────────────────
+
+sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    contract IERC20Probe {
+        function decimals() external view returns (uint8);
+    }
+
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    contract IVaultProbe {
+        function asset() external view returns (address);
+    }
+
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    contract IAavePoolProbe {
+        function getReserveData(address asset) external view returns (
+            uint256, uint128, uint128, uint128, uint128, uint128,
+            uint40, uint16, address, address, address, address,
+            uint128, uint128, uint128
+        );
+    }
+
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    contract INftManagerProbe {
+        function factory() external view returns (address);
+    }
+}
+
+// ── Types ────────────────────────────────────────────────────────────
+
+/// What kind of contract we expect at this address.
+#[derive(Debug, Clone)]
+enum ContractRole {
+    /// ERC20 token — should respond to decimals()
+    Token,
+    /// ERC4626 vault — should respond to asset()
+    Vault,
+    /// Aave V3 pool — should respond to getReserveData(token)
+    LendingPool {
+        /// Token address to probe getReserveData with (resolved from token manifest)
+        token_address: Option<Address>,
+    },
+    /// Rewards controller — just check code exists (no standard probe)
+    RewardsController,
+    /// NFT position manager — should respond to factory()
+    NftPositionManager,
+    /// Unknown contract — just check code exists
+    Unknown,
+}
+
+#[derive(Debug)]
+struct AddressCheck {
+    label: String,
+    role: ContractRole,
+    address_str: String,
+}
+
+// ── Public entry point ───────────────────────────────────────────────
+
+/// Run on-chain validation: check RPC connectivity, chain IDs,
+/// deployed code, and correct interfaces at all manifest addresses.
+pub async fn validate_onchain(workflow: &Workflow) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+
+    let chain_map = collect_chains(workflow);
+    let contract_roles = infer_contract_roles(workflow);
+    let address_groups = group_addresses(workflow, &contract_roles);
+
+    for (chain_name, checks) in &address_groups {
+        // Resolve chain with RPC URL
+        let chain = chain_map
+            .get(&chain_name.to_lowercase())
+            .filter(|c| c.rpc_url().is_some())
+            .cloned()
+            .unwrap_or_else(|| Chain::from_name(chain_name));
+
+        let rpc_url = match chain.rpc_url() {
+            Some(url) => url.to_string(),
+            None => continue,
+        };
+
+        // Check RPC connectivity
+        let provider = match check_rpc(&chain, &rpc_url).await {
+            Ok(p) => p,
+            Err(e) => {
+                errors.push(e);
+                continue;
+            }
+        };
+
+        // Check chain ID
+        if let Some(expected) = chain.chain_id() {
+            match tokio::time::timeout(
+                Duration::from_secs(10),
+                provider.get_chain_id(),
+            )
+            .await
+            {
+                Ok(Ok(actual)) if actual != expected => {
+                    errors.push(ValidationError::ChainIdMismatch {
+                        chain: chain_name.clone(),
+                        expected,
+                        actual,
+                    });
+                    continue;
+                }
+                Ok(Err(_)) | Err(_) => {}
+                _ => {}
+            }
+        }
+
+        // Check code + interface for all addresses on this chain
+        errors.extend(check_addresses(&provider, chain_name, checks).await);
+    }
+
+    errors
+}
+
+// ── Chain collection ─────────────────────────────────────────────────
+
+fn collect_chains(workflow: &Workflow) -> HashMap<String, Chain> {
+    let mut chains: HashMap<String, Chain> = HashMap::new();
+    for node in &workflow.nodes {
+        if let Some(chain) = node.chain() {
+            chains.entry(chain.name.to_lowercase()).or_insert(chain);
+        }
+    }
+    chains
+}
+
+// ── Contract role inference ──────────────────────────────────────────
+
+/// Walk workflow nodes to determine what role each contract manifest key plays.
+/// Returns a map of (contract_key, chain_name) → ContractRole.
+fn infer_contract_roles(workflow: &Workflow) -> HashMap<(String, String), ContractRole> {
+    let mut roles: HashMap<(String, String), ContractRole> = HashMap::new();
+
+    // Pre-resolve token addresses from manifest for lending pool probes
+    let token_manifest = workflow.tokens.clone().unwrap_or_default();
+
+    for node in &workflow.nodes {
+        match node {
+            Node::Lending {
+                chain,
+                pool_address,
+                rewards_controller,
+                asset,
+                ..
+            } => {
+                // Resolve the token address for this asset on this chain
+                let token_addr = token_manifest
+                    .get(asset.as_str())
+                    .and_then(|chains| {
+                        chains
+                            .iter()
+                            .find(|(c, _)| c.eq_ignore_ascii_case(&chain.name))
+                            .and_then(|(_, addr)| addr.parse::<Address>().ok())
+                    });
+
+                roles.insert(
+                    (pool_address.clone(), chain.name.to_lowercase()),
+                    ContractRole::LendingPool {
+                        token_address: token_addr,
+                    },
+                );
+                if let Some(rc) = rewards_controller {
+                    roles.insert(
+                        (rc.clone(), chain.name.to_lowercase()),
+                        ContractRole::RewardsController,
+                    );
+                }
+            }
+            Node::Vault {
+                chain,
+                vault_address,
+                ..
+            } => {
+                roles.insert(
+                    (vault_address.clone(), chain.name.to_lowercase()),
+                    ContractRole::Vault,
+                );
+            }
+            Node::Lp {
+                venue: LpVenue::Aerodrome,
+                ..
+            } => {
+                roles.insert(
+                    ("aerodrome_position_manager".to_string(), "base".to_string()),
+                    ContractRole::NftPositionManager,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    roles
+}
+
+// ── Address grouping ─────────────────────────────────────────────────
+
+/// Group all manifest addresses by chain, annotated with their expected role.
+fn group_addresses(
+    workflow: &Workflow,
+    contract_roles: &HashMap<(String, String), ContractRole>,
+) -> HashMap<String, Vec<AddressCheck>> {
+    let mut groups: HashMap<String, Vec<AddressCheck>> = HashMap::new();
+
+    // Token manifest
+    if let Some(ref tokens) = workflow.tokens {
+        for (symbol, chain_map) in tokens {
+            for (chain_name, address_str) in chain_map {
+                groups
+                    .entry(chain_name.clone())
+                    .or_default()
+                    .push(AddressCheck {
+                        label: symbol.clone(),
+                        role: ContractRole::Token,
+                        address_str: address_str.clone(),
+                    });
+            }
+        }
+    }
+
+    // Contract manifest
+    if let Some(ref contracts) = workflow.contracts {
+        for (name, chain_map) in contracts {
+            for (chain_name, address_str) in chain_map {
+                let role = contract_roles
+                    .get(&(name.clone(), chain_name.to_lowercase()))
+                    .cloned()
+                    .unwrap_or(ContractRole::Unknown);
+
+                groups
+                    .entry(chain_name.clone())
+                    .or_default()
+                    .push(AddressCheck {
+                        label: name.clone(),
+                        role,
+                        address_str: address_str.clone(),
+                    });
+            }
+        }
+    }
+
+    groups
+}
+
+// ── RPC check ────────────────────────────────────────────────────────
+
+async fn check_rpc(
+    chain: &Chain,
+    rpc_url: &str,
+) -> Result<impl Provider, ValidationError> {
+    let provider = ProviderBuilder::new().connect_http(
+        rpc_url.parse().map_err(|e| ValidationError::RpcUnreachable {
+            chain: chain.name.clone(),
+            url: rpc_url.to_string(),
+            reason: format!("{e}"),
+        })?,
+    );
+
+    match tokio::time::timeout(Duration::from_secs(10), provider.get_block_number()).await {
+        Ok(Ok(_)) => Ok(provider),
+        Ok(Err(e)) => Err(ValidationError::RpcUnreachable {
+            chain: chain.name.clone(),
+            url: rpc_url.to_string(),
+            reason: e.to_string(),
+        }),
+        Err(_) => Err(ValidationError::RpcUnreachable {
+            chain: chain.name.clone(),
+            url: rpc_url.to_string(),
+            reason: "timeout (10s)".to_string(),
+        }),
+    }
+}
+
+// ── Address + interface checks ───────────────────────────────────────
+
+async fn check_addresses(
+    provider: &impl Provider,
+    chain_name: &str,
+    checks: &[AddressCheck],
+) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+
+    for check in checks {
+        let address: Address = match check.address_str.parse() {
+            Ok(a) => a,
+            Err(_) => {
+                errors.push(match check.role {
+                    ContractRole::Token => ValidationError::TokenNoCode {
+                        token: check.label.clone(),
+                        chain: chain_name.to_string(),
+                        address: format!("{} (invalid hex)", check.address_str),
+                    },
+                    _ => ValidationError::ContractNoCode {
+                        contract: check.label.clone(),
+                        chain: chain_name.to_string(),
+                        address: format!("{} (invalid hex)", check.address_str),
+                    },
+                });
+                continue;
+            }
+        };
+
+        // 1. Check code exists
+        let has_code = match tokio::time::timeout(
+            Duration::from_secs(10),
+            provider.get_code_at(address),
+        )
+        .await
+        {
+            Ok(Ok(code)) => {
+                if code.is_empty() {
+                    errors.push(match check.role {
+                        ContractRole::Token => ValidationError::TokenNoCode {
+                            token: check.label.clone(),
+                            chain: chain_name.to_string(),
+                            address: format!("{address}"),
+                        },
+                        _ => ValidationError::ContractNoCode {
+                            contract: check.label.clone(),
+                            chain: chain_name.to_string(),
+                            address: format!("{address}"),
+                        },
+                    });
+                    false
+                } else {
+                    true
+                }
+            }
+            _ => {
+                // RPC error / timeout — skip interface check
+                continue;
+            }
+        };
+
+        if !has_code {
+            continue;
+        }
+
+        // 2. Interface probe — verify the contract is the right kind
+        if let Some(err) = probe_interface(provider, chain_name, address, check).await {
+            errors.push(err);
+        }
+    }
+
+    errors
+}
+
+/// Call a role-specific function to verify the contract implements the expected interface.
+async fn probe_interface(
+    provider: &impl Provider,
+    chain_name: &str,
+    address: Address,
+    check: &AddressCheck,
+) -> Option<ValidationError> {
+    let timeout = Duration::from_secs(10);
+
+    match &check.role {
+        ContractRole::Token => {
+            // ERC20 must respond to decimals()
+            let contract = IERC20Probe::new(address, provider);
+            match tokio::time::timeout(timeout, contract.decimals().call()).await {
+                Ok(Ok(_)) => None,
+                _ => Some(ValidationError::WrongInterface {
+                    contract: check.label.clone(),
+                    chain: chain_name.to_string(),
+                    address: format!("{address}"),
+                    expected: "ERC20 — decimals() call failed".to_string(),
+                }),
+            }
+        }
+        ContractRole::Vault => {
+            // ERC4626 vault must respond to asset()
+            let contract = IVaultProbe::new(address, provider);
+            match tokio::time::timeout(timeout, contract.asset().call()).await {
+                Ok(Ok(_)) => None,
+                _ => Some(ValidationError::WrongInterface {
+                    contract: check.label.clone(),
+                    chain: chain_name.to_string(),
+                    address: format!("{address}"),
+                    expected: "ERC4626 vault — asset() call failed".to_string(),
+                }),
+            }
+        }
+        ContractRole::LendingPool { token_address } => {
+            // Aave V3 pool must respond to getReserveData(token)
+            if let Some(token) = token_address {
+                let contract = IAavePoolProbe::new(address, provider);
+                match tokio::time::timeout(
+                    timeout,
+                    contract.getReserveData(*token).call(),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => None,
+                    _ => Some(ValidationError::WrongInterface {
+                        contract: check.label.clone(),
+                        chain: chain_name.to_string(),
+                        address: format!("{address}"),
+                        expected: "Aave V3 pool — getReserveData() call failed".to_string(),
+                    }),
+                }
+            } else {
+                None // Can't probe without a token address
+            }
+        }
+        ContractRole::NftPositionManager => {
+            // Aerodrome position manager must respond to factory()
+            let contract = INftManagerProbe::new(address, provider);
+            match tokio::time::timeout(timeout, contract.factory().call()).await {
+                Ok(Ok(_)) => None,
+                _ => Some(ValidationError::WrongInterface {
+                    contract: check.label.clone(),
+                    chain: chain_name.to_string(),
+                    address: format!("{address}"),
+                    expected: "NFT Position Manager — factory() call failed".to_string(),
+                }),
+            }
+        }
+        ContractRole::RewardsController | ContractRole::Unknown => {
+            None // Code check is sufficient
+        }
+    }
+}

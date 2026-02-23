@@ -1,5 +1,6 @@
 mod contracts;
 mod graph;
+pub mod onchain;
 mod references;
 mod tokens;
 
@@ -69,6 +70,44 @@ pub enum ValidationError {
         chain: String,
         node_id: String,
     },
+
+    // ── On-chain validation errors ──────────────────────────────────
+
+    #[error("RPC unreachable for chain `{chain}` at {url}: {reason}")]
+    RpcUnreachable {
+        chain: String,
+        url: String,
+        reason: String,
+    },
+
+    #[error("Chain ID mismatch for `{chain}`: expected {expected}, RPC returned {actual}")]
+    ChainIdMismatch {
+        chain: String,
+        expected: u64,
+        actual: u64,
+    },
+
+    #[error("Contract `{contract}` on {chain} at {address} has no deployed code")]
+    ContractNoCode {
+        contract: String,
+        chain: String,
+        address: String,
+    },
+
+    #[error("Token `{token}` on {chain} at {address} has no deployed code")]
+    TokenNoCode {
+        token: String,
+        chain: String,
+        address: String,
+    },
+
+    #[error("Contract `{contract}` on {chain} at {address} does not implement expected interface ({expected})")]
+    WrongInterface {
+        contract: String,
+        chain: String,
+        address: String,
+        expected: String,
+    },
 }
 
 /// Load and fully validate a workflow from a JSON file.
@@ -99,15 +138,15 @@ pub fn validate(workflow: &Workflow) -> Result<(), Vec<ValidationError>> {
 
 /// CLI entry point for the `validate` subcommand.
 pub fn run(path: &Path) -> anyhow::Result<()> {
-    match load_and_validate(path) {
+    let wf = match load_and_validate(path) {
         Ok(wf) => {
             println!(
-                "Workflow '{}' is valid. {} nodes, {} edges.",
+                "Workflow '{}' is valid (offline). {} nodes, {} edges.",
                 wf.name,
                 wf.nodes.len(),
                 wf.edges.len()
             );
-            Ok(())
+            wf
         }
         Err(errors) => {
             eprintln!("Validation failed with {} error(s):", errors.len());
@@ -116,5 +155,32 @@ pub fn run(path: &Path) -> anyhow::Result<()> {
             }
             std::process::exit(1);
         }
+    };
+
+    // On-chain validation: check RPC connectivity, chain IDs, deployed code
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let rt = tokio::runtime::Runtime::new()?;
+    let errors = rt.block_on(onchain::validate_onchain(&wf));
+
+    let (warnings, hard): (Vec<_>, Vec<_>) = errors
+        .into_iter()
+        .partition(|e| matches!(e, ValidationError::RpcUnreachable { .. }));
+
+    for w in &warnings {
+        eprintln!("  warning: {}", w);
+    }
+
+    if hard.is_empty() {
+        println!("On-chain validation passed.");
+        Ok(())
+    } else {
+        eprintln!(
+            "On-chain validation failed with {} error(s):",
+            hard.len()
+        );
+        for (i, e) in hard.iter().enumerate() {
+            eprintln!("  {}. {}", i + 1, e);
+        }
+        std::process::exit(1);
     }
 }

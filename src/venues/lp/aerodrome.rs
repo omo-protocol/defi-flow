@@ -78,6 +78,7 @@ pub struct AerodromeLp {
     wallet_address: Address,
     private_key: String,
     dry_run: bool,
+    chain: Chain,
     tokens: evm::TokenManifest,
     contracts: evm::ContractManifest,
     position_token_id: Option<U256>,
@@ -91,11 +92,13 @@ impl AerodromeLp {
         config: &RuntimeConfig,
         tokens: &evm::TokenManifest,
         contracts: &evm::ContractManifest,
+        chain: Chain,
     ) -> Result<Self> {
         Ok(AerodromeLp {
             wallet_address: config.wallet_address,
             private_key: config.private_key.clone(),
             dry_run: config.dry_run,
+            chain,
             tokens: tokens.clone(),
             contracts: contracts.clone(),
             position_token_id: None,
@@ -110,11 +113,10 @@ impl AerodromeLp {
         if parts.len() != 2 {
             anyhow::bail!("Invalid pool format '{}', expected 'TOKEN0/TOKEN1'", pool);
         }
-        let chain = Chain::base();
-        let token0 = evm::resolve_token(&self.tokens, &chain, parts[0])
-            .with_context(|| format!("Token '{}' on base not in tokens manifest", parts[0]))?;
-        let token1 = evm::resolve_token(&self.tokens, &chain, parts[1])
-            .with_context(|| format!("Token '{}' on base not in tokens manifest", parts[1]))?;
+        let token0 = evm::resolve_token(&self.tokens, &self.chain, parts[0])
+            .with_context(|| format!("Token '{}' on {} not in tokens manifest", parts[0], self.chain))?;
+        let token1 = evm::resolve_token(&self.tokens, &self.chain, parts[1])
+            .with_context(|| format!("Token '{}' on {} not in tokens manifest", parts[1], self.chain))?;
         Ok((token0, token1))
     }
 
@@ -128,18 +130,24 @@ impl AerodromeLp {
     ) -> Result<ExecutionResult> {
         let (token0, token1) = self.parse_pool_tokens(pool)?;
         let spacing = tick_spacing.unwrap_or(100) as i32;
-        let lower = tick_lower.unwrap_or(-887220);
-        let upper = tick_upper.unwrap_or(887220);
+        // Align full-range ticks to tick spacing
+        let max_tick = (887272 / spacing) * spacing;
+        let lower = tick_lower.unwrap_or(-max_tick);
+        let upper = tick_upper.unwrap_or(max_tick);
         let position_manager = evm::resolve_contract(
             &self.contracts,
             "aerodrome_position_manager",
-            &Chain::base(),
+            &self.chain,
         )
         .context("aerodrome_position_manager not in contracts manifest and no hardcoded default")?;
 
+        let parts: Vec<&str> = pool.split('/').collect();
+        let decimals0 = token_decimals_for(parts.get(0).unwrap_or(&"ETH"));
+        let decimals1 = token_decimals_for(parts.get(1).unwrap_or(&"ETH"));
+
         let half_amount = input_amount / 2.0;
-        let amount0 = evm::to_token_units(half_amount, 1.0, 18);
-        let amount1 = evm::to_token_units(half_amount, 1.0, 18);
+        let amount0 = evm::to_token_units(half_amount, 1.0, decimals0);
+        let amount1 = evm::to_token_units(half_amount, 1.0, decimals1);
 
         println!(
             "  AERO ADD_LIQUIDITY: {} ticks=[{},{}] spacing={} ${:.2}",
@@ -153,6 +161,23 @@ impl AerodromeLp {
         );
 
         if self.dry_run {
+            // ── Preflight reads: verify both tokens are valid ERC20s ──
+            let rpc = self.chain.rpc_url()
+                .context("LP chain requires RPC URL for preflight")?;
+            let rp = evm::read_provider(rpc)?;
+            let erc20_0 = IERC20::new(token0, &rp);
+            let erc20_1 = IERC20::new(token1, &rp);
+            erc20_0.balanceOf(self.wallet_address).call().await
+                .with_context(|| format!(
+                    "Token {} at {} is not a valid ERC20",
+                    parts[0], evm::short_addr(&token0),
+                ))?;
+            erc20_1.balanceOf(self.wallet_address).call().await
+                .with_context(|| format!(
+                    "Token {} at {} is not a valid ERC20",
+                    parts[1], evm::short_addr(&token1),
+                ))?;
+            println!("  AERO: preflight OK — both tokens are valid ERC20s");
             println!("  AERO: [DRY RUN] would approve tokens + mint position");
             self.deposited_value += input_amount;
             return Ok(ExecutionResult::PositionUpdate {
@@ -161,6 +186,8 @@ impl AerodromeLp {
             });
         }
 
+        let rpc_url = self.chain.rpc_url()
+            .context("LP chain requires RPC URL")?;
         let signer: alloy::signers::local::PrivateKeySigner = self
             .private_key
             .parse()
@@ -168,25 +195,27 @@ impl AerodromeLp {
         let wallet = alloy::network::EthereumWallet::from(signer);
         let provider = ProviderBuilder::new()
             .wallet(wallet)
-            .connect_http(Chain::base().rpc_url().unwrap().parse()?);
+            .connect_http(rpc_url.parse()?);
 
         let erc20_0 = IERC20::new(token0, &provider);
-        erc20_0
+        let receipt = erc20_0
             .approve(position_manager, amount0)
             .send()
             .await
             .context("approve token0")?
             .get_receipt()
             .await?;
+        require_success(&receipt, "approve-token0")?;
 
         let erc20_1 = IERC20::new(token1, &provider);
-        erc20_1
+        let receipt = erc20_1
             .approve(position_manager, amount1)
             .send()
             .await
             .context("approve token1")?
             .get_receipt()
             .await?;
+        require_success(&receipt, "approve-token1")?;
 
         let deadline = U256::from(chrono::Utc::now().timestamp() as u64 + 300);
         let pm = INonfungiblePositionManager::new(position_manager, &provider);
@@ -205,8 +234,9 @@ impl AerodromeLp {
             sqrtPriceX96: Uint::<160, 3>::ZERO,
         };
 
-        let result = pm.mint(params).send().await.context("mint LP position")?;
+        let result = pm.mint(params).gas(1_000_000).send().await.context("mint LP position")?;
         let receipt = result.get_receipt().await.context("mint receipt")?;
+        require_success(&receipt, "mint-lp")?;
         println!("  AERO: mint tx: {:?}", receipt.transaction_hash);
 
         self.deposited_value += input_amount;
@@ -259,6 +289,8 @@ impl AerodromeLp {
         }
 
         if let Some(gauge) = self.gauge_address {
+            let rpc_url = self.chain.rpc_url()
+                .context("LP chain requires RPC URL")?;
             let signer: alloy::signers::local::PrivateKeySigner = self
                 .private_key
                 .parse()
@@ -266,7 +298,7 @@ impl AerodromeLp {
             let wallet = alloy::network::EthereumWallet::from(signer);
             let provider = ProviderBuilder::new()
                 .wallet(wallet)
-                .connect_http(Chain::base().rpc_url().unwrap().parse()?);
+                .connect_http(rpc_url.parse()?);
 
             let gauge_contract = IGauge::new(gauge, &provider);
             let result = gauge_contract
@@ -356,5 +388,25 @@ impl Venue for AerodromeLp {
             lp_fees: self.metrics.lp_fees,
             ..SimMetrics::default()
         }
+    }
+}
+
+fn require_success(receipt: &alloy::rpc::types::TransactionReceipt, label: &str) -> anyhow::Result<()> {
+    if !receipt.status() {
+        anyhow::bail!(
+            "{} tx reverted (hash: {:?}, gas_used: {:?})",
+            label,
+            receipt.transaction_hash,
+            receipt.gas_used,
+        );
+    }
+    Ok(())
+}
+
+fn token_decimals_for(symbol: &str) -> u8 {
+    match symbol.to_uppercase().as_str() {
+        "USDC" | "USDT" => 6,
+        "WBTC" | "CBBTC" => 8,
+        _ => 18,
     }
 }

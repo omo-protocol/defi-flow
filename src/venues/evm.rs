@@ -65,3 +65,10 @@ pub fn resolve_contract(manifest: &ContractManifest, name: &str, chain: &Chain) 
         .find(|(c, _)| c.eq_ignore_ascii_case(&chain.name))
         .and_then(|(_, addr_str)| addr_str.parse::<Address>().ok())
 }
+
+/// Create a read-only provider (no wallet/signer) for on-chain queries.
+pub fn read_provider(
+    rpc_url: &str,
+) -> anyhow::Result<impl alloy::providers::Provider + Clone> {
+    Ok(alloy::providers::ProviderBuilder::new().connect_http(rpc_url.parse()?))
+}

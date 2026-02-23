@@ -81,6 +81,21 @@ impl MorphoVault {
         );
 
         if self.dry_run {
+            // ── Preflight reads: verify vault asset matches expected token ──
+            let rp = evm::read_provider(rpc_url)?;
+            let vault = IMorphoVault::new(vault_addr, &rp);
+            let underlying = vault.asset().call().await
+                .context("vault.asset() call failed — not a valid ERC4626 vault")?;
+            if underlying != token_addr {
+                anyhow::bail!(
+                    "Vault asset mismatch: vault {} has underlying {} but expected {} ({})",
+                    evm::short_addr(&vault_addr),
+                    evm::short_addr(&underlying),
+                    asset_symbol,
+                    evm::short_addr(&token_addr),
+                );
+            }
+            println!("  VAULT: preflight OK — vault asset matches {}", asset_symbol);
             println!("  VAULT: [DRY RUN] would approve {} + deposit to vault", asset_symbol);
             self.deposited_value += input_amount;
             return Ok(ExecutionResult::PositionUpdate {
@@ -96,13 +111,15 @@ impl MorphoVault {
         let approve_tx = erc20.approve(vault_addr, amount_units);
         let pending = approve_tx.send().await.context("ERC20 approve failed")?;
         let receipt = pending.get_receipt().await.context("approve receipt")?;
+        require_success(&receipt, "vault-approve")?;
         println!("  VAULT: approve tx: {:?}", receipt.transaction_hash);
 
         // Deposit into vault (ERC4626)
         let vault = IMorphoVault::new(vault_addr, &provider);
-        let deposit_tx = vault.deposit(amount_units, self.wallet_address);
+        let deposit_tx = vault.deposit(amount_units, self.wallet_address).gas(500_000);
         let pending = deposit_tx.send().await.context("vault deposit failed")?;
         let receipt = pending.get_receipt().await.context("deposit receipt")?;
+        require_success(&receipt, "vault-deposit")?;
         println!("  VAULT: deposit tx: {:?}", receipt.transaction_hash);
 
         self.deposited_value += input_amount;
@@ -128,6 +145,12 @@ impl MorphoVault {
         );
 
         if self.dry_run {
+            // ── Preflight reads: verify vault is valid ERC4626 ──
+            let rp = evm::read_provider(rpc_url)?;
+            let vault = IMorphoVault::new(vault_addr, &rp);
+            vault.asset().call().await
+                .context("vault.asset() call failed — not a valid ERC4626 vault")?;
+            println!("  VAULT: preflight OK — vault responds to ERC4626 interface");
             println!("  VAULT: [DRY RUN] would withdraw from vault");
             self.deposited_value = (self.deposited_value - input_amount).max(0.0);
             return Ok(ExecutionResult::TokenOutput {
@@ -139,9 +162,12 @@ impl MorphoVault {
         let provider = make_provider(&self.private_key, rpc_url)?;
 
         let vault = IMorphoVault::new(vault_addr, &provider);
-        let withdraw_tx = vault.withdraw(amount_units, self.wallet_address, self.wallet_address);
+        let withdraw_tx = vault
+            .withdraw(amount_units, self.wallet_address, self.wallet_address)
+            .gas(500_000);
         let pending = withdraw_tx.send().await.context("vault withdraw failed")?;
         let receipt = pending.get_receipt().await.context("withdraw receipt")?;
+        require_success(&receipt, "vault-withdraw")?;
         println!("  VAULT: withdraw tx: {:?}", receipt.transaction_hash);
 
         self.deposited_value = (self.deposited_value - input_amount).max(0.0);
@@ -226,6 +252,18 @@ fn make_provider(
     Ok(ProviderBuilder::new()
         .wallet(wallet)
         .connect_http(rpc_url.parse()?))
+}
+
+fn require_success(receipt: &alloy::rpc::types::TransactionReceipt, label: &str) -> Result<()> {
+    if !receipt.status() {
+        anyhow::bail!(
+            "{} tx reverted (hash: {:?}, gas_used: {:?})",
+            label,
+            receipt.transaction_hash,
+            receipt.gas_used,
+        );
+    }
+    Ok(())
 }
 
 fn token_decimals_for(symbol: &str) -> u8 {

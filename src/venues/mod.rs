@@ -23,6 +23,7 @@ use crate::run::config::RuntimeConfig;
 // ── Execution result ────────────────────────────────────────────────
 
 /// Result of executing a node action.
+#[derive(Debug)]
 pub enum ExecutionResult {
     /// Produced tokens (swap output, claimed rewards, withdrawal, etc.)
     TokenOutput { token: String, amount: f64 },

@@ -42,6 +42,18 @@ sol! {
     }
 }
 
+sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    contract IAavePoolRead {
+        function getReserveData(address asset) external view returns (
+            uint256, uint128, uint128, uint128, uint128, uint128,
+            uint40, uint16, address, address, address, address,
+            uint128, uint128, uint128
+        );
+    }
+}
+
 // ── Aave Lending ──────────────────────────────────────────────────
 
 pub struct AaveLending {
@@ -90,6 +102,15 @@ impl AaveLending {
         );
 
         if self.dry_run {
+            // ── Preflight reads: verify pool supports this asset ──
+            let rp = evm::read_provider(rpc_url)?;
+            let pool_read = IAavePoolRead::new(pool_addr, &rp);
+            pool_read.getReserveData(token_addr).call().await
+                .with_context(|| format!(
+                    "Aave pool {} does not support {} — getReserveData reverted",
+                    evm::short_addr(&pool_addr), asset_symbol,
+                ))?;
+            println!("  LENDING: preflight OK — pool supports {}", asset_symbol);
             println!("  LENDING: [DRY RUN] would approve {} + supply to pool", asset_symbol);
             self.supplied_value += input_amount;
             return Ok(ExecutionResult::PositionUpdate {
@@ -104,12 +125,14 @@ impl AaveLending {
         let approve_tx = erc20.approve(pool_addr, amount_units);
         let pending = approve_tx.send().await.context("ERC20 approve failed")?;
         let receipt = pending.get_receipt().await.context("approve receipt")?;
+        require_success(&receipt, "approve")?;
         println!("  LENDING: approve tx: {:?}", receipt.transaction_hash);
 
         let pool = IAavePool::new(pool_addr, &provider);
         let supply_tx = pool.supply(token_addr, amount_units, self.wallet_address, 0);
         let pending = supply_tx.send().await.context("supply failed")?;
         let receipt = pending.get_receipt().await.context("supply receipt")?;
+        require_success(&receipt, "supply")?;
         println!("  LENDING: supply tx: {:?}", receipt.transaction_hash);
 
         self.supplied_value += input_amount;
@@ -136,6 +159,15 @@ impl AaveLending {
         );
 
         if self.dry_run {
+            // ── Preflight reads: verify pool supports this asset ──
+            let rp = evm::read_provider(rpc_url)?;
+            let pool_read = IAavePoolRead::new(pool_addr, &rp);
+            pool_read.getReserveData(token_addr).call().await
+                .with_context(|| format!(
+                    "Aave pool {} does not support {} — getReserveData reverted",
+                    evm::short_addr(&pool_addr), asset_symbol,
+                ))?;
+            println!("  LENDING: preflight OK — pool supports {}", asset_symbol);
             println!("  LENDING: [DRY RUN] would withdraw from pool");
             self.supplied_value = (self.supplied_value - input_amount).max(0.0);
             return Ok(ExecutionResult::TokenOutput {
@@ -150,6 +182,7 @@ impl AaveLending {
         let withdraw_tx = pool.withdraw(token_addr, amount_units, self.wallet_address);
         let pending = withdraw_tx.send().await.context("withdraw failed")?;
         let receipt = pending.get_receipt().await.context("withdraw receipt")?;
+        require_success(&receipt, "withdraw")?;
         println!("  LENDING: withdraw tx: {:?}", receipt.transaction_hash);
 
         self.supplied_value = (self.supplied_value - input_amount).max(0.0);
@@ -176,6 +209,15 @@ impl AaveLending {
         );
 
         if self.dry_run {
+            // ── Preflight reads: verify pool supports this asset ──
+            let rp = evm::read_provider(rpc_url)?;
+            let pool_read = IAavePoolRead::new(pool_addr, &rp);
+            pool_read.getReserveData(token_addr).call().await
+                .with_context(|| format!(
+                    "Aave pool {} does not support {} — getReserveData reverted",
+                    evm::short_addr(&pool_addr), asset_symbol,
+                ))?;
+            println!("  LENDING: preflight OK — pool supports {}", asset_symbol);
             println!("  LENDING: [DRY RUN] would borrow from pool");
             self.borrowed_value += input_amount;
             return Ok(ExecutionResult::TokenOutput {
@@ -187,9 +229,12 @@ impl AaveLending {
         let provider = make_provider(&self.private_key, rpc_url)?;
 
         let pool = IAavePool::new(pool_addr, &provider);
-        let borrow_tx = pool.borrow(token_addr, amount_units, U256::from(2), 0, self.wallet_address);
+        let borrow_tx = pool
+            .borrow(token_addr, amount_units, U256::from(2), 0, self.wallet_address)
+            .gas(500_000);
         let pending = borrow_tx.send().await.context("borrow failed")?;
         let receipt = pending.get_receipt().await.context("borrow receipt")?;
+        require_success(&receipt, "borrow")?;
         println!("  LENDING: borrow tx: {:?}", receipt.transaction_hash);
 
         self.borrowed_value += input_amount;
@@ -216,6 +261,15 @@ impl AaveLending {
         );
 
         if self.dry_run {
+            // ── Preflight reads: verify pool supports this asset ──
+            let rp = evm::read_provider(rpc_url)?;
+            let pool_read = IAavePoolRead::new(pool_addr, &rp);
+            pool_read.getReserveData(token_addr).call().await
+                .with_context(|| format!(
+                    "Aave pool {} does not support {} — getReserveData reverted",
+                    evm::short_addr(&pool_addr), asset_symbol,
+                ))?;
+            println!("  LENDING: preflight OK — pool supports {}", asset_symbol);
             println!("  LENDING: [DRY RUN] would approve + repay to pool");
             self.borrowed_value = (self.borrowed_value - input_amount).max(0.0);
             return Ok(ExecutionResult::PositionUpdate {
@@ -229,12 +283,14 @@ impl AaveLending {
         let erc20 = IERC20::new(token_addr, &provider);
         let approve_tx = erc20.approve(pool_addr, amount_units);
         let pending = approve_tx.send().await.context("approve failed")?;
-        pending.get_receipt().await.context("approve receipt")?;
+        let receipt = pending.get_receipt().await.context("approve receipt")?;
+        require_success(&receipt, "repay-approve")?;
 
         let pool = IAavePool::new(pool_addr, &provider);
         let repay_tx = pool.repay(token_addr, amount_units, U256::from(2), self.wallet_address);
         let pending = repay_tx.send().await.context("repay failed")?;
         let receipt = pending.get_receipt().await.context("repay receipt")?;
+        require_success(&receipt, "repay")?;
         println!("  LENDING: repay tx: {:?}", receipt.transaction_hash);
 
         self.borrowed_value = (self.borrowed_value - input_amount).max(0.0);
@@ -279,6 +335,7 @@ impl AaveLending {
         let claim_tx = rewards.claimAllRewards(assets, self.wallet_address);
         let pending = claim_tx.send().await.context("claimAllRewards failed")?;
         let receipt = pending.get_receipt().await.context("claim receipt")?;
+        require_success(&receipt, "claim")?;
         println!("  LENDING: claim tx: {:?}", receipt.transaction_hash);
 
         Ok(ExecutionResult::Noop)
@@ -365,6 +422,18 @@ fn make_provider(
     Ok(ProviderBuilder::new()
         .wallet(wallet)
         .connect_http(rpc_url.parse()?))
+}
+
+fn require_success(receipt: &alloy::rpc::types::TransactionReceipt, label: &str) -> Result<()> {
+    if !receipt.status() {
+        anyhow::bail!(
+            "{} tx reverted (hash: {:?}, gas_used: {:?})",
+            label,
+            receipt.transaction_hash,
+            receipt.gas_used,
+        );
+    }
+    Ok(())
 }
 
 fn token_decimals_for(symbol: &str) -> u8 {
