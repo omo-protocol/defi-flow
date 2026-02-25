@@ -1,0 +1,45 @@
+{
+  "name": "USDC Lending",
+  "description": "Supply USDC to HyperLend for yield. Single-leg lending strategy.",
+  "tokens": {
+    "USDC": {
+      "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f"
+    }
+  },
+  "contracts": {
+    "hyperlend_pool": {
+      "hyperevm": "0x00A89d7a5A02160f20150EbEA7a2b5E4879A1A8b"
+    },
+    "hyperlend_rewards": {
+      "hyperevm": "0x2aF0d6754A58723c50b5e73E45D964bFDD99fE2F"
+    }
+  },
+  "nodes": [
+    {
+      "type": "wallet",
+      "id": "wallet",
+      "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+      "token": "USDC",
+      "address": "0x7BB51c8a55D8F0431f4E9CaA5cC502d7a381aC6b"
+    },
+    {
+      "type": "lending",
+      "id": "lend_usdc",
+      "archetype": "aave_v3",
+      "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+      "pool_address": "hyperlend_pool",
+      "asset": "USDC",
+      "action": "supply",
+      "rewards_controller": "hyperlend_rewards",
+      "defillama_slug": "hyperlend-pooled"
+    }
+  ],
+  "edges": [
+    {
+      "from_node": "wallet",
+      "to_node": "lend_usdc",
+      "token": "USDC",
+      "amount": { "type": "all" }
+    }
+  ]
+}

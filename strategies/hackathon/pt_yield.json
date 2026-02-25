@@ -1,0 +1,46 @@
+{
+  "name": "PT Fixed Yield",
+  "description": "Buy Pendle PT-kHYPE at discount, hold to maturity (2026-03-19) for fixed yield (~2.7% implied APY). Single-leg strategy on HyperEVM.",
+  "tokens": {
+    "USDC": {
+      "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f"
+    }
+  },
+  "contracts": {
+    "pendle_router": {
+      "hyperevm": "0x888888888889758F76e7103c6CbF23ABbF58F946"
+    },
+    "pendle_pt_khype_market": {
+      "hyperevm": "0x31104779b2a07a273d6c662419377773083d0b2e"
+    },
+    "pendle_pt_khype_sy": {
+      "hyperevm": "0x57fc55dff8ceca86ee94a6bf255af2f0ed90eb9e"
+    },
+    "pendle_pt_khype_yt": {
+      "hyperevm": "0x8e8df024cf6d3e916be0821ff3177db6981fcad2"
+    }
+  },
+  "nodes": [
+    {
+      "type": "wallet",
+      "id": "wallet",
+      "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+      "token": "USDC",
+      "address": "0x7BB51c8a55D8F0431f4E9CaA5cC502d7a381aC6b"
+    },
+    {
+      "type": "pendle",
+      "id": "mint_pt",
+      "market": "PT-kHYPE",
+      "action": "mint_pt"
+    }
+  ],
+  "edges": [
+    {
+      "from_node": "wallet",
+      "to_node": "mint_pt",
+      "token": "USDC",
+      "amount": { "type": "all" }
+    }
+  ]
+}
