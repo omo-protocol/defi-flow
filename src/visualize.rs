@@ -121,6 +121,7 @@ fn scope_workflow(
         description: workflow.description.clone(),
         tokens: workflow.tokens.clone(),
         contracts: workflow.contracts.clone(),
+        reserve: workflow.reserve.clone(),
         nodes,
         edges,
     })

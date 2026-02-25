@@ -85,6 +85,8 @@ pub struct AerodromeLp {
     gauge_address: Option<Address>,
     deposited_value: f64,
     metrics: SimMetrics,
+    /// Cached pool name (e.g. "WETH/USDC") from first execute() — needed by unwind().
+    cached_pool: Option<String>,
 }
 
 impl AerodromeLp {
@@ -105,6 +107,7 @@ impl AerodromeLp {
             gauge_address: None,
             deposited_value: 0.0,
             metrics: SimMetrics::default(),
+            cached_pool: None,
         })
     }
 
@@ -351,7 +354,9 @@ impl Venue for AerodromeLp {
                 tick_upper,
                 tick_spacing,
                 ..
-            } => match action {
+            } => {
+                self.cached_pool = Some(pool.clone());
+                match action {
                 LpAction::AddLiquidity => {
                     self.execute_add_liquidity(pool, *tick_lower, *tick_upper, *tick_spacing, input_amount)
                         .await
@@ -361,7 +366,7 @@ impl Venue for AerodromeLp {
                 LpAction::StakeGauge => self.execute_stake_gauge(pool).await,
                 LpAction::UnstakeGauge => self.execute_unstake_gauge(pool).await,
                 LpAction::Compound => self.execute_compound(pool).await,
-            },
+            }},
             _ => {
                 println!("  AERO: unsupported node type '{}'", node.type_name());
                 Ok(ExecutionResult::Noop)
@@ -381,6 +386,83 @@ impl Venue for AerodromeLp {
             );
         }
         Ok(())
+    }
+
+    async fn unwind(&mut self, fraction: f64) -> Result<f64> {
+        let total = self.total_value().await?;
+        if total <= 0.0 || fraction <= 0.0 {
+            return Ok(0.0);
+        }
+        let f = fraction.min(1.0);
+        let freed = total * f;
+
+        println!("  AERO: UNWIND {:.1}% (${:.2})", f * 100.0, freed);
+
+        if self.dry_run {
+            println!("  AERO: [DRY RUN] would decreaseLiquidity by {:.1}% + collect", f * 100.0);
+            self.deposited_value = (self.deposited_value * (1.0 - f)).max(0.0);
+            return Ok(freed);
+        }
+
+        // Live: decreaseLiquidity for the fraction, then collect
+        if let Some(token_id) = self.position_token_id {
+            let rpc_url = self.chain.rpc_url()
+                .context("LP chain requires RPC URL for unwind")?;
+            let signer: alloy::signers::local::PrivateKeySigner = self
+                .private_key
+                .parse()
+                .map_err(|e| anyhow::anyhow!("Invalid key: {e}"))?;
+            let wallet = alloy::network::EthereumWallet::from(signer);
+            let provider = ProviderBuilder::new()
+                .wallet(wallet)
+                .connect_http(rpc_url.parse()?);
+
+            let position_manager = evm::resolve_contract(
+                &self.contracts,
+                "aerodrome_position_manager",
+                &self.chain,
+            )
+            .context("aerodrome_position_manager not in contracts manifest")?;
+
+            let pm = INonfungiblePositionManager::new(position_manager, &provider);
+
+            // TODO: query actual liquidity from NFT position to compute exact amount.
+            // For now, use uint128::MAX * fraction as a sentinel — the contract
+            // will clamp to actual liquidity.
+            let max_liq = u128::MAX;
+            let liq_to_remove = ((max_liq as f64) * f) as u128;
+
+            let deadline = U256::from(chrono::Utc::now().timestamp() as u64 + 300);
+            let params = INonfungiblePositionManager::DecreaseLiquidityParams {
+                tokenId: token_id,
+                liquidity: liq_to_remove,
+                amount0Min: U256::ZERO,
+                amount1Min: U256::ZERO,
+                deadline,
+            };
+
+            let result = pm.decreaseLiquidity(params).gas(500_000).send().await
+                .context("decreaseLiquidity for unwind")?;
+            let receipt = result.get_receipt().await?;
+            require_success(&receipt, "unwind-decreaseLiquidity")?;
+            println!("  AERO: decreaseLiquidity tx: {:?}", receipt.transaction_hash);
+
+            // Collect the freed tokens
+            let collect_params = INonfungiblePositionManager::CollectParams {
+                tokenId: token_id,
+                recipient: self.wallet_address,
+                amount0Max: u128::MAX,
+                amount1Max: u128::MAX,
+            };
+            let result = pm.collect(collect_params).gas(300_000).send().await
+                .context("collect after unwind")?;
+            let receipt = result.get_receipt().await?;
+            require_success(&receipt, "unwind-collect")?;
+            println!("  AERO: collect tx: {:?}", receipt.transaction_hash);
+        }
+
+        self.deposited_value = (self.deposited_value * (1.0 - f)).max(0.0);
+        Ok(freed)
     }
 
     fn metrics(&self) -> SimMetrics {

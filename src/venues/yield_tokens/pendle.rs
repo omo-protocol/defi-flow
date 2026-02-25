@@ -278,6 +278,109 @@ impl Venue for PendleYield {
         Ok(pt_total + yt_total)
     }
 
+    async fn unwind(&mut self, fraction: f64) -> Result<f64> {
+        let total = self.total_value().await?;
+        if total <= 0.0 || fraction <= 0.0 {
+            return Ok(0.0);
+        }
+        let f = fraction.min(1.0);
+        let freed = total * f;
+
+        println!("  PENDLE: UNWIND {:.1}% (${:.2})", f * 100.0, freed);
+
+        if self.dry_run {
+            println!("  PENDLE: [DRY RUN] would redeemPyToSy for {:.1}% of holdings", f * 100.0);
+            for val in self.pt_holdings.values_mut() {
+                *val *= 1.0 - f;
+            }
+            for val in self.yt_holdings.values_mut() {
+                *val *= 1.0 - f;
+            }
+            self.pt_holdings.retain(|_, v| *v > 1e-12);
+            self.yt_holdings.retain(|_, v| *v > 1e-12);
+            return Ok(freed);
+        }
+
+        // Live: call redeemPyToSy for each market's PT fraction
+        let markets: Vec<String> = self.pt_holdings.keys().cloned().collect();
+        for market_name in &markets {
+            let pt_amount = self.pt_holdings.get(market_name).copied().unwrap_or(0.0);
+            let redeem_amount = pt_amount * f;
+            if redeem_amount < 1e-12 {
+                continue;
+            }
+
+            let yt_key = pendle_contract_key(market_name, "yt");
+            let chain = match pendle_chain(&self.contracts, market_name) {
+                Some(ch) => ch,
+                None => {
+                    eprintln!("  PENDLE: unwind skipping {} — chain not found", market_name);
+                    continue;
+                }
+            };
+            let rpc_url = match chain.rpc_url() {
+                Some(url) => url,
+                None => {
+                    eprintln!("  PENDLE: unwind skipping {} — no RPC URL", market_name);
+                    continue;
+                }
+            };
+
+            let yt_addr = match evm::resolve_contract(&self.contracts, &yt_key, &chain) {
+                Some(addr) => addr,
+                None => {
+                    eprintln!("  PENDLE: unwind skipping {} — YT address not found", market_name);
+                    continue;
+                }
+            };
+            let router_addr = match evm::resolve_contract(&self.contracts, "pendle_router", &chain) {
+                Some(addr) => addr,
+                None => {
+                    eprintln!("  PENDLE: unwind skipping {} — router not found", market_name);
+                    continue;
+                }
+            };
+
+            let signer: alloy::signers::local::PrivateKeySigner = self
+                .private_key
+                .parse()
+                .map_err(|e| anyhow::anyhow!("Invalid key: {e}"))?;
+            let wallet = alloy::network::EthereumWallet::from(signer);
+            let provider = ProviderBuilder::new()
+                .wallet(wallet)
+                .connect_http(rpc_url.parse()?);
+
+            let amount_units = evm::to_token_units(redeem_amount, 1.0, 18);
+
+            let router = IPendleRouter::new(router_addr, &provider);
+            match router
+                .redeemPyToSy(self.wallet_address, yt_addr, amount_units, U256::ZERO)
+                .send()
+                .await
+            {
+                Ok(pending) => {
+                    let receipt = pending.get_receipt().await?;
+                    println!("  PENDLE: redeemPyToSy tx: {:?}", receipt.transaction_hash);
+                }
+                Err(e) => {
+                    eprintln!("  PENDLE: redeemPyToSy failed for {}: {:#}", market_name, e);
+                }
+            }
+        }
+
+        // Update internal tracking
+        for val in self.pt_holdings.values_mut() {
+            *val *= 1.0 - f;
+        }
+        for val in self.yt_holdings.values_mut() {
+            *val *= 1.0 - f;
+        }
+        self.pt_holdings.retain(|_, v| *v > 1e-12);
+        self.yt_holdings.retain(|_, v| *v > 1e-12);
+
+        Ok(freed)
+    }
+
     async fn tick(&mut self, _now: u64, _dt_secs: f64) -> Result<()> {
         let pt_total: f64 = self.pt_holdings.values().sum();
         let yt_total: f64 = self.yt_holdings.values().sum();

@@ -505,6 +505,116 @@ impl Venue for HyperliquidPerp {
         Ok(())
     }
 
+    async fn unwind(&mut self, fraction: f64) -> Result<f64> {
+        let total = self.total_value().await?;
+        if total <= 0.0 || fraction <= 0.0 {
+            return Ok(0.0);
+        }
+        let f = fraction.min(1.0);
+        let freed = total * f;
+
+        if self.asset_indices.is_empty() {
+            self.init_metadata().await?;
+        }
+
+        // Close fraction of each position
+        let coins: Vec<String> = self.positions.keys().cloned().collect();
+        for coin in coins {
+            let pos = match self.positions.get(&coin) {
+                Some(p) => p.clone(),
+                None => continue,
+            };
+            let close_size = pos.size.abs() * f;
+            if close_size < 1e-12 {
+                continue;
+            }
+
+            let mids = self.get_mids().await?;
+            let mid_price = mids.get(&coin).copied().unwrap_or(pos.entry_price);
+            let is_buy = pos.size < 0.0; // close short = buy, close long = sell
+
+            let slippage_mult = self.slippage_bps / 10000.0;
+            let limit_price = if is_buy {
+                mid_price * (1.0 + slippage_mult)
+            } else {
+                mid_price * (1.0 - slippage_mult)
+            };
+
+            let formatted_size = self.format_size(&coin, close_size);
+            let formatted_price = Self::format_price(limit_price);
+
+            println!(
+                "  HL: UNWIND {:.1}% {} {} @ {} (reduce_only)",
+                f * 100.0, formatted_size, coin, formatted_price,
+            );
+
+            if self.dry_run {
+                println!("  HL: [DRY RUN] unwind order would be placed");
+                let remaining_size = pos.size.abs() - close_size;
+                if remaining_size < 1e-12 {
+                    self.positions.remove(&coin);
+                } else {
+                    let entry = self.positions.get_mut(&coin).unwrap();
+                    entry.size = remaining_size * pos.size.signum();
+                }
+                continue;
+            }
+
+            let asset = *self
+                .asset_indices
+                .get(&coin)
+                .with_context(|| format!("Unknown asset '{coin}'"))?;
+
+            let order = ferrofluid::types::OrderRequest::limit(
+                asset,
+                is_buy,
+                &formatted_price,
+                &formatted_size,
+                "Ioc",
+            )
+            .reduce_only(true);
+
+            match self.exchange.place_order(&order).await {
+                Ok(ExchangeResponseStatus::Ok(resp)) => {
+                    if let Some(data) = &resp.data {
+                        for status in &data.statuses {
+                            match status {
+                                ExchangeDataStatus::Filled(fill) => {
+                                    let fill_size: f64 =
+                                        fill.total_sz.parse().unwrap_or(0.0);
+                                    println!(
+                                        "  HL: UNWIND FILLED {} {} (oid: {})",
+                                        fill_size, coin, fill.oid
+                                    );
+                                }
+                                ExchangeDataStatus::Error(msg) => {
+                                    eprintln!("  HL: UNWIND error for {}: {}", coin, msg);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    let remaining_size = pos.size.abs() - close_size;
+                    if remaining_size < 1e-12 {
+                        self.positions.remove(&coin);
+                    } else {
+                        if let Some(entry) = self.positions.get_mut(&coin) {
+                            entry.size = remaining_size * pos.size.signum();
+                        }
+                    }
+                }
+                Ok(ExchangeResponseStatus::Err(err)) => {
+                    eprintln!("  HL: UNWIND exchange error for {}: {}", coin, err);
+                }
+                Err(e) => {
+                    eprintln!("  HL: UNWIND failed for {}: {:#}", coin, e);
+                }
+            }
+        }
+
+        Ok(freed)
+    }
+
     fn metrics(&self) -> SimMetrics {
         self.metrics.clone()
     }

@@ -41,6 +41,12 @@ pub fn to_token_units(amount_usd: f64, price: f64, decimals: u8) -> U256 {
     U256::from(scaled as u128)
 }
 
+pub fn from_token_units(value: U256, decimals: u8) -> f64 {
+    let s = value.to_string();
+    let raw: f64 = s.parse().unwrap_or(0.0);
+    raw / 10f64.powi(decimals as i32)
+}
+
 pub fn short_addr(addr: &Address) -> String {
     let s = format!("{addr}");
     if s.len() > 10 {

@@ -124,6 +124,23 @@ impl Venue for SwapSimulator {
         Ok(())
     }
 
+    async fn unwind(&mut self, fraction: f64) -> Result<f64> {
+        // Swap venues that hold non-USD tokens (via price feed)
+        if self.held_amount > 1e-12 && fraction > 0.0 {
+            let f = fraction.min(1.0);
+            let sell = self.held_amount * f;
+            let price = self.current_price();
+            let freed = sell * price;
+            self.held_amount -= sell;
+            if self.held_amount < 1e-12 {
+                self.held_amount = 0.0;
+                self.entry_price = 0.0;
+            }
+            return Ok(freed);
+        }
+        Ok(0.0)
+    }
+
     fn metrics(&self) -> SimMetrics {
         SimMetrics {
             swap_costs: self.total_cost,
@@ -171,6 +188,10 @@ impl Venue for BridgeSimulator {
 
     async fn total_value(&self) -> Result<f64> {
         Ok(0.0)
+    }
+
+    async fn unwind(&mut self, _fraction: f64) -> Result<f64> {
+        Ok(0.0) // bridges are pass-through, nothing to unwind
     }
 
     async fn tick(&mut self, _now: u64, _dt_secs: f64) -> Result<()> {

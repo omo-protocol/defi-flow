@@ -24,6 +24,7 @@ sol! {
     #[sol(rpc)]
     contract IVaultProbe {
         function asset() external view returns (address);
+        function totalAssets() external view returns (uint256);
     }
 
     #[allow(missing_docs)]
@@ -135,6 +136,12 @@ fn collect_chains(workflow: &Workflow) -> HashMap<String, Chain> {
             chains.entry(chain.name.to_lowercase()).or_insert(chain);
         }
     }
+    // Include reserve vault chain
+    if let Some(ref rc) = workflow.reserve {
+        chains
+            .entry(rc.vault_chain.name.to_lowercase())
+            .or_insert(rc.vault_chain.clone());
+    }
     chains
 }
 
@@ -221,6 +228,14 @@ fn infer_contract_roles(workflow: &Workflow) -> HashMap<(String, String), Contra
             }
             _ => {}
         }
+    }
+
+    // Reserve vault: treat as ERC4626 Vault role
+    if let Some(ref rc) = workflow.reserve {
+        roles.insert(
+            (rc.vault_address.clone(), rc.vault_chain.name.to_lowercase()),
+            ContractRole::Vault,
+        );
     }
 
     roles
@@ -402,15 +417,17 @@ async fn probe_interface(
             }
         }
         ContractRole::Vault => {
-            // ERC4626 vault must respond to asset()
+            // ERC4626 vault must respond to asset() and totalAssets()
             let contract = IVaultProbe::new(address, provider);
-            match tokio::time::timeout(timeout, contract.asset().call()).await {
-                Ok(Ok(_)) => None,
+            let asset_ok = tokio::time::timeout(timeout, contract.asset().call()).await;
+            let total_ok = tokio::time::timeout(timeout, contract.totalAssets().call()).await;
+            match (asset_ok, total_ok) {
+                (Ok(Ok(_)), Ok(Ok(_))) => None,
                 _ => Some(ValidationError::WrongInterface {
                     contract: check.label.clone(),
                     chain: chain_name.to_string(),
                     address: format!("{address}"),
-                    expected: "ERC4626 vault — asset() call failed".to_string(),
+                    expected: "ERC4626 vault — asset()/totalAssets() call failed".to_string(),
                 }),
             }
         }

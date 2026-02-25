@@ -74,6 +74,10 @@ pub enum Command {
         #[arg(long)]
         output: Option<PathBuf>,
 
+        /// Dump per-tick venue values to a CSV file (for plotting)
+        #[arg(long)]
+        tick_csv: Option<PathBuf>,
+
         /// Run N Monte Carlo simulations (parametric: GBM prices, OU funding, AR(1) APY)
         #[arg(long)]
         monte_carlo: Option<u32>,

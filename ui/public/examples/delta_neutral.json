@@ -1,0 +1,102 @@
+{
+  "name": "ETH Delta-Neutral Funding Arb",
+  "description": "Delta-neutral with Kelly optimizer: Kelly decides split between alpha (spot+perp pair) and idle lending. Alpha pair always splits 50/50 for perfect delta neutrality. Yield = funding + lending APY. Weekly rebalance on 5% drift.",
+  "tokens": {
+    "USDC": {
+      "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f",
+      "base": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    }
+  },
+  "contracts": {
+    "hyperlend_pool": {
+      "hyperevm": "0x00A89d7a5A02160f20150EbEA7a2b5E4879A1A8b"
+    },
+    "hyperlend_rewards": {
+      "hyperevm": "0x2aF0d6754A58723c50b5e73E45D964bFDD99fE2F"
+    }
+  },
+  "nodes": [
+    {
+      "type": "wallet",
+      "id": "wallet",
+      "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+      "token": "USDC",
+      "address": "0x7BB51c8a55D8F0431f4E9CaA5cC502d7a381aC6b"
+    },
+    {
+      "type": "optimizer",
+      "id": "kelly",
+      "strategy": "kelly",
+      "kelly_fraction": 0.5,
+      "max_allocation": 1.0,
+      "drift_threshold": 0.05,
+      "allocations": [
+        {
+          "target_nodes": ["buy_eth", "short_eth"],
+          "correlation": 0.0
+        },
+        {
+          "target_node": "lend_idle",
+          "correlation": 0.0
+        }
+      ],
+      "trigger": {
+        "type": "cron",
+        "interval": "weekly"
+      }
+    },
+    {
+      "type": "spot",
+      "id": "buy_eth",
+      "venue": "Hyperliquid",
+      "pair": "ETH/USDC",
+      "side": "buy"
+    },
+    {
+      "type": "perp",
+      "id": "short_eth",
+      "venue": "Hyperliquid",
+      "pair": "ETH/USDC",
+      "action": "open",
+      "direction": "short",
+      "leverage": 1.0
+    },
+    {
+      "type": "lending",
+      "id": "lend_idle",
+      "archetype": "aave_v3",
+      "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+      "pool_address": "hyperlend_pool",
+      "asset": "USDC",
+      "action": "supply",
+      "rewards_controller": "hyperlend_rewards",
+      "defillama_slug": "hyperlend-pooled"
+    }
+  ],
+  "edges": [
+    {
+      "from_node": "wallet",
+      "to_node": "kelly",
+      "token": "USDC",
+      "amount": { "type": "all" }
+    },
+    {
+      "from_node": "kelly",
+      "to_node": "buy_eth",
+      "token": "USDC",
+      "amount": { "type": "all" }
+    },
+    {
+      "from_node": "kelly",
+      "to_node": "short_eth",
+      "token": "USDC",
+      "amount": { "type": "all" }
+    },
+    {
+      "from_node": "kelly",
+      "to_node": "lend_idle",
+      "token": "USDC",
+      "amount": { "type": "all" }
+    }
+  ]
+}

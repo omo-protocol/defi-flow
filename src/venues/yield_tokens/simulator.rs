@@ -124,6 +124,19 @@ impl Venue for YieldSimulator {
         Ok(pt_value + yt_value + self.accrued_yield)
     }
 
+    async fn unwind(&mut self, fraction: f64) -> Result<f64> {
+        let total = self.total_value().await?;
+        if total <= 0.0 || fraction <= 0.0 {
+            return Ok(0.0);
+        }
+        let f = fraction.min(1.0);
+        let freed = total * f;
+        self.pt_amount *= 1.0 - f;
+        self.yt_amount *= 1.0 - f;
+        self.accrued_yield *= 1.0 - f;
+        Ok(freed)
+    }
+
     async fn tick(&mut self, now: u64, dt_secs: f64) -> Result<()> {
         self.current_ts = now;
         self.advance_cursor();

@@ -299,6 +299,12 @@ impl Venue for OptionsSimulator {
         Ok(())
     }
 
+    async fn unwind(&mut self, _fraction: f64) -> Result<f64> {
+        // European options cannot be closed before expiry.
+        // Collateral is locked until settlement — nothing to free.
+        Ok(0.0)
+    }
+
     fn metrics(&self) -> SimMetrics {
         SimMetrics {
             premium_pnl: self.total_premium - self.settlement_losses,

@@ -37,6 +37,13 @@ sol! {
 
 // ── Morpho Vault V2 Live Executor ───────────────────────────────────
 
+/// Cached node context for unwind() — resolved on first execute().
+struct CachedVaultContext {
+    vault_addr: Address,
+    rpc_url: String,
+    asset_symbol: String,
+}
+
 pub struct MorphoVault {
     wallet_address: Address,
     private_key: String,
@@ -45,6 +52,7 @@ pub struct MorphoVault {
     contracts: evm::ContractManifest,
     deposited_value: f64,
     metrics: SimMetrics,
+    cached_ctx: Option<CachedVaultContext>,
 }
 
 impl MorphoVault {
@@ -61,6 +69,7 @@ impl MorphoVault {
             contracts: contracts.clone(),
             deposited_value: 0.0,
             metrics: SimMetrics::default(),
+            cached_ctx: None,
         })
     }
 
@@ -197,6 +206,13 @@ impl Venue for MorphoVault {
                 let token_addr = evm::resolve_token(&self.tokens, chain, asset)
                     .with_context(|| format!("Token '{asset}' on {chain} not in tokens manifest"))?;
 
+                // Cache context for unwind()
+                self.cached_ctx = Some(CachedVaultContext {
+                    vault_addr,
+                    rpc_url: rpc_url.to_string(),
+                    asset_symbol: asset.clone(),
+                });
+
                 match action {
                     VaultAction::Deposit => {
                         self.execute_deposit(vault_addr, rpc_url, token_addr, asset, input_amount).await
@@ -231,6 +247,30 @@ impl Venue for MorphoVault {
             );
         }
         Ok(())
+    }
+
+    async fn unwind(&mut self, fraction: f64) -> Result<f64> {
+        let total = self.total_value().await?;
+        if total <= 0.0 || fraction <= 0.0 {
+            return Ok(0.0);
+        }
+        let f = fraction.min(1.0);
+        let withdraw_amount = total * f;
+
+        println!("  VAULT: UNWIND {:.1}% (${:.2})", f * 100.0, withdraw_amount);
+
+        let ctx = self.cached_ctx.as_ref()
+            .context("unwind() called before execute() — no cached vault context")?;
+
+        // Reuses execute_withdraw() which handles dry_run (preflight only) vs live (actual tx)
+        self.execute_withdraw(
+            ctx.vault_addr,
+            &ctx.rpc_url.clone(),
+            &ctx.asset_symbol.clone(),
+            withdraw_amount,
+        ).await?;
+
+        Ok(withdraw_amount)
     }
 
     fn metrics(&self) -> SimMetrics {

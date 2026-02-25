@@ -1,6 +1,9 @@
 use crate::model::node::Node;
 use crate::model::Workflow;
-use crate::venues::yield_tokens::pendle::pendle_contract_key;
+fn pendle_contract_key(market: &str, suffix: &str) -> String {
+    let normalized = market.to_lowercase().replace('-', "_");
+    format!("pendle_{}_{}", normalized, suffix)
+}
 
 use super::ValidationError;
 

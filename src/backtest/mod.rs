@@ -40,6 +40,8 @@ pub struct BacktestConfig {
     pub verbose: bool,
     pub output: Option<std::path::PathBuf>,
     pub monte_carlo: Option<monte_carlo::MonteCarloConfig>,
+    /// Optional path for per-tick venue value CSV (for plotting).
+    pub tick_csv: Option<std::path::PathBuf>,
 }
 
 /// Run a backtest from the CLI.
@@ -139,6 +141,32 @@ async fn execute_backtest(
         println!("[deploy] TVL = {:.2}", initial_tvl);
     }
 
+    // Set up tick CSV writer if requested
+    let mut tick_writer = if let Some(ref path) = config.tick_csv {
+        // Collect venue IDs in sorted order (excluding wallet/optimizer)
+        let mut venue_ids: Vec<String> = engine
+            .venues
+            .keys()
+            .filter(|id| {
+                !engine
+                    .workflow
+                    .nodes
+                    .iter()
+                    .any(|n| n.id() == id.as_str() && matches!(n, Node::Wallet { .. } | Node::Optimizer { .. }))
+            })
+            .cloned()
+            .collect();
+        venue_ids.sort();
+        let mut wtr = csv::Writer::from_path(path)
+            .with_context(|| format!("creating tick CSV {}", path.display()))?;
+        let mut header = vec!["timestamp".to_string(), "tvl".to_string()];
+        header.extend(venue_ids.iter().cloned());
+        wtr.write_record(&header)?;
+        Some((wtr, venue_ids))
+    } else {
+        None
+    };
+
     // Tick loop
     let mut tick_count = 0u64;
     while clock.advance() {
@@ -153,6 +181,20 @@ async fn execute_backtest(
         bt_metrics.record_tick(now, tvl);
         tick_count += 1;
 
+        // Write per-tick venue values to CSV
+        if let Some((ref mut wtr, ref venue_ids)) = tick_writer {
+            let mut row = vec![now.to_string(), format!("{tvl:.2}")];
+            for vid in venue_ids {
+                let val = if let Some(v) = engine.venues.get(vid.as_str()) {
+                    v.total_value().await.unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+                row.push(format!("{val:.2}"));
+            }
+            wtr.write_record(&row)?;
+        }
+
         if config.verbose && tick_count % 100 == 0 {
             println!(
                 "[tick {:>6}/{:>6}] TVL = {:.2}",
@@ -161,6 +203,11 @@ async fn execute_backtest(
                 tvl,
             );
         }
+    }
+
+    // Flush tick CSV
+    if let Some((ref mut wtr, _)) = tick_writer {
+        wtr.flush()?;
     }
 
     // Collect venue-specific metrics

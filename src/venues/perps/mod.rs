@@ -5,7 +5,7 @@ pub mod simulator;
 
 use std::future::Future;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use crate::data as crate_data;
 use crate::fetch_data::types::{FetchConfig, FetchJob, FetchResult};
@@ -39,10 +39,15 @@ impl VenueCategory for PerpsCategory {
                     ..
                 } => {
                     let id = node.id();
-                    let rows = if let Some(entry) = manifest.get(id) {
-                        crate_data::load_csv::<self::data::PerpCsvRow>(data_dir, &entry.file)?
-                    } else {
-                        vec![self::data::default_perp_row()]
+                    let rows = match manifest.get(id) {
+                        Some(entry) => {
+                            crate_data::load_csv::<self::data::PerpCsvRow>(data_dir, &entry.file)?
+                        }
+                        None => bail!(
+                            "Node '{}' has no manifest entry. Run `defi-flow fetch-data` \
+                             or add it to manifest.json (kind: \"perp\")",
+                            id
+                        ),
                     };
                     Ok(Some(Box::new(simulator::PerpSimulator::new(
                         rows,
@@ -64,10 +69,15 @@ impl VenueCategory for PerpsCategory {
                     ..
                 } => {
                     let id = node.id();
-                    let rows = if let Some(entry) = manifest.get(id) {
-                        crate_data::load_csv::<self::data::PriceCsvRow>(data_dir, &entry.file)?
-                    } else {
-                        vec![self::data::default_price_row()]
+                    let rows = match manifest.get(id) {
+                        Some(entry) => {
+                            crate_data::load_csv::<self::data::PriceCsvRow>(data_dir, &entry.file)?
+                        }
+                        None => bail!(
+                            "Node '{}' has no manifest entry. Run `defi-flow fetch-data` \
+                             or add it to manifest.json (kind: \"spot\")",
+                            id
+                        ),
                     };
                     Ok(Some(Box::new(simulator::SpotSimulator::new(
                         rows,

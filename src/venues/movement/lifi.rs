@@ -302,6 +302,10 @@ impl Venue for LiFiMovement {
         Ok(0.0)
     }
 
+    async fn unwind(&mut self, _fraction: f64) -> Result<f64> {
+        Ok(0.0) // pass-through venue, nothing to unwind
+    }
+
     async fn tick(&mut self, _now: u64, _dt_secs: f64) -> Result<()> {
         Ok(())
     }

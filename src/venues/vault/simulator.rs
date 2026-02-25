@@ -119,6 +119,19 @@ impl Venue for VaultSimulator {
         }
     }
 
+    async fn unwind(&mut self, fraction: f64) -> Result<f64> {
+        let total = self.total_value().await?;
+        if total <= 0.0 || fraction <= 0.0 {
+            return Ok(0.0);
+        }
+        let f = fraction.min(1.0);
+        let freed = total * f;
+        self.deposited *= 1.0 - f;
+        self.accrued_yield *= 1.0 - f;
+        self.accrued_rewards *= 1.0 - f;
+        Ok(freed)
+    }
+
     fn alpha_stats(&self) -> Option<(f64, f64)> {
         if self.market_data.len() < 2 {
             return None;

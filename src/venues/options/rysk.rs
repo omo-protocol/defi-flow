@@ -475,6 +475,18 @@ impl Venue for RyskOptions {
         Ok(())
     }
 
+    async fn unwind(&mut self, _fraction: f64) -> Result<f64> {
+        // European options cannot be closed before expiry.
+        // Collateral is locked until settlement — nothing to free.
+        if !self.positions.is_empty() {
+            println!(
+                "  RYSK: UNWIND skipped — {} EU option(s) locked until expiry",
+                self.positions.len()
+            );
+        }
+        Ok(0.0)
+    }
+
     fn metrics(&self) -> SimMetrics {
         SimMetrics {
             premium_pnl: self.metrics.premium_pnl,

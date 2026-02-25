@@ -4,6 +4,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::engine::reserve::ReserveActionRecord;
+
 /// Persistent state for the run command, saved as JSON between restarts.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct RunState {
@@ -13,6 +15,9 @@ pub struct RunState {
     pub last_tick: u64,
     /// Per-node USD balance tracking.
     pub balances: HashMap<String, f64>,
+    /// Audit trail of reserve management actions.
+    #[serde(default)]
+    pub reserve_actions: Vec<ReserveActionRecord>,
 }
 
 impl RunState {

@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 
+use crate::engine::reserve;
 use crate::engine::Engine;
 use crate::model::workflow::Workflow;
 use crate::venues::{self, BuildMode};
@@ -109,6 +110,26 @@ async fn run_async(workflow: Workflow, config: RuntimeConfig, workflow_path: &Pa
         }
         state.last_tick = chrono::Utc::now().timestamp() as u64;
         sync_balances(&engine, &mut state);
+
+        // Reserve management (--once mode)
+        if let Some(rc) = engine.workflow.reserve.clone() {
+            match reserve::check_and_manage(
+                &mut engine, &rc, &contracts, &tokens, &config.private_key, config.dry_run,
+            ).await {
+                Ok(Some(action)) => {
+                    println!(
+                        "[reserve] Unwound ${:.2} (deficit ${:.2}, ratio was {:.1}%)",
+                        action.freed, action.deficit,
+                        action.reserve_ratio * 100.0,
+                    );
+                    sync_balances(&engine, &mut state);
+                    state.reserve_actions.push(action);
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("[reserve] ERROR: {:#}", e),
+            }
+        }
+
         state.save(&config.state_file)?;
 
         let tvl = engine.total_tvl().await;
@@ -161,6 +182,26 @@ async fn run_async(workflow: Workflow, config: RuntimeConfig, workflow_path: &Pa
 
                     state.last_tick = now_ts;
                     sync_balances(&engine, &mut state);
+
+                    // Reserve management: check vault reserve and unwind if depleted
+                    if let Some(rc) = engine.workflow.reserve.clone() {
+                        match reserve::check_and_manage(
+                            &mut engine, &rc, &contracts, &tokens, &config.private_key, config.dry_run,
+                        ).await {
+                            Ok(Some(action)) => {
+                                println!(
+                                    "[reserve] Unwound ${:.2} (deficit ${:.2}, ratio was {:.1}%)",
+                                    action.freed, action.deficit,
+                                    action.reserve_ratio * 100.0,
+                                );
+                                sync_balances(&engine, &mut state);
+                                state.reserve_actions.push(action);
+                            }
+                            Ok(None) => {} // Reserve healthy
+                            Err(e) => eprintln!("[reserve] ERROR: {:#}", e),
+                        }
+                    }
+
                     state.save(&config.state_file)?;
 
                     let tvl = engine.total_tvl().await;

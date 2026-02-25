@@ -28,32 +28,3 @@ pub struct PriceCsvRow {
     pub bid: f64,
     pub ask: f64,
 }
-
-pub fn default_perp_row() -> PerpCsvRow {
-    PerpCsvRow {
-        symbol: "BTC".to_string(),
-        mark_price: 100.0,
-        index_price: 100.0,
-        funding_rate: 0.0,
-        open_interest: 0.0,
-        volume_24h: 0.0,
-        bid: 99.99,
-        ask: 100.01,
-        mid_price: 100.0,
-        last_price: 100.0,
-        premium: 0.0,
-        basis: 0.0,
-        timestamp: 0,
-        funding_apy: 0.0,
-        rewards_apy: 0.0,
-    }
-}
-
-pub fn default_price_row() -> PriceCsvRow {
-    PriceCsvRow {
-        timestamp: 0,
-        price: 1.0,
-        bid: 1.0,
-        ask: 1.0,
-    }
-}

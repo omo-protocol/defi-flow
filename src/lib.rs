@@ -1,13 +1,26 @@
+#[cfg(feature = "full")]
 pub mod backtest;
+#[cfg(feature = "full")]
 pub mod cli;
+#[cfg(feature = "full")]
 pub mod data;
+#[cfg(feature = "full")]
 pub mod engine;
+#[cfg(feature = "full")]
 pub mod example;
+#[cfg(feature = "full")]
 pub mod fetch_data;
+#[cfg(feature = "full")]
 pub mod list_nodes;
 pub mod model;
+#[cfg(feature = "full")]
 pub mod run;
 pub mod schema;
 pub mod validate;
+#[cfg(feature = "full")]
 pub mod venues;
+#[cfg(feature = "full")]
 pub mod visualize;
+
+#[cfg(feature = "wasm")]
+pub mod wasm;

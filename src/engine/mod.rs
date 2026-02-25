@@ -1,5 +1,6 @@
 pub mod clock;
 pub mod optimizer;
+pub mod reserve;
 pub mod state;
 pub mod topo;
 
@@ -7,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
 
-use crate::model::node::{CronInterval, Node, NodeId, Trigger};
+use crate::model::node::{CronInterval, Node, NodeId, SpotSide, Trigger};
 use crate::model::workflow::Workflow;
 use crate::venues::{ExecutionResult, RiskParams, SimMetrics, Venue};
 
@@ -77,6 +78,9 @@ impl Engine {
     pub async fn tick(&mut self, now: u64, dt_secs: f64) -> Result<Vec<NodeId>> {
         // Tick all venues
         self.tick_venues(now, dt_secs).await?;
+
+        // Protect perp margins — pull from lending/idle if approaching liquidation
+        self.protect_margins().await?;
 
         // Fire triggered nodes
         let mut fired = Vec::new();
@@ -231,6 +235,9 @@ impl Engine {
             self.distribute_result(node_id, &input_token, result)?;
         }
 
+        // For spot buys with downstream edges, extract held tokens so they can route
+        self.extract_spot_for_downstream(node_id, &node).await?;
+
         Ok(())
     }
 
@@ -313,7 +320,24 @@ impl Engine {
         risks
     }
 
-    /// Execute an optimizer node: compute Kelly allocations, distribute capital to targets.
+    /// Execute an optimizer node: compute Kelly allocations and rebalance.
+    ///
+    /// Group-aware rebalancing:
+    /// 1. Compute total portfolio value (all venue positions + optimizer cash)
+    /// 2. Compute Kelly target fractions per group
+    /// 3. Check drift at the GROUP level (not individual legs)
+    /// 4. Unwind over-allocated groups → all legs shrink proportionally
+    /// 5. Deploy to under-allocated groups → all legs grow equally
+    ///
+    /// This preserves hedges: a delta-neutral group (spot+perp) never has
+    /// capital moved between legs, only scaled as a whole.
+    /// Optimizer margin threshold: when a perp in a hedged group has margin ratio
+    /// below this, the optimizer pulls from lending donors to add margin.
+    /// Higher than the emergency threshold — this is the "smooth" rebalance.
+    const OPTIMIZER_MARGIN_THRESHOLD: f64 = 0.50;
+    /// Target margin ratio the optimizer aims for after topping up.
+    const OPTIMIZER_MARGIN_TARGET: f64 = 0.80;
+
     async fn execute_optimizer(
         &mut self,
         node: &Node,
@@ -321,56 +345,141 @@ impl Engine {
         _input_amount: f64,
         drift_threshold: f64,
     ) -> Result<()> {
-        // Get total capital available at this optimizer.
-        // Note: gather_inputs() already deposited input_amount into our balance,
-        // so existing_balance already includes it. Don't add input_amount again.
-        let total_capital = self.balances.get(node_id, "USDC");
-
-        if total_capital <= 0.0 {
-            return Ok(());
-        }
-
-        // Gather adaptive stats and risk params from venues for Kelly computation
+        // Gather adaptive stats and risk params
         let venue_stats = self.gather_venue_stats();
         let venue_risks = self.gather_venue_risks();
 
-        // Check drift — if this is a periodic rebalance, only proceed if drifted
-        if drift_threshold > 0.0 && self.trigger_last_fired.contains_key(node_id) {
-            let alloc_result = optimizer::compute_kelly_allocations(node, total_capital, &venue_stats, &venue_risks)?;
-            let mut current_values: Vec<(NodeId, f64)> = Vec::new();
-            for (target_id, _) in &alloc_result.allocations {
-                let value = if let Some(venue) = self.venues.get(target_id.as_str()) {
-                    venue.total_value().await.unwrap_or(0.0)
-                } else {
-                    0.0
-                };
-                current_values.push((target_id.clone(), value));
-            }
+        // Optimizer's available cash
+        let optimizer_balance = self.balances.get(node_id, "USDC");
 
-            if !optimizer::should_rebalance(
-                &current_values,
-                &alloc_result.allocations,
-                drift_threshold,
-            ) {
-                return Ok(());
+        // Compute group-level Kelly allocations
+        let alloc_result = optimizer::compute_kelly_allocations(
+            node, 0.0, &venue_stats, &venue_risks,
+        )?;
+
+        // Compute current GROUP values
+        let mut group_values: Vec<f64> = Vec::new();
+        let mut venue_total = 0.0;
+        for group in &alloc_result.groups {
+            let mut gv = 0.0;
+            for target_id in &group.targets {
+                gv += self.effective_venue_value(target_id).await;
             }
-            self.rebalances += 1;
+            group_values.push(gv);
+            venue_total += gv;
         }
 
-        // Compute and distribute allocations
-        let alloc_result = optimizer::compute_kelly_allocations(node, total_capital, &venue_stats, &venue_risks)?;
+        let total_portfolio = venue_total + optimizer_balance;
+        if total_portfolio <= 0.0 {
+            return Ok(());
+        }
 
-        // Compute how much capital will actually be distributed
-        let distributed: f64 = alloc_result
-            .allocations
-            .iter()
-            .map(|(_, frac)| total_capital * frac)
-            .sum();
+        // ── Phase 0: Margin health check (asymmetric — only when perp is stressed) ──
+        // Like the keeper's PerpSpot optimizer: check margin ratio and pull from
+        // lending donors to add margin. Only acts when margin is low (asymmetric),
+        // never rebalances the other direction (that's just lower yield, no risk).
+        let groups_info = self.collect_optimizer_groups();
+        let mut margin_topped_up = false;
+        for (perp_ids, donor_ids) in &groups_info {
+            for perp_id in perp_ids {
+                let ratio = match self.venues.get(perp_id.as_str()) {
+                    Some(v) => match v.margin_ratio() {
+                        Some(r) if r < Self::OPTIMIZER_MARGIN_THRESHOLD => r,
+                        _ => continue,
+                    },
+                    None => continue,
+                };
 
-        // Deduct only what's distributed; remainder stays in optimizer's balance
-        self.balances.deduct(node_id, "USDC", distributed);
+                let perp_value = self.venues.get(perp_id.as_str())
+                    .unwrap().total_value().await.unwrap_or(0.0);
+                if perp_value <= 0.0 {
+                    continue;
+                }
 
-        // Find outgoing edges to determine token
+                let notional = if ratio > 0.0 { perp_value / ratio } else { perp_value * 10.0 };
+                let needed = notional * (Self::OPTIMIZER_MARGIN_TARGET - ratio);
+                if needed <= 0.0 {
+                    continue;
+                }
+
+                // Pull from lending donors (other groups, never hedge legs)
+                let mut total_donor_value = 0.0;
+                let mut donor_values: Vec<(NodeId, f64)> = Vec::new();
+                for did in donor_ids {
+                    if let Some(v) = self.venues.get(did.as_str()) {
+                        let val = v.total_value().await.unwrap_or(0.0);
+                        if val > 0.0 {
+                            donor_values.push((did.clone(), val));
+                            total_donor_value += val;
+                        }
+                    }
+                }
+                if total_donor_value <= 0.0 {
+                    continue;
+                }
+
+                // Cap at 50% of donor value to avoid draining lending entirely
+                let pull_amount = needed.min(total_donor_value * 0.5);
+                let mut total_freed = 0.0;
+                for (did, dval) in &donor_values {
+                    let share = pull_amount * (dval / total_donor_value);
+                    let frac = (share / dval).min(0.5);
+                    if frac <= 0.0 {
+                        continue;
+                    }
+                    if let Some(venue) = self.venues.get_mut(did.as_str()) {
+                        total_freed += venue.unwind(frac).await.unwrap_or(0.0);
+                    }
+                }
+
+                if total_freed > 0.0 {
+                    if let Some(venue) = self.venues.get_mut(perp_id.as_str()) {
+                        venue.add_margin(total_freed);
+                    }
+                    eprintln!(
+                        "  [optimizer] {} margin {:.1}% → added ${:.2} from {:?}",
+                        perp_id, ratio * 100.0, total_freed, donor_ids,
+                    );
+                    margin_topped_up = true;
+                }
+            }
+        }
+
+        // If we topped up margin, recompute group values since donor values changed
+        if margin_topped_up {
+            group_values.clear();
+            venue_total = 0.0;
+            for group in &alloc_result.groups {
+                let mut gv = 0.0;
+                for target_id in &group.targets {
+                    gv += self.effective_venue_value(target_id).await;
+                }
+                group_values.push(gv);
+                venue_total += gv;
+            }
+        }
+
+        // ── Drift check at GROUP level ──
+        let total_portfolio = venue_total + self.balances.get(node_id, "USDC");
+        if total_portfolio <= 0.0 {
+            return Ok(());
+        }
+
+        if drift_threshold > 0.0 && self.trigger_last_fired.contains_key(node_id) {
+            let mut max_drift = 0.0_f64;
+            for (group, &group_value) in alloc_result.groups.iter().zip(group_values.iter()) {
+                let actual_frac = group_value / total_portfolio;
+                max_drift = max_drift.max((actual_frac - group.fraction).abs());
+            }
+            if max_drift <= drift_threshold && !margin_topped_up {
+                return Ok(());
+            }
+            if max_drift > drift_threshold {
+                self.rebalances += 1;
+            }
+        }
+
+        // Find outgoing edges to determine token per target
         let outgoing_edges: Vec<_> = self
             .workflow
             .edges
@@ -379,34 +488,343 @@ impl Engine {
             .cloned()
             .collect();
 
-        for (target_id, fraction) in &alloc_result.allocations {
-            let amount = total_capital * fraction;
+        // ── Phase 1: Unwind over-allocated GROUPS (all legs shrink proportionally) ──
+        for (group, &group_value) in alloc_result.groups.iter().zip(group_values.iter()) {
+            let target_value = total_portfolio * group.fraction;
+
+            if group_value > target_value + 1.0 {
+                let excess = group_value - target_value;
+                let unwind_frac = excess / group_value;
+
+                for target_id in &group.targets {
+                    // Compute the effective value (includes downstream) to determine
+                    // how much USD to free from this leg.
+                    let eff_value = self.effective_venue_value(target_id).await;
+                    let leg_unwind_usd = eff_value * unwind_frac;
+                    if leg_unwind_usd <= 0.0 {
+                        continue;
+                    }
+
+                    // Unwind downstream venues first (e.g. lend_eth under buy_eth).
+                    // Lending unwind already returns USD value.
+                    let downstream_edges: Vec<_> = self
+                        .workflow
+                        .edges
+                        .iter()
+                        .filter(|e| e.from_node == *target_id && e.token != "USDC")
+                        .cloned()
+                        .collect();
+                    for edge in &downstream_edges {
+                        if let Some(ds_venue) = self.venues.get_mut(edge.to_node.as_str()) {
+                            let freed = ds_venue.unwind(unwind_frac).await.unwrap_or(0.0);
+                            if freed > 0.0 {
+                                self.balances.add(node_id, "USDC", freed);
+                            }
+                        }
+                    }
+
+                    // Also unwind the spot venue to reduce its held amount proportionally.
+                    // SpotSimulator.unwind() returns USD from selling held tokens.
+                    if let Some(venue) = self.venues.get_mut(target_id.as_str()) {
+                        let freed = venue.unwind(unwind_frac).await.unwrap_or(0.0);
+                        if freed > 0.0 {
+                            self.balances.add(node_id, "USDC", freed);
+                        }
+                    }
+                }
+                eprintln!(
+                    "  [rebalance] {} over-allocated by ${:.2}, unwound proportionally",
+                    group.targets.join("+"),
+                    excess,
+                );
+            }
+        }
+
+        // ── Phase 2: Deploy to under-allocated GROUPS (all legs grow equally) ──
+        for (group, &group_value) in alloc_result.groups.iter().zip(group_values.iter()) {
+            let target_value = total_portfolio * group.fraction;
+
+            if group_value < target_value {
+                let deficit = target_value - group_value;
+                let available = self.balances.get(node_id, "USDC");
+                let amount = deficit.min(available);
+                if amount <= 0.0 {
+                    continue;
+                }
+
+                // Split equally among legs in the group
+                let per_leg = amount / group.targets.len().max(1) as f64;
+
+                for target_id in &group.targets {
+                    let leg_amount = per_leg.min(self.balances.get(node_id, "USDC"));
+                    if leg_amount <= 0.0 {
+                        continue;
+                    }
+
+                    let token = outgoing_edges
+                        .iter()
+                        .find(|e| e.to_node == *target_id)
+                        .map(|e| e.token.clone())
+                        .unwrap_or_else(|| "USDC".to_string());
+
+                    self.balances.deduct(node_id, "USDC", leg_amount);
+                    self.balances.add(target_id, &token, leg_amount);
+
+                    let target_node = self
+                        .workflow
+                        .nodes
+                        .iter()
+                        .find(|n| n.id() == target_id)
+                        .cloned();
+
+                    if let Some(ref target_node) = target_node {
+                        if let Some(venue) = self.venues.get_mut(target_id.as_str()) {
+                            let result = venue.execute(target_node, leg_amount).await?;
+                            self.distribute_result(target_id, &token, result)?;
+                        }
+
+                        // Extract spot holdings and route downstream
+                        self.extract_spot_for_downstream(target_id, target_node)
+                            .await?;
+                        self.route_spot_downstream(target_id).await?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Emergency safety threshold: last-resort margin protection that fires per-tick.
+    /// The optimizer handles margin at 50% — this only fires if something slips past.
+    /// 0.10 means "emergency top-up when equity is only 10% of position size".
+    const MARGIN_SAFETY_THRESHOLD: f64 = 0.10;
+    /// Emergency target margin ratio after top-up.
+    const MARGIN_TARGET_RATIO: f64 = 0.30;
+
+    /// Check all perp venues for margin health. If any are below the safety
+    /// threshold, unwind capital from non-perp venues in the same optimizer
+    /// group (lending, spot) and add it as margin.
+    async fn protect_margins(&mut self) -> Result<()> {
+        // Collect optimizer groups from workflow
+        let groups = self.collect_optimizer_groups();
+
+        for (perp_ids, donor_ids) in &groups {
+            for perp_id in perp_ids {
+                let margin_ratio = match self.venues.get(perp_id.as_str()) {
+                    Some(v) => v.margin_ratio(),
+                    None => continue,
+                };
+
+                let ratio = match margin_ratio {
+                    Some(r) if r < Self::MARGIN_SAFETY_THRESHOLD => r,
+                    _ => continue,
+                };
+
+                // How much margin do we need to reach target?
+                let perp_value = self.venues.get(perp_id.as_str())
+                    .unwrap().total_value().await.unwrap_or(0.0);
+                if perp_value <= 0.0 {
+                    continue;
+                }
+
+                // notional = equity / margin_ratio, need = notional * (target - current)
+                let notional = if ratio > 0.0 { perp_value / ratio } else { perp_value * 10.0 };
+                let needed = notional * (Self::MARGIN_TARGET_RATIO - ratio);
+                if needed <= 0.0 {
+                    continue;
+                }
+
+                // Pull from donor venues (lending, etc.) proportionally
+                let mut total_donor_value = 0.0;
+                let mut donor_values: Vec<(NodeId, f64)> = Vec::new();
+                for did in donor_ids {
+                    if let Some(v) = self.venues.get(did.as_str()) {
+                        let val = v.total_value().await.unwrap_or(0.0);
+                        if val > 0.0 {
+                            donor_values.push((did.clone(), val));
+                            total_donor_value += val;
+                        }
+                    }
+                }
+
+                if total_donor_value <= 0.0 {
+                    continue;
+                }
+
+                let pull_amount = needed.min(total_donor_value * 0.5); // never drain more than 50%
+                let mut total_freed = 0.0;
+
+                for (did, dval) in &donor_values {
+                    let share = pull_amount * (dval / total_donor_value);
+                    let frac = share / dval;
+                    if frac <= 0.0 {
+                        continue;
+                    }
+                    if let Some(venue) = self.venues.get_mut(did.as_str()) {
+                        let freed = venue.unwind(frac.min(0.5)).await.unwrap_or(0.0);
+                        total_freed += freed;
+                    }
+                }
+
+                if total_freed > 0.0 {
+                    if let Some(venue) = self.venues.get_mut(perp_id.as_str()) {
+                        venue.add_margin(total_freed);
+                    }
+                    eprintln!(
+                        "  [margin-protect] {} ratio {:.1}% → added ${:.2} margin from {:?}",
+                        perp_id, ratio * 100.0, total_freed,
+                        donor_ids,
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Collect optimizer groups: returns (perp_node_ids, donor_node_ids) pairs.
+    /// Perps are nodes that have margin_ratio. Donors are targets from OTHER
+    /// allocation groups (not the same group — never pull from hedge legs).
+    fn collect_optimizer_groups(&self) -> Vec<(Vec<NodeId>, Vec<NodeId>)> {
+        let mut results = Vec::new();
+
+        for node in &self.workflow.nodes {
+            if let Node::Optimizer { allocations, .. } = node {
+                let mut all_perps = Vec::new();
+                // Track which group each perp belongs to
+                let mut perp_group_indices: Vec<usize> = Vec::new();
+
+                // First pass: find all perps and their group index
+                for (gi, alloc) in allocations.iter().enumerate() {
+                    for t in &alloc.targets() {
+                        let is_perp = self.venues.get(*t)
+                            .map(|v| v.margin_ratio().is_some())
+                            .unwrap_or(false);
+                        if is_perp {
+                            all_perps.push(t.to_string());
+                            perp_group_indices.push(gi);
+                        }
+                    }
+                }
+
+                if all_perps.is_empty() {
+                    continue;
+                }
+
+                // Donors = targets from groups that DON'T contain perps
+                // (never pull from hedge legs in the same delta-neutral group)
+                let perp_groups: std::collections::HashSet<usize> =
+                    perp_group_indices.iter().copied().collect();
+                let mut donors = Vec::new();
+                for (gi, alloc) in allocations.iter().enumerate() {
+                    if perp_groups.contains(&gi) {
+                        continue; // skip the delta-neutral group
+                    }
+                    for t in &alloc.targets() {
+                        donors.push(t.to_string());
+                    }
+                }
+
+                results.push((all_perps, donors));
+            }
+        }
+
+        results
+    }
+
+    /// Compute the effective value of a venue, including any downstream venues
+    /// connected via non-USDC edges (e.g. spot buy → ETH lending).
+    /// This ensures the optimizer sees buy_eth's value as including lend_eth's value
+    /// after extraction routes ETH downstream.
+    pub async fn effective_venue_value(&self, node_id: &str) -> f64 {
+        let mut value = if let Some(venue) = self.venues.get(node_id) {
+            venue.total_value().await.unwrap_or(0.0)
+        } else {
+            0.0
+        };
+
+        // Add downstream venue values for non-USDC edges (spot→lending chains)
+        for edge in &self.workflow.edges {
+            if edge.from_node == node_id && edge.token != "USDC" {
+                if let Some(downstream) = self.venues.get(edge.to_node.as_str()) {
+                    value += downstream.total_value().await.unwrap_or(0.0);
+                }
+            }
+        }
+
+        value
+    }
+
+    /// For spot buy nodes with downstream edges expecting the base token,
+    /// extract the held amount from the venue and place it on the node's balance
+    /// so the edge system can route it to downstream nodes (e.g. lending).
+    async fn extract_spot_for_downstream(&mut self, node_id: &str, node: &Node) -> Result<()> {
+        if let Node::Spot {
+            pair,
+            side: SpotSide::Buy,
+            ..
+        } = node
+        {
+            let base = pair.split('/').next().unwrap_or("ETH").to_string();
+
+            // Only extract if there's a downstream edge for the base token
+            let has_downstream = self
+                .workflow
+                .edges
+                .iter()
+                .any(|e| e.from_node == node_id && e.token == base);
+
+            if has_downstream {
+                if let Some(venue) = self.venues.get(node_id) {
+                    let value = venue.total_value().await.unwrap_or(0.0);
+                    if value > 0.0 {
+                        // Unwind 100% — moves tokens from venue internal state to balances
+                        let venue = self.venues.get_mut(node_id).unwrap();
+                        let freed = venue.unwind(1.0).await.unwrap_or(0.0);
+                        if freed > 0.0 {
+                            self.balances.add(node_id, &base, freed);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Route extracted spot tokens to downstream nodes.
+    /// Used by the optimizer which bypasses the normal deploy flow.
+    async fn route_spot_downstream(&mut self, source_id: &str) -> Result<()> {
+        let edges: Vec<_> = self
+            .workflow
+            .edges
+            .iter()
+            .filter(|e| e.from_node == source_id && e.token != "USDC")
+            .cloned()
+            .collect();
+
+        for edge in &edges {
+            let available = self.balances.get(source_id, &edge.token);
+            let amount = state::resolve(available, &edge.amount);
             if amount <= 0.0 {
                 continue;
             }
 
-            // Find the edge token for this target
-            let token = outgoing_edges
-                .iter()
-                .find(|e| e.to_node == *target_id)
-                .map(|e| e.token.clone())
-                .unwrap_or_else(|| "USDC".to_string());
+            self.balances.deduct(source_id, &edge.token, amount);
+            self.balances.add(&edge.to_node, &edge.token, amount);
 
-            // Add to target node's balance
-            self.balances.add(target_id, &token, amount);
-
-            // Execute the target node's venue
-            let target_node = self
+            // Execute downstream venue with the routed tokens
+            let downstream_node = self
                 .workflow
                 .nodes
                 .iter()
-                .find(|n| n.id() == target_id)
+                .find(|n| n.id() == edge.to_node)
                 .cloned();
 
-            if let Some(ref target_node) = target_node {
-                if let Some(venue) = self.venues.get_mut(target_id.as_str()) {
-                    let result = venue.execute(target_node, amount).await?;
-                    self.distribute_result(target_id, &token, result)?;
+            if let Some(ref dn) = downstream_node {
+                if let Some(venue) = self.venues.get_mut(edge.to_node.as_str()) {
+                    let result = venue.execute(dn, amount).await?;
+                    self.distribute_result(&edge.to_node, &edge.token, result)?;
                 }
             }
         }

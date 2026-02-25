@@ -5,10 +5,18 @@ use anyhow::{bail, Result};
 use crate::model::node::{Node, NodeId, VenueAllocation};
 use crate::venues::RiskParams;
 
+/// A single allocation group (may contain one or more co-hedged targets).
+pub struct AllocationGroup {
+    /// Target node IDs in this group (e.g. ["buy_eth", "short_eth"]).
+    pub targets: Vec<NodeId>,
+    /// Fraction of total portfolio for the entire group.
+    pub fraction: f64,
+}
+
 /// Result of a Kelly allocation computation.
 pub struct AllocationResult {
-    /// (target_node_id, fraction_of_capital)
-    pub allocations: Vec<(NodeId, f64)>,
+    /// Group-level allocations (preserves hedge structure).
+    pub groups: Vec<AllocationGroup>,
 }
 
 /// Resolved stats for one allocation (static from JSON or derived from venue data).
@@ -60,7 +68,7 @@ pub fn compute_kelly_allocations(
 
     if allocations.is_empty() {
         return Ok(AllocationResult {
-            allocations: vec![],
+            groups: vec![],
         });
     }
 
@@ -127,20 +135,14 @@ pub fn compute_kelly_allocations(
         eprintln!("  [kelly] {label} → {:.1}%", frac * 100.0);
     }
 
-    // Expand group allocations: if an allocation has multiple target_nodes,
-    // split the fraction equally among them.
-    let mut result = Vec::new();
+    // Build group-level allocations (preserve hedge structure)
+    let mut groups = Vec::new();
     for (alloc, &fraction) in allocations.iter().zip(fractions.iter()) {
-        let targets = alloc.targets();
-        let per_node = fraction / targets.len().max(1) as f64;
-        for target in targets {
-            result.push((target.to_string(), per_node));
-        }
+        let targets = alloc.targets().iter().map(|s| s.to_string()).collect();
+        groups.push(AllocationGroup { targets, fraction });
     }
 
-    Ok(AllocationResult {
-        allocations: result,
-    })
+    Ok(AllocationResult { groups })
 }
 
 /// Resolve expected_return and volatility for an allocation.
@@ -336,28 +338,3 @@ fn smooth_kelly(
     (optimal_f * kelly_fraction).max(0.0)
 }
 
-/// Check if current allocations have drifted past the threshold.
-/// Returns true if any venue's actual fraction differs from target by more than `drift_threshold`.
-pub fn should_rebalance(
-    current_values: &[(NodeId, f64)],
-    target_fractions: &[(NodeId, f64)],
-    drift_threshold: f64,
-) -> bool {
-    let total: f64 = current_values.iter().map(|(_, v)| v).sum();
-    if total <= 0.0 {
-        return false;
-    }
-
-    for (target_id, target_frac) in target_fractions {
-        let actual_value = current_values
-            .iter()
-            .find(|(id, _)| id == target_id)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0);
-        let actual_frac = actual_value / total;
-        if (actual_frac - target_frac).abs() > drift_threshold {
-            return true;
-        }
-    }
-    false
-}

@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
-use alloy::primitives::Address;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "full")]
 use super::chain::Chain;
 use super::edge::Edge;
 use super::node::Node;
+use super::reserve::ReserveConfig;
 
 /// A named workflow: a directed acyclic graph of DeFi operation nodes
 /// connected by token-flow edges.
@@ -25,21 +26,31 @@ pub struct Workflow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<HashMap<String, HashMap<String, String>>>,
     /// Protocol contract addresses per chain.
-    /// Example: `{"pendle_router": {"hyperevm": "0x..."}, "hyperlend_pool": {"hyperevm": "0x..."}}`.
+    /// Example: `{"pendle_router": {"hyperevm": "0x..."}}`.
     /// Used by live executors to resolve protocol-specific contract addresses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contracts: Option<HashMap<String, HashMap<String, String>>>,
+    /// Optional vault reserve management configuration.
+    /// When present, the daemon monitors the vault's reserve ratio and
+    /// unwinds venue positions to replenish it when depleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserve: Option<ReserveConfig>,
     /// The nodes (operations) in this workflow.
     pub nodes: Vec<Node>,
     /// The edges (token flows) connecting nodes.
     pub edges: Vec<Edge>,
 }
 
+#[cfg(feature = "full")]
 #[allow(dead_code)]
 impl Workflow {
     /// Resolve a token symbol to its contract address for a given chain.
     /// Looks up the workflow's `tokens` manifest.
-    pub fn resolve_token_address(&self, chain: &Chain, symbol: &str) -> Option<Address> {
+    pub fn resolve_token_address(
+        &self,
+        chain: &Chain,
+        symbol: &str,
+    ) -> Option<alloy::primitives::Address> {
         let manifest = self.tokens.as_ref()?;
         crate::venues::evm::resolve_token(manifest, chain, symbol)
     }
@@ -56,7 +67,11 @@ impl Workflow {
 
     /// Resolve a protocol contract address by name and chain.
     /// Looks up the workflow's `contracts` manifest.
-    pub fn resolve_contract(&self, name: &str, chain: &Chain) -> Option<Address> {
+    pub fn resolve_contract(
+        &self,
+        name: &str,
+        chain: &Chain,
+    ) -> Option<alloy::primitives::Address> {
         let manifest = self.contract_manifest();
         crate::venues::evm::resolve_contract(&manifest, name, chain)
     }

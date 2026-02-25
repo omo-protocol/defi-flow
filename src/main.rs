@@ -33,6 +33,7 @@ fn main() -> anyhow::Result<()> {
             seed,
             verbose,
             output,
+            tick_csv,
             monte_carlo,
         } => backtest::run(&backtest::BacktestConfig {
             workflow_path: file,
@@ -42,6 +43,7 @@ fn main() -> anyhow::Result<()> {
             seed,
             verbose,
             output,
+            tick_csv,
             monte_carlo: monte_carlo.map(|n| backtest::monte_carlo::MonteCarloConfig {
                 n_simulations: n,
             }),

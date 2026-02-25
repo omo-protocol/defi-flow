@@ -1,10 +1,10 @@
 mod contracts;
 mod graph;
+#[cfg(feature = "full")]
 pub mod onchain;
 mod references;
+mod reserve;
 mod tokens;
-
-use std::path::Path;
 
 use thiserror::Error;
 
@@ -71,6 +71,23 @@ pub enum ValidationError {
         node_id: String,
     },
 
+    // ── Reserve config validation errors ────────────────────────────
+
+    #[error("Reserve config: `{field}` has invalid value {value}")]
+    ReserveInvalidThreshold { field: String, value: f64 },
+
+    #[error("Reserve config: trigger_threshold ({trigger}) must be less than target_ratio ({target})")]
+    ReserveTriggerAboveTarget { trigger: f64, target: f64 },
+
+    #[error("Reserve config: vault_chain `{chain}` has no rpc_url (needed for on-chain vault reads)")]
+    ReserveMissingRpc { chain: String },
+
+    #[error("Reserve config: vault `{vault}` not found in contracts manifest for chain `{chain}`")]
+    ReserveVaultNotInManifest { vault: String, chain: String },
+
+    #[error("Reserve config: token `{token}` not found in tokens manifest for chain `{chain}`")]
+    ReserveTokenNotInManifest { token: String, chain: String },
+
     // ── On-chain validation errors ──────────────────────────────────
 
     #[error("RPC unreachable for chain `{chain}` at {url}: {reason}")]
@@ -110,8 +127,9 @@ pub enum ValidationError {
     },
 }
 
+#[cfg(feature = "full")]
 /// Load and fully validate a workflow from a JSON file.
-pub fn load_and_validate(path: &Path) -> Result<Workflow, Vec<ValidationError>> {
+pub fn load_and_validate(path: &std::path::Path) -> Result<Workflow, Vec<ValidationError>> {
     let contents = std::fs::read_to_string(path).map_err(|e| vec![ValidationError::Io(e)])?;
     let workflow: Workflow =
         serde_json::from_str(&contents).map_err(|e| vec![ValidationError::Json(e)])?;
@@ -128,6 +146,7 @@ pub fn validate(workflow: &Workflow) -> Result<(), Vec<ValidationError>> {
     errors.extend(graph::check_dag(workflow));
     errors.extend(tokens::check_token_compatibility(workflow));
     errors.extend(contracts::check_contract_manifest(workflow));
+    errors.extend(reserve::check_reserve_config(workflow));
 
     if errors.is_empty() {
         Ok(())
@@ -136,8 +155,9 @@ pub fn validate(workflow: &Workflow) -> Result<(), Vec<ValidationError>> {
     }
 }
 
+#[cfg(feature = "full")]
 /// CLI entry point for the `validate` subcommand.
-pub fn run(path: &Path) -> anyhow::Result<()> {
+pub fn run(path: &std::path::Path) -> anyhow::Result<()> {
     let wf = match load_and_validate(path) {
         Ok(wf) => {
             println!(

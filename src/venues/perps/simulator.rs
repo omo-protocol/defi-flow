@@ -302,6 +302,32 @@ impl Venue for PerpSimulator {
         }
     }
 
+    async fn unwind(&mut self, fraction: f64) -> Result<f64> {
+        let total = self.total_value().await?;
+        if total <= 0.0 || fraction <= 0.0 {
+            return Ok(0.0);
+        }
+        let f = fraction.min(1.0);
+
+        // Scale down position proportionally — same pattern as lending/vault/LP.
+        // total_value() = balance + margin + unrealized_pnl, so scaling all
+        // components by (1-f) guarantees freed + remaining == original total.
+        if self.position.position_amt.abs() > 1e-12 {
+            let remaining = self.position.position_amt.abs() * (1.0 - f);
+            if remaining < 1e-12 {
+                self.position = SimulatedPosition::default();
+            } else {
+                let sign = self.position.position_amt.signum();
+                self.position.position_amt = remaining * sign;
+                self.position.isolated_margin *= 1.0 - f;
+            }
+        }
+
+        self.balance *= 1.0 - f;
+
+        Ok(total * f)
+    }
+
     fn alpha_stats(&self) -> Option<(f64, f64)> {
         // Use full dataset — in production, historical data is available before strategy starts.
         compute_funding_stats(&self.market_data)
@@ -309,6 +335,25 @@ impl Venue for PerpSimulator {
 
     fn risk_params(&self) -> Option<RiskParams> {
         compute_perp_risk(&self.market_data, self.max_slippage_bps)
+    }
+
+    fn margin_ratio(&self) -> Option<f64> {
+        let pos = &self.position;
+        if pos.position_amt.abs() < 1e-12 {
+            return None; // no position
+        }
+        let row = self.current_market();
+        let unrealized_pnl = pos.position_amt * (row.mark_price - pos.entry_price);
+        let equity = pos.isolated_margin + unrealized_pnl + self.balance;
+        let notional = pos.position_amt.abs() * row.mark_price;
+        if notional <= 0.0 {
+            return None;
+        }
+        Some(equity / notional)
+    }
+
+    fn add_margin(&mut self, amount: f64) {
+        self.position.isolated_margin += amount;
     }
 }
 
@@ -417,6 +462,22 @@ impl Venue for SpotSimulator {
         self.current_ts = now;
         self.advance_cursor();
         Ok(())
+    }
+
+    async fn unwind(&mut self, fraction: f64) -> Result<f64> {
+        if self.held_amount <= 1e-12 || fraction <= 0.0 {
+            return Ok(0.0);
+        }
+        let f = fraction.min(1.0);
+        let sell_amount = self.held_amount * f;
+        let price = self.current_row().price;
+        let freed = sell_amount * price;
+        self.held_amount -= sell_amount;
+        if self.held_amount < 1e-12 {
+            self.held_amount = 0.0;
+            self.entry_price = 0.0;
+        }
+        Ok(freed)
     }
 
     fn alpha_stats(&self) -> Option<(f64, f64)> {

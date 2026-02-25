@@ -78,6 +78,14 @@ pub trait Venue: Send + Sync {
     /// `now` is the unix timestamp, `dt_secs` is seconds since the previous tick.
     async fn tick(&mut self, now: u64, dt_secs: f64) -> Result<()>;
 
+    /// Unwind (reduce) positions by the given fraction (0.0–1.0).
+    /// Returns the USD value of capital freed.
+    ///
+    /// Used by:
+    /// - **Optimizer rebalancing**: unwind over-allocated venues to redistribute capital.
+    /// - **Reserve management**: unwind pro-rata from all venues to replenish vault reserve.
+    async fn unwind(&mut self, fraction: f64) -> Result<f64>;
+
     /// Report accumulated metrics. Default: all zeros.
     fn metrics(&self) -> SimMetrics {
         SimMetrics::default()
@@ -100,6 +108,19 @@ pub trait Venue: Send + Sync {
     fn risk_params(&self) -> Option<RiskParams> {
         None
     }
+
+    /// Current margin ratio (equity / notional) for leveraged positions.
+    /// Returns `None` for venues without margin (lending, spot, etc.).
+    /// The optimizer uses this to detect perps approaching liquidation
+    /// and pull capital from other venues to add margin.
+    fn margin_ratio(&self) -> Option<f64> {
+        None
+    }
+
+    /// Add margin to the venue (top up a perp position).
+    /// Default no-op for venues that don't use margin.
+    fn add_margin(&mut self, _amount: f64) {}
+
 }
 
 // ── Build mode ──────────────────────────────────────────────────────

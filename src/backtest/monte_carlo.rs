@@ -157,6 +157,20 @@ pub fn run(
             file_params.iter().map(|(_, _, p)| p.n_periods()).max().unwrap_or(100)
         });
 
+    // Build a timestamp→GBM_index map from the perp's timestamps.
+    // This ensures spot and perp use the same GBM factor at the same calendar time.
+    let shared_timestamps: Vec<u64> = perp_params
+        .map(|p| p.timestamps.clone())
+        .unwrap_or_default();
+    let ts_to_gbm_idx: std::collections::HashMap<u64, usize> = shared_timestamps
+        .iter()
+        .enumerate()
+        .map(|(i, &ts)| (ts, i))
+        .collect();
+    // Perp's start price — used to align spot price levels so delta-neutral
+    // strategies buy/short the same number of tokens at the same price.
+    let perp_start_price = perp_params.map(|p| p.start_price);
+
     let pb = indicatif::ProgressBar::new(mc_config.n_simulations as u64);
     pb.set_style(
         indicatif::ProgressStyle::default_bar()
@@ -194,6 +208,8 @@ pub fn run(
                     kind,
                     params,
                     &shared_gbm,
+                    &ts_to_gbm_idx,
+                    perp_start_price,
                     &mut rng,
                 )
                 .is_err()
@@ -225,6 +241,7 @@ pub fn run(
                 seed: sim_seed,
                 verbose: false,
                 output: None,
+                tick_csv: None,
                 monte_carlo: None,
             };
 
@@ -329,7 +346,7 @@ impl CsvParams {
 fn estimate_params(path: &Path, kind: &str) -> Result<CsvParams> {
     match kind {
         "perp" => estimate_perp_params(path).map(CsvParams::Perp),
-        "price" => estimate_price_params(path).map(CsvParams::Price),
+        "price" | "spot" => estimate_price_params(path).map(CsvParams::Price),
         "lending" => estimate_lending_params(path).map(CsvParams::Lending),
         "vault" => estimate_vault_params(path).map(CsvParams::Vault),
         "lp" => estimate_lp_params(path).map(CsvParams::Lp),
@@ -541,16 +558,19 @@ fn generate_ar1_path(
 
 /// Write a synthetic CSV for the given kind and parameters.
 /// `shared_gbm` provides correlated price multipliers across files.
+/// `ts_to_gbm_idx` maps timestamps to GBM array indices for cross-file alignment.
 fn generate_synthetic_csv(
     output_path: &Path,
     _kind: &str,
     params: &CsvParams,
     shared_gbm: &[f64],
+    ts_to_gbm_idx: &std::collections::HashMap<u64, usize>,
+    perp_start_price: Option<f64>,
     rng: &mut impl Rng,
 ) -> Result<()> {
     match params {
         CsvParams::Perp(p) => generate_perp_csv(output_path, p, shared_gbm, rng),
-        CsvParams::Price(p) => generate_price_csv(output_path, p, shared_gbm),
+        CsvParams::Price(p) => generate_price_csv(output_path, p, shared_gbm, ts_to_gbm_idx, perp_start_price),
         CsvParams::Lending(p) => generate_lending_csv(output_path, p, rng),
         CsvParams::Vault(p) => generate_vault_csv(output_path, p, rng),
         CsvParams::Lp(p) => generate_lp_csv(output_path, p, shared_gbm, rng),
@@ -639,8 +659,13 @@ fn generate_price_csv(
     output_path: &Path,
     params: &PriceParams,
     shared_gbm: &[f64],
+    ts_to_gbm_idx: &std::collections::HashMap<u64, usize>,
+    perp_start_price: Option<f64>,
 ) -> Result<()> {
     let n = params.n_periods;
+    // Use perp's start_price to ensure spot and perp have the same absolute price
+    // level — critical for delta-neutral strategies to buy/short equal token amounts.
+    let base_price = perp_start_price.unwrap_or(params.start_price);
 
     let mut writer = csv::Writer::from_path(output_path)
         .with_context(|| format!("writing {}", output_path.display()))?;
@@ -648,14 +673,17 @@ fn generate_price_csv(
     writer.write_record(["timestamp", "price", "bid", "ask"])?;
 
     for i in 0..n {
-        let gbm_factor = if i < shared_gbm.len() { shared_gbm[i] } else { 1.0 };
-        let price = params.start_price * gbm_factor;
-        let half_spread = price * params.spread_frac * 0.5;
         let ts = if i < params.timestamps.len() {
             params.timestamps[i]
         } else {
             params.timestamps.last().copied().unwrap_or(0) + (i as u64 * 28800)
         };
+
+        // Use timestamp-aligned GBM index so spot tracks the same price as perp
+        let gbm_idx = ts_to_gbm_idx.get(&ts).copied().unwrap_or(i);
+        let gbm_factor = if gbm_idx < shared_gbm.len() { shared_gbm[gbm_idx] } else { 1.0 };
+        let price = base_price * gbm_factor;
+        let half_spread = price * params.spread_frac * 0.5;
 
         writer.write_record(&[
             format!("{ts}"),
