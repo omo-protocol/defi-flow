@@ -3,7 +3,7 @@ use async_trait::async_trait;
 
 use super::data::LpCsvRow;
 use crate::model::node::{LpAction, Node};
-use crate::venues::{ExecutionResult, SimMetrics, Venue};
+use crate::venues::{ExecutionResult, RiskParams, SimMetrics, Venue};
 
 const SECS_PER_YEAR: f64 = 365.25 * 86400.0;
 
@@ -269,5 +269,54 @@ impl Venue for LpSimulator {
             lp_fees: self.accrued_fees,
             ..Default::default()
         }
+    }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        if self.market_data.len() < 10 {
+            return None;
+        }
+
+        let slice = &self.market_data;
+        let n = slice.len() as f64;
+
+        // fee_apy scaled by concentration + reward_rate (both annualized)
+        let apys: Vec<f64> = slice
+            .iter()
+            .map(|r| r.fee_apy * self.concentration + r.reward_rate)
+            .collect();
+        let mean = apys.iter().sum::<f64>() / n;
+        let var = apys.iter().map(|a| (a - mean).powi(2)).sum::<f64>() / (n - 1.0).max(1.0);
+
+        Some((mean, var.sqrt()))
+    }
+
+    fn risk_params(&self) -> Option<RiskParams> {
+        if self.market_data.len() < 20 {
+            return None;
+        }
+
+        // Estimate P(out of range) from historical tick moves
+        let data = &self.market_data;
+        let out_of_range_count = data
+            .iter()
+            .filter(|r| !is_in_range(r.current_tick, self.tick_lower, self.tick_upper))
+            .count();
+        let p_out_of_range = out_of_range_count as f64 / data.len() as f64;
+
+        // IL severity: concentrated positions amplify IL
+        // Full-range IL at 2x price move ≈ 5.7%
+        // Concentrated IL ≈ base_il * sqrt(concentration)
+        let base_il = 0.057;
+        let severity = (base_il * self.concentration.sqrt()).min(1.0);
+
+        // p_loss: probability of being out of range (loss of fee income + IL)
+        // Scale by severity to get expected loss event probability
+        let p_loss = p_out_of_range.min(1.0);
+
+        Some(RiskParams {
+            p_loss,
+            loss_severity: severity,
+            rebalance_cost: 0.003, // ~0.3% (swap + gas for LP repositioning)
+        })
     }
 }

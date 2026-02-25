@@ -34,8 +34,6 @@ fn main() -> anyhow::Result<()> {
             verbose,
             output,
             monte_carlo,
-            block_size,
-            gbm_vol_scale,
         } => backtest::run(&backtest::BacktestConfig {
             workflow_path: file,
             data_dir,
@@ -46,8 +44,6 @@ fn main() -> anyhow::Result<()> {
             output,
             monte_carlo: monte_carlo.map(|n| backtest::monte_carlo::MonteCarloConfig {
                 n_simulations: n,
-                block_size,
-                gbm_vol_scale,
             }),
         }),
         cli::Command::Run {

@@ -100,8 +100,8 @@ async fn fetch_perp(
             let funding_rate =
                 hyperliquid::find_nearest_funding(&funding_map, c.open_time, c.close_time);
 
-            // Annualize: 8h rate * 3 * 365 (signed — positive = longs pay shorts)
-            let funding_apy = funding_rate * 3.0 * 365.0;
+            // Annualize: hourly rate * 24 * 365 (Hyperliquid settles funding every hour)
+            let funding_apy = funding_rate * 24.0 * 365.0;
 
             // Synthetic bid/ask spread (~5bps from close)
             let spread = close * 0.0005;

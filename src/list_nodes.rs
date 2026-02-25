@@ -41,25 +41,12 @@ pub fn run() -> anyhow::Result<()> {
 4. spot
    Spot trade on a decentralized exchange.
    Parameters:
-     - venue:   SpotVenue (Aerodrome)
+     - venue:   SpotVenue (Hyperliquid)
      - pair:    String    (e.g. "ETH/USDC")
      - side:    SpotSide  (buy | sell)
      - trigger: Trigger?  (optional)
 
-5. lp
-   Liquidity provision — Aerodrome Slipstream concentrated liquidity.
-   Uses Uniswap V3-style NFT positions with tick ranges. Tighter ranges
-   earn more fees (concentration multiplier) but risk going out of range.
-   Parameters:
-     - venue:        LpVenue  (Aerodrome)
-     - pool:         String   (e.g. "cbBTC/WETH")
-     - action:       LpAction (add_liquidity | remove_liquidity | claim_rewards | compound | stake_gauge | unstake_gauge)
-     - tick_lower:   i32?     (lower tick bound, e.g. -500. Omit for full-range)
-     - tick_upper:   i32?     (upper tick bound, e.g.  500. Omit for full-range)
-     - tick_spacing:  i32?    (pool tick spacing, e.g. 100 for CL100, 200 for CL200)
-     - trigger:      Trigger? (optional, e.g. claim_rewards daily)
-
-6. movement
+5. movement
    Token movement — swap, bridge, or atomic swap+bridge.
    Unifies same-chain swaps, cross-chain bridges, and atomic cross-chain swaps.
    Parameters:
@@ -78,7 +65,7 @@ pub fn run() -> anyhow::Result<()> {
      - swap_bridge: Atomic cross-chain swap + bridge (e.g. AERO on Base → USDC on HyperEVM).
                     Providers: LiFi.
 
-7. lending
+6. lending
    Lending protocol — supply, borrow, repay, withdraw, claim rewards.
    Execution layer handles protocol-specific details (Morpho market IDs,
    HyperLend E-mode, Init Capital vault shares, etc.)
@@ -92,7 +79,7 @@ pub fn run() -> anyhow::Result<()> {
      - defillama_slug:      String? (optional DefiLlama project slug for fetch-data)
      - trigger:             Trigger? (optional, e.g. claim_rewards daily)
 
-8. vault
+7. vault
    Yield-bearing vault — deposit, withdraw, claim rewards.
    Execution layer handles protocol-specific details (ERC4626 interface, etc.)
    Parameters:
@@ -104,7 +91,7 @@ pub fn run() -> anyhow::Result<()> {
      - defillama_slug:      String? (optional DefiLlama project slug for fetch-data)
      - trigger:             Trigger? (optional, e.g. claim_rewards daily)
 
-9. pendle
+8. pendle
    Pendle yield tokenization — mint/redeem principal tokens (PT) for fixed yield
    or yield tokens (YT) for variable yield. Used in strategies like PT-kHYPE looping.
    Execution layer handles Pendle router interactions and market lookups.
@@ -112,6 +99,21 @@ pub fn run() -> anyhow::Result<()> {
      - market:  String       (e.g. "PT-kHYPE", "PT-stETH", "PT-eETH")
      - action:  PendleAction (mint_pt | redeem_pt | mint_yt | redeem_yt | claim_rewards)
      - trigger: Trigger?     (optional, e.g. claim_rewards weekly)
+
+9. lp
+   Concentrated liquidity provision on Aerodrome Slipstream (Base).
+   Deposit into LP positions, claim gauge rewards, compound fees.
+   The pool field is "TOKEN0/TOKEN1" — both tokens must be in the tokens manifest.
+   Requires "aerodrome_position_manager" in the contracts manifest for live execution.
+   Parameters:
+     - venue:        LpVenue    (Aerodrome)
+     - pool:         String     (e.g. "WETH/USDC", "cbBTC/WETH")
+     - action:       LpAction   (add_liquidity | remove_liquidity | claim_rewards | compound | stake_gauge | unstake_gauge)
+     - tick_lower:   i32?       (lower tick bound, full range if omitted)
+     - tick_upper:   i32?       (upper tick bound, full range if omitted)
+     - tick_spacing: i32?       (tick spacing for the pool, e.g. 100)
+     - chain:        Chain?     (defaults to Base if omitted)
+     - trigger:      Trigger?   (optional, e.g. compound daily, claim_rewards weekly)
 
 10. optimizer
    Capital allocation optimizer using Kelly Criterion.
@@ -124,10 +126,13 @@ pub fn run() -> anyhow::Result<()> {
      - allocations:     VenueAllocation[] (per-venue risk parameters)
      - trigger:         Trigger?          (e.g. daily rebalance check)
    VenueAllocation:
-     - target_node:    String  (node ID of downstream venue)
-     - expected_return: f64    (annualized, e.g. 0.15 = 15%)
-     - volatility:      f64    (annualized, e.g. 0.30 = 30%)
+     - target_node:     String? (node ID — use this OR target_nodes)
+     - target_nodes:    String[] (group of node IDs that share one Kelly allocation, split equally)
+     - expected_return: f64?   (annualized, e.g. 0.15 = 15%. If omitted, derived from venue data)
+     - volatility:      f64?   (annualized, e.g. 0.30 = 30%. If omitted, derived from venue data)
      - correlation:     f64    (with reference asset, default 0.0)
+   Adaptive mode: when expected_return/volatility are omitted, the optimizer
+   computes them from venue alpha_stats (funding rates, lending APY, etc.)
 
 Trigger (optional on any venue node)
 =====================================

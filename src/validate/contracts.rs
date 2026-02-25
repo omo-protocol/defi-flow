@@ -1,4 +1,4 @@
-use crate::model::node::{LpVenue, Node};
+use crate::model::node::Node;
 use crate::model::Workflow;
 use crate::venues::yield_tokens::pendle::pendle_contract_key;
 
@@ -42,14 +42,15 @@ pub fn check_contract_manifest(workflow: &Workflow) -> Vec<ValidationError> {
                 }
                 required.push(("pendle_router".to_string(), "*".to_string(), id.clone()));
             }
-            Node::Lp {
-                id,
-                venue: LpVenue::Aerodrome,
-                ..
-            } => {
+            Node::Lp { id, chain, .. } => {
+                // LP nodes need the position manager contract on their chain
+                let chain_name = chain
+                    .as_ref()
+                    .map(|c| c.name.clone())
+                    .unwrap_or_else(|| "base".to_string());
                 required.push((
                     "aerodrome_position_manager".to_string(),
-                    "base".to_string(),
+                    chain_name,
                     id.clone(),
                 ));
             }

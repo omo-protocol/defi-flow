@@ -6,7 +6,7 @@ use alloy::providers::{Provider, ProviderBuilder};
 use alloy::sol;
 
 use crate::model::chain::Chain;
-use crate::model::node::{LpVenue, Node};
+use crate::model::node::Node;
 use crate::model::Workflow;
 
 use super::ValidationError;
@@ -36,11 +36,6 @@ sol! {
         );
     }
 
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    contract INftManagerProbe {
-        function factory() external view returns (address);
-    }
 }
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -59,8 +54,6 @@ enum ContractRole {
     },
     /// Rewards controller — just check code exists (no standard probe)
     RewardsController,
-    /// NFT position manager — should respond to factory()
-    NftPositionManager,
     /// Unknown contract — just check code exists
     Unknown,
 }
@@ -197,14 +190,34 @@ fn infer_contract_roles(workflow: &Workflow) -> HashMap<(String, String), Contra
                     ContractRole::Vault,
                 );
             }
-            Node::Lp {
-                venue: LpVenue::Aerodrome,
-                ..
-            } => {
+            Node::Lp { chain, pool, .. } => {
+                // Position manager — just check code exists (no standard probe interface)
+                let chain_name = chain
+                    .as_ref()
+                    .map(|c| c.name.to_lowercase())
+                    .unwrap_or_else(|| "base".to_string());
                 roles.insert(
-                    ("aerodrome_position_manager".to_string(), "base".to_string()),
-                    ContractRole::NftPositionManager,
+                    ("aerodrome_position_manager".to_string(), chain_name.clone()),
+                    ContractRole::Unknown,
                 );
+
+                // Pool tokens — validate as ERC20 on the LP chain
+                for token_sym in pool.split('/') {
+                    if let Some(addr_str) = token_manifest
+                        .get(token_sym.trim())
+                        .and_then(|chains| {
+                            chains
+                                .iter()
+                                .find(|(c, _)| c.eq_ignore_ascii_case(&chain_name))
+                                .map(|(_, addr)| addr.clone())
+                        })
+                    {
+                        roles.insert(
+                            (addr_str, chain_name.clone()),
+                            ContractRole::Token,
+                        );
+                    }
+                }
             }
             _ => {}
         }
@@ -421,19 +434,6 @@ async fn probe_interface(
                 }
             } else {
                 None // Can't probe without a token address
-            }
-        }
-        ContractRole::NftPositionManager => {
-            // Aerodrome position manager must respond to factory()
-            let contract = INftManagerProbe::new(address, provider);
-            match tokio::time::timeout(timeout, contract.factory().call()).await {
-                Ok(Ok(_)) => None,
-                _ => Some(ValidationError::WrongInterface {
-                    contract: check.label.clone(),
-                    chain: chain_name.to_string(),
-                    address: format!("{address}"),
-                    expected: "NFT Position Manager — factory() call failed".to_string(),
-                }),
             }
         }
         ContractRole::RewardsController | ContractRole::Unknown => {

@@ -1,10 +1,14 @@
 {
-  "name": "ETH Delta-Neutral Funding Arb",
-  "description": "Delta-neutral with Kelly optimizer: Kelly decides split between alpha (spot+perp pair) and idle lending. Alpha pair always splits 50/50 for perfect delta neutrality. Yield = funding + lending APY. Weekly rebalance on 5% drift.",
+  "name": "ETH Delta-Neutral LP + Lending v2",
+  "description": "Delta-neutral: Aerodrome ETH/USDC LP (fee + AERO yield, ~50% ETH exposure) hedged by short ETH perp (funding income, -100% ETH exposure). 2:1 LP:perp ratio via duplicate LP nodes gives zero net delta. Idle USDC in HyperLend lending. Kelly splits between hedged LP group and USDC lending. Weekly rebalance on 5% drift.",
   "tokens": {
     "USDC": {
       "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f",
       "base": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    },
+    "ETH": {
+      "hyperevm": "0xbe6727b535545c67d5caa73dea54865b92cf7907",
+      "base": "0x4200000000000000000000000000000000000006"
     }
   },
   "contracts": {
@@ -13,6 +17,9 @@
     },
     "hyperlend_rewards": {
       "hyperevm": "0x2aF0d6754A58723c50b5e73E45D964bFDD99fE2F"
+    },
+    "aerodrome_position_manager": {
+      "base": "0x827922686190790b37229fd06084350E74485b72"
     }
   },
   "nodes": [
@@ -32,11 +39,11 @@
       "drift_threshold": 0.05,
       "allocations": [
         {
-          "target_nodes": ["buy_eth", "short_eth"],
+          "target_nodes": ["lp_a", "lp_b", "short_eth"],
           "correlation": 0.0
         },
         {
-          "target_node": "lend_idle",
+          "target_node": "lend_usdc",
           "correlation": 0.0
         }
       ],
@@ -46,11 +53,26 @@
       }
     },
     {
-      "type": "spot",
-      "id": "buy_eth",
-      "venue": "Hyperliquid",
-      "pair": "ETH/USDC",
-      "side": "buy"
+      "type": "lp",
+      "id": "lp_a",
+      "venue": "Aerodrome",
+      "chain": { "name": "base", "chain_id": 8453, "rpc_url": "https://mainnet.base.org" },
+      "pool": "ETH/USDC",
+      "action": "add_liquidity",
+      "tick_spacing": 100,
+      "tick_lower": -887200,
+      "tick_upper": 887200
+    },
+    {
+      "type": "lp",
+      "id": "lp_b",
+      "venue": "Aerodrome",
+      "chain": { "name": "base", "chain_id": 8453, "rpc_url": "https://mainnet.base.org" },
+      "pool": "ETH/USDC",
+      "action": "add_liquidity",
+      "tick_spacing": 100,
+      "tick_lower": -887200,
+      "tick_upper": 887200
     },
     {
       "type": "perp",
@@ -63,7 +85,7 @@
     },
     {
       "type": "lending",
-      "id": "lend_idle",
+      "id": "lend_usdc",
       "archetype": "aave_v3",
       "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
       "pool_address": "hyperlend_pool",
@@ -82,7 +104,13 @@
     },
     {
       "from_node": "kelly",
-      "to_node": "buy_eth",
+      "to_node": "lp_a",
+      "token": "USDC",
+      "amount": { "type": "all" }
+    },
+    {
+      "from_node": "kelly",
+      "to_node": "lp_b",
       "token": "USDC",
       "amount": { "type": "all" }
     },
@@ -94,7 +122,7 @@
     },
     {
       "from_node": "kelly",
-      "to_node": "lend_idle",
+      "to_node": "lend_usdc",
       "token": "USDC",
       "amount": { "type": "all" }
     }

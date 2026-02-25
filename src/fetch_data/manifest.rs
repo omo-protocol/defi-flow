@@ -42,11 +42,11 @@ pub fn write_fetch_result(output_dir: &Path, filename: &str, result: &FetchResul
     match result {
         FetchResult::Perp(rows) => write_csv(&path, rows),
         FetchResult::Options(rows) => write_csv(&path, rows),
-        FetchResult::Lp(rows) => write_csv(&path, rows),
         FetchResult::Lending(rows) => write_csv(&path, rows),
         FetchResult::Vault(rows) => write_csv(&path, rows),
         FetchResult::Pendle(rows) => write_csv(&path, rows),
         FetchResult::Price(rows) => write_csv(&path, rows),
+        FetchResult::Lp(rows) => write_csv(&path, rows),
     }
 }
 

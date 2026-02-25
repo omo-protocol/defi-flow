@@ -23,12 +23,6 @@ pub fn run() -> anyhow::Result<()> {
                 m.insert("hyperevm".to_string(), "0x54586bE62E3c3580375aE3723C145253060Ca0C2".to_string());
                 m
             });
-            // Aerodrome
-            c.insert("aerodrome_position_manager".to_string(), {
-                let mut m = std::collections::HashMap::new();
-                m.insert("base".to_string(), "0x827922686190790b37229fd06084350E74485b72".to_string());
-                m
-            });
             // Pendle
             c.insert("pendle_router".to_string(), {
                 let mut m = std::collections::HashMap::new();
@@ -55,10 +49,10 @@ pub fn run() -> anyhow::Result<()> {
         description: Some(
             "Bridge USDe from Mantle to HyperCore via Stargate, swap to USDC via LiFi, \
              then Kelly-optimize across: Hyperliquid ETH long perp, Hyena BTC short hedge, \
-             Aerodrome cbBTC/WETH LP on Base, Rysk HYPE covered calls on HyperEVM, \
+             Rysk HYPE covered calls on HyperEVM, \
              HyperLend USDC supply, and Pendle PT-kHYPE fixed yield. \
              Periodic: rebalance daily (5% drift threshold), collect funding daily, \
-             claim AERO rewards daily and compound back, sell covered calls weekly, \
+             sell covered calls weekly, \
              collect premium daily, claim lending rewards weekly."
                 .to_string(),
         ),
@@ -98,39 +92,38 @@ pub fn run() -> anyhow::Result<()> {
                 drift_threshold: 0.05,
                 allocations: vec![
                     VenueAllocation {
-                        target_node: "perp_eth_long".into(),
-                        expected_return: 0.25,
-                        volatility: 0.45,
+                        target_nodes: vec![],
+                        target_node: Some("perp_eth_long".into()),
+                        expected_return: None,
+                        volatility: None,
                         correlation: 0.0,
                     },
                     VenueAllocation {
-                        target_node: "swap_usde_hyena".into(),
-                        expected_return: 0.10,
-                        volatility: 0.35,
+                        target_nodes: vec![],
+                        target_node: Some("swap_usde_hyena".into()),
+                        expected_return: None,
+                        volatility: None,
                         correlation: -0.2,
                     },
                     VenueAllocation {
-                        target_node: "lp_aero".into(),
-                        expected_return: 0.12,
-                        volatility: 0.20,
-                        correlation: 0.3,
-                    },
-                    VenueAllocation {
-                        target_node: "options_hype_cc".into(),
-                        expected_return: 0.15,
-                        volatility: 0.50,
+                        target_nodes: vec![],
+                        target_node: Some("options_hype_cc".into()),
+                        expected_return: None,
+                        volatility: None,
                         correlation: 0.1,
                     },
                     VenueAllocation {
-                        target_node: "lend_usdc".into(),
-                        expected_return: 0.06,
-                        volatility: 0.02,
+                        target_nodes: vec![],
+                        target_node: Some("lend_usdc".into()),
+                        expected_return: None,
+                        volatility: None,
                         correlation: 0.0,
                     },
                     VenueAllocation {
-                        target_node: "pendle_pt_khype".into(),
-                        expected_return: 0.18,
-                        volatility: 0.25,
+                        target_nodes: vec![],
+                        target_node: Some("pendle_pt_khype".into()),
+                        expected_return: None,
+                        volatility: None,
                         correlation: 0.15,
                     },
                 ],
@@ -167,17 +160,6 @@ pub fn run() -> anyhow::Result<()> {
                 direction: Some(PerpDirection::Short),
                 leverage: Some(2.0),
                 margin_token: None, // defaults to USDe for Hyena
-                trigger: None,
-            },
-            Node::Lp {
-                id: "lp_aero".into(),
-                venue: LpVenue::Aerodrome,
-                pool: "cbBTC/WETH".into(),
-                action: LpAction::AddLiquidity,
-                // Concentrated liquidity: ±5% around current price (CL100 pool)
-                tick_lower: Some(-500),
-                tick_upper: Some(500),
-                tick_spacing: Some(100),
                 trigger: None,
             },
             Node::Options {
@@ -220,31 +202,6 @@ pub fn run() -> anyhow::Result<()> {
                 direction: None,
                 leverage: None,
                 margin_token: None,
-                trigger: Some(Trigger::Cron {
-                    interval: CronInterval::Daily,
-                }),
-            },
-            // ── Periodic: claim AERO rewards & compound ─────────
-            Node::Lp {
-                id: "claim_aero".into(),
-                venue: LpVenue::Aerodrome,
-                pool: "cbBTC/WETH".into(),
-                action: LpAction::ClaimRewards,
-                tick_lower: None,
-                tick_upper: None,
-                tick_spacing: None,
-                trigger: Some(Trigger::Cron {
-                    interval: CronInterval::Daily,
-                }),
-            },
-            Node::Movement {
-                id: "swap_aero_usdc".into(),
-                movement_type: MovementType::Swap,
-                provider: MovementProvider::LiFi,
-                from_token: "AERO".into(),
-                to_token: "USDC".into(),
-                from_chain: None,
-                to_chain: None,
                 trigger: Some(Trigger::Cron {
                     interval: CronInterval::Daily,
                 }),
@@ -336,12 +293,6 @@ pub fn run() -> anyhow::Result<()> {
             },
             Edge {
                 from_node: "kelly_opt".into(),
-                to_node: "lp_aero".into(),
-                token: "USDC".into(),
-                amount: Amount::All,
-            },
-            Edge {
-                from_node: "kelly_opt".into(),
                 to_node: "options_hype_cc".into(),
                 token: "USDC".into(),
                 amount: Amount::All,
@@ -362,19 +313,6 @@ pub fn run() -> anyhow::Result<()> {
             // Collected funding -> back to optimizer
             Edge {
                 from_node: "collect_eth_funding".into(),
-                to_node: "kelly_opt".into(),
-                token: "USDC".into(),
-                amount: Amount::All,
-            },
-            // Claimed AERO rewards -> swap -> back to optimizer
-            Edge {
-                from_node: "claim_aero".into(),
-                to_node: "swap_aero_usdc".into(),
-                token: "AERO".into(),
-                amount: Amount::All,
-            },
-            Edge {
-                from_node: "swap_aero_usdc".into(),
                 to_node: "kelly_opt".into(),
                 token: "USDC".into(),
                 amount: Amount::All,

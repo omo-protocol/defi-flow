@@ -96,6 +96,7 @@ async fn test_lp_add_liquidity() {
         tick_lower: None,
         tick_upper: None,
         tick_spacing: Some(100),
+        chain: None,
         trigger: None,
     };
 

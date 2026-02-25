@@ -115,11 +115,11 @@ fn get_trigger(node: &Node) -> Option<&Trigger> {
         Node::Perp { trigger, .. }
         | Node::Options { trigger, .. }
         | Node::Spot { trigger, .. }
-        | Node::Lp { trigger, .. }
         | Node::Movement { trigger, .. }
         | Node::Lending { trigger, .. }
         | Node::Vault { trigger, .. }
         | Node::Pendle { trigger, .. }
+        | Node::Lp { trigger, .. }
         | Node::Optimizer { trigger, .. } => trigger.as_ref(),
         Node::Wallet { .. } => None,
     }

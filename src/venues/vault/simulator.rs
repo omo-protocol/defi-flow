@@ -118,4 +118,21 @@ impl Venue for VaultSimulator {
             ..Default::default()
         }
     }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        if self.market_data.len() < 2 {
+            return None;
+        }
+
+        let slice = &self.market_data;
+        let n = slice.len() as f64;
+
+        // apy + reward_apy are already annualized
+        let apys: Vec<f64> = slice.iter().map(|r| r.apy + r.reward_apy).collect();
+        let mean = apys.iter().sum::<f64>() / n;
+        let var = apys.iter().map(|a| (a - mean).powi(2)).sum::<f64>() / (n - 1.0).max(1.0);
+        let std = var.sqrt();
+
+        Some((mean, std))
+    }
 }

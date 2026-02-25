@@ -178,8 +178,20 @@ impl AaveLending {
 
         let provider = make_provider(&self.private_key, rpc_url)?;
 
+        // Query aToken balance to avoid NotEnoughAvailableUserBalance from
+        // rounding (scaledBalance = amount / liquidityIndex truncates).
+        let rp = evm::read_provider(rpc_url)?;
+        let pool_read = IAavePoolRead::new(pool_addr, &rp);
+        let reserve_data = pool_read.getReserveData(token_addr).call().await
+            .context("getReserveData failed during withdraw")?;
+        let a_token_addr = reserve_data._8; // aTokenAddress
+        let a_token = IERC20::new(a_token_addr, &rp);
+        let a_balance = a_token.balanceOf(self.wallet_address).call().await
+            .context("aToken balanceOf failed")?;
+        let withdraw_units = amount_units.min(a_balance);
+
         let pool = IAavePool::new(pool_addr, &provider);
-        let withdraw_tx = pool.withdraw(token_addr, amount_units, self.wallet_address);
+        let withdraw_tx = pool.withdraw(token_addr, withdraw_units, self.wallet_address);
         let pending = withdraw_tx.send().await.context("withdraw failed")?;
         let receipt = pending.get_receipt().await.context("withdraw receipt")?;
         require_success(&receipt, "withdraw")?;

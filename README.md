@@ -78,10 +78,20 @@ Insert a Movement(bridge, from_chain: hyperevm, to_chain: base, token: USDC)
 - Configurable slippage and random seed for reproducibility
 
 ### Monte Carlo
-- Block bootstrap resampling preserving local autocorrelation
-- GBM (Geometric Brownian Motion) price perturbation with historical volatility
+- **Parametric simulation**: estimates model parameters from historical data, generates synthetic paths
+  - Prices: GBM (Geometric Brownian Motion) with drift + volatility from log-returns
+  - Funding rates: OU (Ornstein-Uhlenbeck) mean-reverting process
+  - Lending/vault yields: AR(1) autoregressive process
+  - LP: tick OU + fee/reward AR(1) + price from shared GBM
+- Shared GBM across correlated venues (spot + perp use the same price path per simulation)
 - Percentile output: 5th/25th/50th/75th/95th for TWRR, drawdown, Sharpe, net PnL
 - Value-at-Risk at 95% and 99% confidence
+
+**Why MC results diverge from historical:**
+- Funding rates have high variance relative to mean (typical: stdev 1.5x mean). The OU process generates paths with extended negative funding periods where shorts pay instead of earn.
+- GBM with crypto-level vol (50-80% annual) creates extreme price paths that cause rebalancing drag (buy high, sell low between rebalance intervals) and occasional liquidation of leveraged positions.
+- Historical backtest reflects one realized path. A Sharpe of 10+ on a single path doesn't mean the strategy is low-risk — MC median Sharpe of 0.3-0.5 is more realistic.
+- If a venue has sparse/zero data (e.g. lending APY starts late), adaptive Kelly sees 0% return and allocates nothing there, concentrating risk in fewer venues.
 
 ### Venue Simulators
 
@@ -100,9 +110,11 @@ Insert a Movement(bridge, from_chain: hyperevm, to_chain: base, token: USDC)
 **Movement** — Unified swap/bridge/swap+bridge node. Fixed slippage + fee model. Swap costs tracked as metric. Bridge fee deduction on cross-chain transfers. Three movement types: `swap` (same-chain token conversion), `bridge` (cross-chain same-token), `swap_bridge` (atomic cross-chain swap via LiFi). Providers: LiFi (swap, bridge, swap_bridge), Stargate (bridge only).
 
 ### Kelly Optimizer
-- Per-venue Kelly fraction: f* = expected_return / volatility^2
-- Fractional Kelly scaling (e.g. half-Kelly = 0.5)
-- Max allocation cap per venue
+- **Smooth Kelly**: maximizes E[log(1 + f*R)] with integrated risk — `(1-p_loss)*ln(1 + f*(return-cost)) + p_loss*ln(1 - f*severity)`. Grid search + golden-section refinement. Falls back to classic `f* = return/vol^2` when risk params are zero.
+- Per-venue risk parameters: `p_loss` (annualized catastrophic loss probability), `loss_severity` (fraction lost), `rebalance_cost` (per-rebalance friction). Computed automatically from venue data (perp: liquidation probability from price vol; LP: out-of-range probability from tick history).
+- **Grouped allocations**: `target_nodes` groups venues that share one Kelly allocation (e.g. spot+perp delta-neutral pair split equally). Group risk detects hedged positions and reduces severity accordingly.
+- **Adaptive mode**: when `expected_return`/`volatility` are omitted from allocations, computed from venue `alpha_stats()` (funding rates, lending APY, fee yields, etc.)
+- Fractional Kelly scaling (e.g. half-Kelly = 0.5), max allocation cap per venue
 - Drift-based rebalancing: only rebalance when actual vs target allocation exceeds threshold
 - Periodic rebalance via cron trigger
 

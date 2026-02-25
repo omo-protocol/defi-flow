@@ -36,6 +36,18 @@ pub enum ExecutionResult {
     Noop,
 }
 
+/// Risk parameters for smooth Kelly optimization.
+/// Each venue can report its catastrophic loss probability, severity, and rebalance cost.
+#[derive(Debug, Clone, Default)]
+pub struct RiskParams {
+    /// Annualized probability of catastrophic loss (liquidation, full IL, etc.)
+    pub p_loss: f64,
+    /// Fraction of allocated capital lost in that event (0.0 – 1.0)
+    pub loss_severity: f64,
+    /// Transaction/rebalance cost as fraction per rebalance
+    pub rebalance_cost: f64,
+}
+
 /// Metrics reported by a venue at finalization.
 #[derive(Debug, Default, Clone)]
 pub struct SimMetrics {
@@ -69,6 +81,24 @@ pub trait Venue: Send + Sync {
     /// Report accumulated metrics. Default: all zeros.
     fn metrics(&self) -> SimMetrics {
         SimMetrics::default()
+    }
+
+    /// Compute annualized alpha stats from historical data up to the current cursor.
+    /// Returns `(expected_return, volatility)` — the yield component only,
+    /// not directional exposure. Used by the adaptive Kelly optimizer.
+    ///
+    /// - Perp: funding rate income (shorts receive when positive)
+    /// - Spot: (0, 0) — no inherent yield, directional only
+    /// - Lending: supply APY + reward APY
+    /// - Vault: vault APY + reward APY
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        None
+    }
+
+    /// Risk parameters for smooth Kelly. Returns None if the venue has no
+    /// meaningful risk model (falls back to classic Kelly).
+    fn risk_params(&self) -> Option<RiskParams> {
+        None
     }
 }
 
@@ -220,9 +250,9 @@ macro_rules! register_venue_categories {
 register_venue_categories!(
     perps::PerpsCategory,
     options::OptionsCategory,
-    lp::LpCategory,
     lending::LendingCategory,
     vault::VaultCategory,
+    lp::LpCategory,
     movement::MovementCategory,
     yield_tokens::YieldTokensCategory,
     primitives::PrimitivesCategory,

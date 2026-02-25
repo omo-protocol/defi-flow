@@ -26,14 +26,7 @@ pub enum OptionsVenue {
 /// Spot / DEX trading venues.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum SpotVenue {
-    Aerodrome,
-}
-
-/// Liquidity provision venues.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum LpVenue {
-    /// Aerodrome (Base) — concentrated liquidity via Slipstream.
-    Aerodrome,
+    Hyperliquid,
 }
 
 /// Movement type — what kind of token transfer operation.
@@ -110,6 +103,31 @@ pub enum LendingAction {
     Repay,
     /// Claim protocol reward emissions.
     ClaimRewards,
+}
+
+/// LP / DEX venue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum LpVenue {
+    /// Aerodrome Slipstream (concentrated liquidity on Base).
+    Aerodrome,
+}
+
+/// LP pool actions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LpAction {
+    /// Deposit tokens into a concentrated liquidity position.
+    AddLiquidity,
+    /// Withdraw from a concentrated liquidity position.
+    RemoveLiquidity,
+    /// Claim gauge reward emissions (e.g. AERO on Aerodrome).
+    ClaimRewards,
+    /// Reinvest accrued fees back into the position.
+    Compound,
+    /// Stake LP NFT into gauge for reward emissions.
+    StakeGauge,
+    /// Unstake LP NFT from gauge.
+    UnstakeGauge,
 }
 
 /// Pendle yield tokenization actions.
@@ -191,23 +209,6 @@ pub enum RyskAsset {
     SOL,
 }
 
-/// Action for liquidity provision — venue-specific lifecycle.
-/// Aerodrome: add/remove liquidity, gauge staking, reward claiming.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum LpAction {
-    AddLiquidity,
-    RemoveLiquidity,
-    /// Claim gauge reward emissions (e.g. AERO on Aerodrome).
-    ClaimRewards,
-    /// Reinvest claimed rewards back into the pool.
-    Compound,
-    /// Stake LP tokens into gauge for reward emissions.
-    StakeGauge,
-    /// Unstake LP tokens from gauge.
-    UnstakeGauge,
-}
-
 // ── Trigger types ───────────────────────────────────────────────────
 
 /// Cron interval for periodic triggers.
@@ -244,17 +245,47 @@ pub enum OptimizerStrategy {
 
 /// Per-venue allocation parameters for the optimizer.
 /// The optimizer uses these to compute optimal capital splits.
+///
+/// Use `target_node` for a single target, or `target_nodes` for a group
+/// that shares one Kelly allocation and splits it equally (e.g. delta-neutral
+/// spot+perp pair).
+///
+/// When `expected_return` and `volatility` are omitted, the optimizer
+/// derives them adaptively from the venue's historical data (funding rates,
+/// APY, etc.). This is the recommended production mode.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct VenueAllocation {
-    /// The node ID of the downstream venue to allocate capital to.
-    pub target_node: NodeId,
+    /// Single target node ID (use this OR target_nodes, not both).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_node: Option<NodeId>,
+    /// Group of target nodes that share this allocation equally.
+    /// The Kelly fraction is computed once, then split evenly across all nodes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_nodes: Vec<NodeId>,
     /// Expected annualized return (e.g. 0.15 = 15%).
-    pub expected_return: f64,
+    /// If omitted, derived from venue data (funding rates, APY, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_return: Option<f64>,
     /// Annualized volatility / standard deviation (e.g. 0.30 = 30%).
-    pub volatility: f64,
+    /// If omitted, derived from venue data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volatility: Option<f64>,
     /// Correlation with a reference asset. Defaults to 0.0 if omitted.
     #[serde(default)]
     pub correlation: f64,
+}
+
+impl VenueAllocation {
+    /// All target node IDs for this allocation.
+    pub fn targets(&self) -> Vec<&str> {
+        if !self.target_nodes.is_empty() {
+            self.target_nodes.iter().map(|s| s.as_str()).collect()
+        } else if let Some(ref t) = self.target_node {
+            vec![t.as_str()]
+        } else {
+            vec![]
+        }
+    }
 }
 
 // ── The main Node enum ──────────────────────────────────────────────
@@ -356,38 +387,6 @@ pub enum Node {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trigger: Option<Trigger>,
     },
-    /// Liquidity provision node.
-    /// Supports full Aerodrome Slipstream lifecycle: concentrated liquidity with
-    /// tick ranges, gauge staking for AERO rewards, and compounding.
-    ///
-    /// Aerodrome Slipstream uses Uniswap V3-style concentrated liquidity with NFT positions.
-    /// The `tick_lower` / `tick_upper` define the price range for the position.
-    /// Tighter ranges earn more fees (concentration multiplier) but risk going out of range.
-    Lp {
-        /// Unique identifier for this node.
-        id: NodeId,
-        /// LP venue.
-        venue: LpVenue,
-        /// Pool identifier, e.g. "cbBTC/WETH".
-        pool: String,
-        /// What action to perform.
-        action: LpAction,
-        /// Lower tick bound for concentrated liquidity (Aerodrome Slipstream).
-        /// Omit for full-range positions.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tick_lower: Option<i32>,
-        /// Upper tick bound for concentrated liquidity.
-        /// Omit for full-range positions.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tick_upper: Option<i32>,
-        /// Tick spacing of the pool (e.g. 100 for Aerodrome CL100, 200 for CL200).
-        /// Used to snap tick bounds to valid values.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tick_spacing: Option<i32>,
-        /// Optional periodic trigger (e.g. claim_rewards every day).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        trigger: Option<Trigger>,
-    },
     /// Token movement node — swap, bridge, or atomic swap+bridge.
     /// Unifies same-chain swaps, cross-chain bridges, and atomic cross-chain swaps.
     ///
@@ -483,6 +482,33 @@ pub enum Node {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trigger: Option<Trigger>,
     },
+    /// LP pool node (e.g. Aerodrome Slipstream concentrated liquidity).
+    /// Deposit into concentrated liquidity positions, claim gauge rewards, compound fees.
+    Lp {
+        /// Unique identifier for this node.
+        id: NodeId,
+        /// LP venue.
+        venue: LpVenue,
+        /// Pool pair identifier, e.g. "cbBTC/WETH".
+        pool: String,
+        /// What action to perform.
+        action: LpAction,
+        /// Lower tick bound for concentrated position. Full range if omitted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tick_lower: Option<i32>,
+        /// Upper tick bound for concentrated position. Full range if omitted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tick_upper: Option<i32>,
+        /// Tick spacing for the pool (e.g. 100 for Aerodrome CL100).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tick_spacing: Option<i32>,
+        /// The chain this LP position is on. Defaults to Base if omitted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chain: Option<Chain>,
+        /// Optional periodic trigger (e.g. compound daily, claim rewards weekly).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trigger: Option<Trigger>,
+    },
     /// Capital allocation optimizer node (e.g. Kelly Criterion).
     /// Receives capital from upstream and distributes it across N downstream
     /// venue nodes using optimal sizing.
@@ -522,11 +548,11 @@ impl Node {
             | Node::Perp { id, .. }
             | Node::Options { id, .. }
             | Node::Spot { id, .. }
-            | Node::Lp { id, .. }
             | Node::Movement { id, .. }
             | Node::Lending { id, .. }
             | Node::Vault { id, .. }
             | Node::Pendle { id, .. }
+            | Node::Lp { id, .. }
             | Node::Optimizer { id, .. } => id,
         }
     }
@@ -538,11 +564,11 @@ impl Node {
             Node::Perp { .. } => "perp",
             Node::Options { .. } => "options",
             Node::Spot { .. } => "spot",
-            Node::Lp { .. } => "lp",
             Node::Movement { .. } => "movement",
             Node::Lending { .. } => "lending",
             Node::Vault { .. } => "vault",
             Node::Pendle { .. } => "pendle",
+            Node::Lp { .. } => "lp",
             Node::Optimizer { .. } => "optimizer",
         }
     }
@@ -553,11 +579,11 @@ impl Node {
             Node::Perp { trigger, .. }
             | Node::Options { trigger, .. }
             | Node::Spot { trigger, .. }
-            | Node::Lp { trigger, .. }
             | Node::Movement { trigger, .. }
             | Node::Lending { trigger, .. }
             | Node::Vault { trigger, .. }
             | Node::Pendle { trigger, .. }
+            | Node::Lp { trigger, .. }
             | Node::Optimizer { trigger, .. } => trigger.is_some(),
             Node::Wallet { .. } => false,
         }
@@ -613,22 +639,6 @@ impl Node {
             } => {
                 let t = trig_suffix(trigger);
                 format!("spot({venue:?} {side:?} {pair}{t})")
-            }
-            Node::Lp {
-                venue,
-                pool,
-                action,
-                tick_lower,
-                tick_upper,
-                trigger,
-                ..
-            } => {
-                let t = trig_suffix(trigger);
-                let ticks = match (tick_lower, tick_upper) {
-                    (Some(lo), Some(hi)) => format!(" [{lo},{hi}]"),
-                    _ => String::new(),
-                };
-                format!("lp({venue:?} {action:?} {pool}{ticks}{t})")
             }
             Node::Movement {
                 movement_type,
@@ -688,6 +698,22 @@ impl Node {
                 let t = trig_suffix(trigger);
                 format!("pendle({action:?} {market}{t})")
             }
+            Node::Lp {
+                venue,
+                pool,
+                action,
+                tick_lower,
+                tick_upper,
+                trigger,
+                ..
+            } => {
+                let t = trig_suffix(trigger);
+                let range = match (tick_lower, tick_upper) {
+                    (Some(lo), Some(hi)) => format!(" [{lo}:{hi}]"),
+                    _ => " [full]".to_string(),
+                };
+                format!("lp({venue:?} {action:?} {pool}{range}{t})")
+            }
             Node::Optimizer {
                 strategy,
                 kelly_fraction,
@@ -722,11 +748,11 @@ impl Node {
             }
             Node::Perp { .. } => Some(Chain::hyperevm()),
             Node::Options { .. } => Some(Chain::hyperevm()),
-            Node::Spot { .. } => Some(Chain::base()),
-            Node::Lp { .. } => Some(Chain::base()),
+            Node::Spot { .. } => Some(Chain::hyperevm()),
             Node::Lending { chain, .. } => Some(chain.clone()),
             Node::Vault { chain, .. } => Some(chain.clone()),
             Node::Pendle { .. } => Some(Chain::hyperevm()),
+            Node::Lp { chain, .. } => chain.clone().or_else(|| Some(Chain::base())),
             Node::Optimizer { .. } => None,
         }
     }
@@ -828,23 +854,12 @@ impl Node {
                     };
                     Some(TokenFlow {
                         token: tok.to_string(),
-                        chain: Some(Chain::base()),
+                        chain: self.chain(),
                     })
                 } else {
                     None
                 }
             }
-            Node::Lp { action, .. } => match action {
-                LpAction::ClaimRewards => Some(TokenFlow {
-                    token: "AERO".to_string(),
-                    chain: Some(Chain::base()),
-                }),
-                LpAction::RemoveLiquidity => Some(TokenFlow {
-                    token: "USDC".to_string(),
-                    chain: Some(Chain::base()),
-                }),
-                _ => None,
-            },
             Node::Lending {
                 action,
                 asset,
@@ -886,6 +901,19 @@ impl Node {
                 }),
                 _ => None,
             },
+            Node::Lp {
+                action, chain, ..
+            } => match action {
+                LpAction::RemoveLiquidity => Some(TokenFlow {
+                    token: "USDC".to_string(),
+                    chain: chain.clone().or_else(|| Some(Chain::base())),
+                }),
+                LpAction::ClaimRewards => Some(TokenFlow {
+                    token: "AERO".to_string(),
+                    chain: chain.clone().or_else(|| Some(Chain::base())),
+                }),
+                _ => None,
+            },
             Node::Wallet { token, chain, .. } => Some(TokenFlow {
                 token: token.clone(),
                 chain: Some(chain.clone()),
@@ -923,13 +951,6 @@ impl Node {
                     }
                     _ => None,
                 },
-            },
-            Node::Lp { action, .. } => match action {
-                LpAction::AddLiquidity => Some(TokenFlow {
-                    token: "USDC".to_string(),
-                    chain: Some(Chain::base()),
-                }),
-                _ => None,
             },
             Node::Lending {
                 action,
@@ -975,6 +996,15 @@ impl Node {
                 token: token.clone(),
                 chain: Some(chain.clone()),
             }),
+            Node::Lp {
+                action, chain, ..
+            } => match action {
+                LpAction::AddLiquidity => Some(TokenFlow {
+                    token: "USDC".to_string(),
+                    chain: chain.clone().or_else(|| Some(Chain::base())),
+                }),
+                _ => None,
+            },
             Node::Spot { .. } | Node::Optimizer { .. } => None,
         }
     }

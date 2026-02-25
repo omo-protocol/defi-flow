@@ -5,14 +5,13 @@ use rand::{Rng, SeedableRng};
 
 use super::data::{PerpCsvRow, PriceCsvRow};
 use crate::model::node::{Node, PerpAction, PerpDirection, SpotSide};
-use crate::venues::{ExecutionResult, SimMetrics, Venue};
+use crate::venues::{ExecutionResult, RiskParams, SimMetrics, Venue};
 
 /// Maintenance margin rate — liquidation triggers when equity <= notional * this.
 const MAINT_MARGIN_RATE: f64 = 0.01;
 /// Liquidation penalty as fraction of remaining equity.
 const LIQUIDATION_FEE: f64 = 0.02;
-/// Periods per year for funding accrual (8-hour periods).
-const PERIODS_PER_YEAR: f64 = 365.0 * 3.0;
+const SECS_PER_YEAR: f64 = 365.25 * 86400.0;
 
 #[derive(Default)]
 struct SimulatedPosition {
@@ -97,27 +96,29 @@ impl PerpSimulator {
         self.liquidation_count += 1;
     }
 
-    fn accrue_funding(&mut self) {
+    fn accrue_funding(&mut self, dt_secs: f64) {
         let pos = &self.position;
         if pos.position_amt.abs() < 1e-12 {
             return;
         }
 
         let row = self.current_market();
-        let funding_per_period = row.funding_apy / PERIODS_PER_YEAR;
+        // funding_rate is per-hour (Hyperliquid settles hourly).
+        // Scale by actual elapsed hours for clock-cadence independence.
+        let dt_hours = dt_secs / 3600.0;
         let notional = pos.position_amt.abs() * row.mark_price;
 
         let funding = if pos.position_amt > 0.0 {
-            -notional * funding_per_period
+            -notional * row.funding_rate * dt_hours
         } else {
-            notional * funding_per_period
+            notional * row.funding_rate * dt_hours
         };
 
         self.cumulative_funding += funding;
         self.balance += funding;
     }
 
-    fn accrue_rewards(&mut self) {
+    fn accrue_rewards(&mut self, dt_secs: f64) {
         let pos = &self.position;
         if pos.position_amt.abs() < 1e-12 {
             return;
@@ -128,9 +129,9 @@ impl PerpSimulator {
             return;
         }
 
-        let reward_per_period = row.rewards_apy / PERIODS_PER_YEAR;
+        let dt = dt_secs / SECS_PER_YEAR;
         let notional = pos.position_amt.abs() * row.mark_price;
-        let reward = notional * reward_per_period;
+        let reward = notional * row.rewards_apy * dt;
 
         self.cumulative_rewards += reward;
         self.balance += reward;
@@ -283,11 +284,11 @@ impl Venue for PerpSimulator {
         Ok(self.balance + pos.isolated_margin + unrealized_pnl)
     }
 
-    async fn tick(&mut self, now: u64, _dt_secs: f64) -> Result<()> {
+    async fn tick(&mut self, now: u64, dt_secs: f64) -> Result<()> {
         self.current_ts = now;
         self.advance_cursor();
-        self.accrue_funding();
-        self.accrue_rewards();
+        self.accrue_funding(dt_secs);
+        self.accrue_rewards(dt_secs);
         self.check_and_liquidate();
         Ok(())
     }
@@ -300,16 +301,30 @@ impl Venue for PerpSimulator {
             ..Default::default()
         }
     }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        // Use full dataset — in production, historical data is available before strategy starts.
+        compute_funding_stats(&self.market_data)
+    }
+
+    fn risk_params(&self) -> Option<RiskParams> {
+        compute_perp_risk(&self.market_data, self.max_slippage_bps)
+    }
 }
 
 // ── Spot Simulator ───────────────────────────────────────────────────
 
 /// Spot trade simulator — uses price data with slippage.
+/// Holds purchased tokens internally and tracks mark-to-market value.
 pub struct SpotSimulator {
     market_data: Vec<PriceCsvRow>,
     cursor: usize,
     current_ts: u64,
     slippage_bps: f64,
+    /// Amount of base token held (e.g. ETH from a USDC→ETH buy).
+    held_amount: f64,
+    /// Weighted-average entry price.
+    entry_price: f64,
 }
 
 impl SpotSimulator {
@@ -319,6 +334,8 @@ impl SpotSimulator {
             cursor: 0,
             current_ts: 0,
             slippage_bps,
+            held_amount: 0.0,
+            entry_price: 0.0,
         }
     }
 
@@ -352,31 +369,185 @@ impl Venue for SpotSimulator {
         let slippage = self.slippage_bps / 10_000.0;
 
         let parts: Vec<&str> = pair.split('/').collect();
-        let (output_token, fill_price) = match side {
+        match side {
             SpotSide::Buy => {
                 let price = row.ask * (1.0 + slippage);
-                let output = input_amount / price;
-                (parts.first().unwrap_or(&"TOKEN").to_string(), output)
+                let token_amount = input_amount / price;
+                let old_notional = self.held_amount * self.entry_price;
+                self.held_amount += token_amount;
+                self.entry_price = if self.held_amount > 1e-12 {
+                    (old_notional + input_amount) / self.held_amount
+                } else {
+                    0.0
+                };
+                Ok(ExecutionResult::PositionUpdate {
+                    consumed: input_amount,
+                    output: None,
+                })
             }
             SpotSide::Sell => {
                 let price = row.bid * (1.0 - slippage);
-                let output = input_amount * price;
-                (parts.get(1).unwrap_or(&"USDC").to_string(), output)
+                // Sell from held tokens if available, otherwise treat input as token amount.
+                let sell_tokens = if self.held_amount > 1e-12 {
+                    self.held_amount
+                } else {
+                    input_amount / price
+                };
+                let output_usd = sell_tokens * price;
+                self.held_amount = 0.0;
+                self.entry_price = 0.0;
+                let quote = parts.get(1).unwrap_or(&"USDC").to_string();
+                Ok(ExecutionResult::TokenOutput {
+                    token: quote,
+                    amount: output_usd,
+                })
             }
-        };
-
-        Ok(ExecutionResult::TokenOutput {
-            token: output_token,
-            amount: fill_price,
-        })
+        }
     }
 
     async fn total_value(&self) -> Result<f64> {
-        Ok(0.0)
+        if self.held_amount > 1e-12 {
+            Ok(self.held_amount * self.current_row().price)
+        } else {
+            Ok(0.0)
+        }
     }
 
     async fn tick(&mut self, now: u64, _dt_secs: f64) -> Result<()> {
         self.current_ts = now;
+        self.advance_cursor();
         Ok(())
     }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        // Spot has no inherent yield — it's purely directional.
+        // In a delta-neutral group, this contributes (0, 0) so the
+        // group stats are driven entirely by the perp's funding alpha.
+        Some((0.0, 0.0))
+    }
+}
+
+// ── Alpha stats helpers ────────────────────────────────────────────────
+
+/// Compute perp risk parameters from historical price data.
+///
+/// - p_loss: annualized probability of liquidation (price move > threshold)
+/// - loss_severity: fraction of margin lost at liquidation (~0.98)
+/// - rebalance_cost: slippage per rebalance
+fn compute_perp_risk(data: &[PerpCsvRow], slippage_bps: f64) -> Option<RiskParams> {
+    if data.len() < 20 {
+        return None;
+    }
+
+    // Compute annualized price volatility from mark_price log-returns
+    let mut log_returns = Vec::with_capacity(data.len() - 1);
+    for i in 1..data.len() {
+        if data[i].mark_price > 0.0 && data[i - 1].mark_price > 0.0 {
+            log_returns.push((data[i].mark_price / data[i - 1].mark_price).ln());
+        }
+    }
+
+    if log_returns.len() < 10 {
+        return None;
+    }
+
+    let n = log_returns.len() as f64;
+    let mean = log_returns.iter().sum::<f64>() / n;
+    let var = log_returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    let per_period_vol = var.sqrt();
+
+    // Annualize using actual period length
+    let total_secs =
+        (data.last().unwrap().timestamp - data[0].timestamp) as f64;
+    let avg_period_secs = total_secs / (data.len() - 1) as f64;
+    let periods_per_year = (365.25 * 86400.0) / avg_period_secs;
+    let annual_vol = per_period_vol * periods_per_year.sqrt();
+
+    if annual_vol <= 0.0 {
+        return None;
+    }
+
+    // For short at 1x leverage: liquidation when price rises by ~98%
+    // threshold = (1 + 1/L) / (1 + MAINT_MARGIN_RATE)
+    // At 1x: threshold ≈ 1.98, ln(1.98) ≈ 0.683
+    // P(liquidation) = Φ(-ln(threshold) / annual_vol)
+    let leverage = 1.0_f64; // conservative: assume 1x
+    let threshold = (1.0 + 1.0 / leverage) / (1.0 + MAINT_MARGIN_RATE);
+    let z = -(threshold.ln()) / annual_vol;
+    let p_liq = normal_cdf(z);
+
+    Some(RiskParams {
+        p_loss: p_liq,
+        loss_severity: 0.98, // lose almost all margin on liquidation
+        rebalance_cost: slippage_bps / 10_000.0,
+    })
+}
+
+/// Standard normal CDF — Abramowitz & Stegun approximation (max error ~7.5e-8).
+fn normal_cdf(x: f64) -> f64 {
+    if x >= 8.0 {
+        return 1.0;
+    }
+    if x <= -8.0 {
+        return 0.0;
+    }
+
+    let t = 1.0 / (1.0 + 0.2316419 * x.abs());
+    let d = 0.3989422804014327; // 1/sqrt(2*pi)
+    let p = d * (-x * x / 2.0).exp();
+    let c = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+
+    if x >= 0.0 {
+        1.0 - p * c
+    } else {
+        p * c
+    }
+}
+
+/// Compute annualized funding rate stats from perp data up to `cursor`.
+/// Returns (annualized_return, annualized_volatility) of funding income.
+///
+/// Funding rate is per-hour on Hyperliquid. For a short position, positive
+/// funding = income. We compute the mean and std of per-period funding rates,
+/// then annualize.
+fn compute_funding_stats(data: &[PerpCsvRow]) -> Option<(f64, f64)> {
+    if data.len() < 10 {
+        return None; // not enough data
+    }
+
+    let slice = data;
+
+    // Compute per-period funding rates (already per-hour from Hyperliquid)
+    // Include rewards_apy contribution per period
+    let mut returns = Vec::with_capacity(slice.len());
+    for i in 1..slice.len() {
+        let dt_hours = (slice[i].timestamp.saturating_sub(slice[i - 1].timestamp)) as f64 / 3600.0;
+        if dt_hours <= 0.0 {
+            continue;
+        }
+        // funding_rate is per-hour; for short: positive rate = income
+        let funding = slice[i].funding_rate * dt_hours;
+        // rewards_apy is annualized; convert to per-period
+        let rewards = slice[i].rewards_apy * dt_hours / 8760.0;
+        returns.push(funding + rewards);
+    }
+
+    if returns.len() < 10 {
+        return None;
+    }
+
+    let n = returns.len() as f64;
+    let mean = returns.iter().sum::<f64>() / n;
+    let var = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    let std = var.sqrt();
+
+    // Compute average period in hours for annualization
+    let total_hours = (slice.last().unwrap().timestamp - slice[0].timestamp) as f64 / 3600.0;
+    let avg_period_hours = total_hours / (slice.len() - 1) as f64;
+    let periods_per_year = 8760.0 / avg_period_hours;
+
+    let annualized_return = mean * periods_per_year;
+    let annualized_vol = std * periods_per_year.sqrt();
+
+    Some((annualized_return, annualized_vol))
 }

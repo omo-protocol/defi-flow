@@ -258,10 +258,14 @@ fn check_token_manifest(workflow: &Workflow) -> Vec<ValidationError> {
                     check(mt, "hyperevm");
                 }
             }
-            Node::Lp { pool, .. } => {
-                // Parse "TOKEN0/TOKEN1" pool format
-                for part in pool.split('/') {
-                    check(part.trim(), "base");
+            Node::Lp { pool, chain, .. } => {
+                // Pool is "TOKEN0/TOKEN1" — validate both tokens on the LP chain
+                let chain_name = chain
+                    .as_ref()
+                    .map(|c| c.name.as_str())
+                    .unwrap_or("base");
+                for token in pool.split('/') {
+                    check(token.trim(), chain_name);
                 }
             }
             _ => {}
@@ -365,14 +369,16 @@ fn check_optimizer_nodes(workflow: &Workflow) -> Vec<ValidationError> {
 
             let targets = outgoing_targets.get(id.as_str());
             for alloc in allocations {
-                let connected = targets
-                    .map(|t| t.contains(alloc.target_node.as_str()))
-                    .unwrap_or(false);
-                if !connected {
-                    errors.push(ValidationError::OptimizerTargetNotConnected {
-                        node_id: id.clone(),
-                        target_node: alloc.target_node.clone(),
-                    });
+                for target in alloc.targets() {
+                    let connected = targets
+                        .map(|t| t.contains(target))
+                        .unwrap_or(false);
+                    if !connected {
+                        errors.push(ValidationError::OptimizerTargetNotConnected {
+                            node_id: id.clone(),
+                            target_node: target.to_string(),
+                        });
+                    }
                 }
             }
         }

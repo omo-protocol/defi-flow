@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 
 use crate::model::node::{CronInterval, Node, NodeId, Trigger};
 use crate::model::workflow::Workflow;
-use crate::venues::{ExecutionResult, SimMetrics, Venue};
+use crate::venues::{ExecutionResult, RiskParams, SimMetrics, Venue};
 
 use state::NodeBalances;
 
@@ -291,6 +291,28 @@ impl Engine {
         Ok(())
     }
 
+    /// Gather alpha_stats from all venues for adaptive Kelly.
+    fn gather_venue_stats(&self) -> HashMap<NodeId, (f64, f64)> {
+        let mut stats = HashMap::new();
+        for (node_id, venue) in &self.venues {
+            if let Some(s) = venue.alpha_stats() {
+                stats.insert(node_id.clone(), s);
+            }
+        }
+        stats
+    }
+
+    /// Gather risk_params from all venues for smooth Kelly.
+    fn gather_venue_risks(&self) -> HashMap<NodeId, RiskParams> {
+        let mut risks = HashMap::new();
+        for (node_id, venue) in &self.venues {
+            if let Some(r) = venue.risk_params() {
+                risks.insert(node_id.clone(), r);
+            }
+        }
+        risks
+    }
+
     /// Execute an optimizer node: compute Kelly allocations, distribute capital to targets.
     async fn execute_optimizer(
         &mut self,
@@ -308,9 +330,13 @@ impl Engine {
             return Ok(());
         }
 
+        // Gather adaptive stats and risk params from venues for Kelly computation
+        let venue_stats = self.gather_venue_stats();
+        let venue_risks = self.gather_venue_risks();
+
         // Check drift — if this is a periodic rebalance, only proceed if drifted
         if drift_threshold > 0.0 && self.trigger_last_fired.contains_key(node_id) {
-            let alloc_result = optimizer::compute_kelly_allocations(node, total_capital)?;
+            let alloc_result = optimizer::compute_kelly_allocations(node, total_capital, &venue_stats, &venue_risks)?;
             let mut current_values: Vec<(NodeId, f64)> = Vec::new();
             for (target_id, _) in &alloc_result.allocations {
                 let value = if let Some(venue) = self.venues.get(target_id.as_str()) {
@@ -332,10 +358,17 @@ impl Engine {
         }
 
         // Compute and distribute allocations
-        let alloc_result = optimizer::compute_kelly_allocations(node, total_capital)?;
+        let alloc_result = optimizer::compute_kelly_allocations(node, total_capital, &venue_stats, &venue_risks)?;
 
-        // Deduct all capital from optimizer's balance
-        self.balances.deduct(node_id, "USDC", total_capital);
+        // Compute how much capital will actually be distributed
+        let distributed: f64 = alloc_result
+            .allocations
+            .iter()
+            .map(|(_, frac)| total_capital * frac)
+            .sum();
+
+        // Deduct only what's distributed; remainder stays in optimizer's balance
+        self.balances.deduct(node_id, "USDC", distributed);
 
         // Find outgoing edges to determine token
         let outgoing_edges: Vec<_> = self
@@ -419,11 +452,11 @@ fn get_trigger(node: &Node) -> Option<&Trigger> {
         Node::Perp { trigger, .. }
         | Node::Options { trigger, .. }
         | Node::Spot { trigger, .. }
-        | Node::Lp { trigger, .. }
         | Node::Movement { trigger, .. }
         | Node::Lending { trigger, .. }
         | Node::Vault { trigger, .. }
         | Node::Pendle { trigger, .. }
+        | Node::Lp { trigger, .. }
         | Node::Optimizer { trigger, .. } => trigger.as_ref(),
         Node::Wallet { .. } => None,
     }

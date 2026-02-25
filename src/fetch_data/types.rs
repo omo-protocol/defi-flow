@@ -16,7 +16,7 @@ impl DataSource {
     pub fn name(&self) -> &'static str {
         match self {
             DataSource::HyperliquidPerp => "hyperliquid",
-            DataSource::HyperliquidSpot => "hyperliquid",
+            DataSource::HyperliquidSpot => "hyperliquid_spot",
             DataSource::Rysk => "rysk",
             DataSource::DefiLlamaYield => "defillama",
             DataSource::AerodromeSubgraph => "aerodrome",
@@ -55,11 +55,11 @@ pub struct FetchConfig {
 pub enum FetchResult {
     Perp(Vec<csv_types::PerpCsvRow>),
     Options(Vec<csv_types::OptionsCsvRow>),
-    Lp(Vec<csv_types::LpCsvRow>),
     Lending(Vec<csv_types::LendingCsvRow>),
     Vault(Vec<csv_types::VaultCsvRow>),
     Pendle(Vec<csv_types::PendleCsvRow>),
     Price(Vec<csv_types::PriceCsvRow>),
+    Lp(Vec<csv_types::LpCsvRow>),
 }
 
 impl FetchResult {
@@ -67,11 +67,11 @@ impl FetchResult {
         match self {
             FetchResult::Perp(r) => r.len(),
             FetchResult::Options(r) => r.len(),
-            FetchResult::Lp(r) => r.len(),
             FetchResult::Lending(r) => r.len(),
             FetchResult::Vault(r) => r.len(),
             FetchResult::Pendle(r) => r.len(),
             FetchResult::Price(r) => r.len(),
+            FetchResult::Lp(r) => r.len(),
         }
     }
 }

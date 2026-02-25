@@ -27,3 +27,24 @@ Strategy description: $ARGUMENTS
 - Funding auto-compounds inside perp margin
 - Re-run `fetch-data` after renaming node IDs
 - Delta-neutral: use same expected_return/volatility for spot+perp legs so Kelly assigns equal weight
+
+## Interpreting Monte Carlo Results
+
+Monte Carlo generates synthetic data via parametric models (GBM prices, OU funding rates, AR(1) yields) estimated from historical data, then re-runs the backtest on each synthetic path. It stress-tests beyond the single historical path.
+
+**Why MC results often look worse than historical:**
+
+1. **Funding rate distribution**: If the historical mean funding rate is small relative to its stdev (common — e.g. mean 1bps, stdev 1.5bps), the OU process generates many paths where funding is net negative for extended periods. Shorts pay instead of receive.
+
+2. **Price volatility + rebalancing drag**: The GBM uses historical vol (often 50-80% for crypto). Between weekly rebalances, delta drifts. The optimizer rebalances at moved prices → buys high, sells low. The historical path may have been smooth; MC generates whipsaws.
+
+3. **Liquidation tail risk**: At 1x short leverage, liquidation triggers around ~2x price. With high vol, some GBM paths hit this. Liquidation is a permanent margin loss; the offsetting spot gain is unrealized and can reverse.
+
+4. **Adaptive Kelly with missing data**: If a venue reports 0% return / 100% vol (e.g. lending with sparse data), Kelly allocates 0% there. This removes diversification and puts 100% into the alpha leg with no cash buffer.
+
+**Historical Sharpe >> MC Sharpe is normal.** A single benign period produces inflated Sharpe ratios. MC median Sharpe is closer to reality. If MC shows negative 5th percentile returns, the strategy has genuine tail risk that the historical period didn't trigger.
+
+**What to check if MC looks bad:**
+- Are all venues getting nonzero adaptive stats? Check the `[kelly]` log lines for `return=0.00%` venues
+- Is the rebalance frequency appropriate for the vol? Daily > weekly for high-vol assets
+- Consider setting explicit `expected_return`/`volatility` on allocations instead of adaptive mode if the data is sparse

@@ -25,7 +25,7 @@ pub struct Workflow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<HashMap<String, HashMap<String, String>>>,
     /// Protocol contract addresses per chain.
-    /// Example: `{"aerodrome_position_manager": {"base": "0x..."}, "pendle_router": {"hyperevm": "0x..."}}`.
+    /// Example: `{"pendle_router": {"hyperevm": "0x..."}, "hyperlend_pool": {"hyperevm": "0x..."}}`.
     /// Used by live executors to resolve protocol-specific contract addresses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contracts: Option<HashMap<String, HashMap<String, String>>>,

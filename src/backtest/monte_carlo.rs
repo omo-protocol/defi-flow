@@ -11,8 +11,6 @@ use super::result::BacktestResult;
 /// Configuration for Monte Carlo simulation.
 pub struct MonteCarloConfig {
     pub n_simulations: u32,
-    pub block_size: usize,
-    pub gbm_vol_scale: f64,
 }
 
 /// Monte Carlo results: historical baseline + all simulation results.
@@ -22,9 +20,101 @@ pub struct MonteCarloResult {
     pub simulations: Vec<BacktestResult>,
 }
 
+// ── Estimated parameters from historical data ────────────────────────
+
+/// Parameters estimated from a perp CSV for synthetic generation.
+struct PerpParams {
+    n_periods: usize,
+    start_price: f64,
+    /// Per-period log-return drift
+    price_drift: f64,
+    /// Per-period log-return volatility
+    price_vol: f64,
+    /// Mean funding rate (per period)
+    funding_mean: f64,
+    /// Funding rate OU mean-reversion speed (per period, 0..1)
+    funding_theta: f64,
+    /// Funding rate OU volatility
+    funding_sigma: f64,
+    /// Mean rewards APY
+    rewards_mean: f64,
+    /// Mean bid-ask spread as fraction of price
+    spread_frac: f64,
+    /// Original symbol
+    symbol: String,
+    /// Original timestamps
+    timestamps: Vec<u64>,
+}
+
+/// Parameters estimated from a price/spot CSV.
+struct PriceParams {
+    n_periods: usize,
+    start_price: f64,
+    spread_frac: f64,
+    timestamps: Vec<u64>,
+}
+
+/// Parameters estimated from a lending CSV.
+struct LendingParams {
+    n_periods: usize,
+    supply_apy_mean: f64,
+    supply_apy_std: f64,
+    borrow_apy_mean: f64,
+    reward_apy_mean: f64,
+    reward_apy_std: f64,
+    utilization_mean: f64,
+    /// AR(1) coefficient for supply APY
+    ar1_coeff: f64,
+    timestamps: Vec<u64>,
+}
+
+/// Parameters estimated from a vault CSV.
+struct VaultParams {
+    n_periods: usize,
+    apy_mean: f64,
+    apy_std: f64,
+    reward_apy_mean: f64,
+    reward_apy_std: f64,
+    ar1_coeff: f64,
+    timestamps: Vec<u64>,
+}
+
+/// Parameters estimated from an LP CSV.
+struct LpParams {
+    n_periods: usize,
+    /// Starting tick
+    tick_start: i32,
+    /// Tick OU mean-reversion speed
+    tick_theta: f64,
+    /// Tick OU volatility
+    tick_sigma: f64,
+    /// Starting price_a (token A, e.g. WETH)
+    start_price_a: f64,
+    /// Price_b (token B, e.g. USDC) — typically stable
+    price_b: f64,
+    /// Fee APY AR(1) parameters
+    fee_apy_mean: f64,
+    fee_apy_std: f64,
+    fee_ar1: f64,
+    /// Reward rate AR(1) parameters
+    reward_rate_mean: f64,
+    reward_rate_std: f64,
+    reward_ar1: f64,
+    /// Mean reward token price (e.g. AERO)
+    reward_token_price: f64,
+    timestamps: Vec<u64>,
+}
+
 // ── Public API ────────────────────────────────────────────────────────
 
-/// Run Monte Carlo simulations alongside the historical backtest.
+/// Run Monte Carlo simulations with parametric synthetic data generation.
+///
+/// Instead of shuffling historical data, we estimate the statistical
+/// parameters (mean, vol, mean-reversion) from the historical CSVs
+/// and generate synthetic paths from those distributions:
+/// - Prices: GBM (shared across spot+perp for correlation)
+/// - Funding rate: Ornstein-Uhlenbeck (mean-reverting)
+/// - APY: AR(1) around historical mean
 pub fn run(
     config: &super::BacktestConfig,
     mc_config: &MonteCarloConfig,
@@ -32,11 +122,40 @@ pub fn run(
 ) -> Result<MonteCarloResult> {
     let manifest = crate::data::load_manifest(&config.data_dir)?;
 
-    // Collect unique CSV files to resample (avoid resampling the same file twice)
+    // Collect unique CSV files
     let unique_files: HashSet<(String, String)> = manifest
         .values()
         .map(|e| (e.file.clone(), e.kind.clone()))
         .collect();
+
+    // Estimate parameters from each CSV file
+    let file_params: Vec<(String, String, CsvParams)> = unique_files
+        .iter()
+        .filter_map(|(file, kind)| {
+            let path = config.data_dir.join(file);
+            let params = estimate_params(&path, kind).ok()?;
+            Some((file.clone(), kind.clone(), params))
+        })
+        .collect();
+
+    // Find the shared price GBM params (from the perp file, if present)
+    let perp_params: Option<&PerpParams> = file_params.iter().find_map(|(_, kind, params)| {
+        if kind == "perp" {
+            if let CsvParams::Perp(p) = params {
+                return Some(p);
+            }
+        }
+        None
+    });
+
+    // Extract shared GBM parameters for price correlation
+    let shared_price_drift = perp_params.map(|p| p.price_drift).unwrap_or(0.0);
+    let shared_price_vol = perp_params.map(|p| p.price_vol).unwrap_or(0.01);
+    let shared_n_periods = perp_params
+        .map(|p| p.n_periods)
+        .unwrap_or_else(|| {
+            file_params.iter().map(|(_, _, p)| p.n_periods()).max().unwrap_or(100)
+        });
 
     let pb = indicatif::ProgressBar::new(mc_config.n_simulations as u64);
     pb.set_style(
@@ -49,8 +168,9 @@ pub fn run(
         .into_par_iter()
         .filter_map(|i| {
             let sim_seed = config.seed.wrapping_add(i as u64 + 1);
+            let mut rng = StdRng::seed_from_u64(sim_seed);
 
-            // Create temp directory for this simulation's resampled data
+            // Create temp directory
             let temp_dir =
                 std::env::temp_dir().join(format!("defi-flow-mc-{}-{}", config.seed, i));
             if std::fs::create_dir_all(&temp_dir).is_err() {
@@ -58,15 +178,22 @@ pub fn run(
                 return None;
             }
 
-            // Resample each unique CSV file
-            let mut rng = StdRng::seed_from_u64(sim_seed);
-            for (file, kind) in &unique_files {
-                if resample_csv(
-                    &config.data_dir.join(file),
-                    &temp_dir.join(file),
+            // Generate ONE shared GBM price path for all correlated files
+            let shared_gbm = generate_gbm_prices(
+                shared_n_periods,
+                shared_price_drift,
+                shared_price_vol,
+                &mut rng,
+            );
+
+            // Generate synthetic CSV for each file
+            for (file, kind, params) in &file_params {
+                let output_path = temp_dir.join(file);
+                if generate_synthetic_csv(
+                    &output_path,
                     kind,
-                    mc_config.block_size,
-                    mc_config.gbm_vol_scale,
+                    params,
+                    &shared_gbm,
                     &mut rng,
                 )
                 .is_err()
@@ -77,7 +204,7 @@ pub fn run(
                 }
             }
 
-            // Copy manifest.json to temp directory
+            // Copy manifest
             if std::fs::copy(
                 config.data_dir.join("manifest.json"),
                 temp_dir.join("manifest.json"),
@@ -89,7 +216,7 @@ pub fn run(
                 return None;
             }
 
-            // Run backtest on resampled data
+            // Run backtest
             let sim_config = super::BacktestConfig {
                 workflow_path: config.workflow_path.clone(),
                 data_dir: temp_dir.clone(),
@@ -102,8 +229,6 @@ pub fn run(
             };
 
             let result = super::run_single_backtest(&sim_config).ok();
-
-            // Clean up temp directory
             let _ = std::fs::remove_dir_all(&temp_dir);
             pb.inc(1);
             result
@@ -128,7 +253,6 @@ pub fn print_results(mc: &MonteCarloResult) {
         return;
     }
 
-    // Extract and sort metrics
     let mut twrrs: Vec<f64> = sims.iter().map(|r| r.twrr_pct).collect();
     let mut drawdowns: Vec<f64> = sims.iter().map(|r| r.max_drawdown_pct).collect();
     let mut sharpes: Vec<f64> = sims.iter().map(|r| r.sharpe).collect();
@@ -177,266 +301,645 @@ pub fn print_results(mc: &MonteCarloResult) {
     println!("{}", "═".repeat(68));
 }
 
-// ── CSV Resampling ────────────────────────────────────────────────────
+// ── Parameter estimation ──────────────────────────────────────────────
 
-/// Resample a single CSV file using block bootstrap + GBM perturbation.
-fn resample_csv(
-    input_path: &Path,
-    output_path: &Path,
-    kind: &str,
-    block_size: usize,
-    gbm_vol_scale: f64,
-    rng: &mut impl Rng,
-) -> Result<()> {
-    let mut reader = csv::Reader::from_path(input_path)
-        .with_context(|| format!("opening {}", input_path.display()))?;
-    let headers = reader.headers()?.clone();
-    let records: Vec<csv::StringRecord> = reader
-        .records()
-        .collect::<Result<_, _>>()
-        .with_context(|| format!("reading {}", input_path.display()))?;
-
-    if records.len() < 2 {
-        // Too few rows to resample — just copy
-        std::fs::copy(input_path, output_path)?;
-        return Ok(());
-    }
-
-    // Group into periods (for options: by snapshot; for others: one row per period)
-    let periods = group_into_periods(&records, &headers, kind);
-    let n_periods = periods.len();
-
-    if n_periods < 2 {
-        std::fs::copy(input_path, output_path)?;
-        return Ok(());
-    }
-
-    // Group correlated price columns (same asset shares one GBM factor)
-    let price_groups = price_column_groups(&headers, kind);
-
-    // Compute historical volatility per group (from the primary/first column)
-    let group_sigmas: Vec<f64> = price_groups
-        .iter()
-        .map(|group| compute_volatility(&records, &periods, group[0]))
-        .collect();
-
-    // Block bootstrap: select periods with replacement
-    let bootstrapped_indices = block_bootstrap(n_periods, block_size, rng);
-
-    // Generate one GBM path per group (correlated columns share the same factor)
-    let group_factors: Vec<Vec<f64>> = if gbm_vol_scale > 0.0 && !price_groups.is_empty() {
-        group_sigmas
-            .iter()
-            .map(|sigma| generate_gbm_factors(n_periods, *sigma * gbm_vol_scale, rng))
-            .collect()
-    } else {
-        price_groups.iter().map(|_| vec![1.0; n_periods]).collect()
-    };
-
-    // Collect original timestamps per period (first row of each period)
-    let timestamp_col = headers.iter().position(|h| h == "timestamp");
-    let snapshot_col = headers.iter().position(|h| h == "snapshot");
-
-    let original_timestamps: Vec<String> = periods
-        .iter()
-        .map(|period_rows| {
-            timestamp_col
-                .map(|c| records[period_rows[0]][c].to_string())
-                .unwrap_or_default()
-        })
-        .collect();
-
-    // Build resampled records
-    let mut output_records: Vec<csv::StringRecord> = Vec::new();
-
-    for (new_period_idx, &orig_period_idx) in bootstrapped_indices.iter().enumerate() {
-        let period_rows = &periods[orig_period_idx];
-
-        for &orig_row_idx in period_rows {
-            let mut fields: Vec<String> = (0..records[orig_row_idx].len())
-                .map(|i| records[orig_row_idx][i].to_string())
-                .collect();
-
-            // Restore the original timestamp for this position in the sequence
-            if let Some(ts_col) = timestamp_col {
-                if new_period_idx < original_timestamps.len() {
-                    fields[ts_col] = original_timestamps[new_period_idx].clone();
-                }
-            }
-
-            // Update snapshot number for options
-            if let Some(snap_col) = snapshot_col {
-                fields[snap_col] = (new_period_idx + 1).to_string();
-            }
-
-            // Apply GBM perturbation to price columns (correlated columns share one factor)
-            for (group_idx, group) in price_groups.iter().enumerate() {
-                let factor = group_factors[group_idx][new_period_idx];
-                for &col in group {
-                    if let Ok(price) = fields[col].parse::<f64>() {
-                        if price > 0.0 {
-                            fields[col] = format!("{}", price * factor);
-                        }
-                    }
-                }
-            }
-
-            output_records.push(csv::StringRecord::from(fields));
-        }
-    }
-
-    // Write output CSV
-    let mut writer = csv::Writer::from_path(output_path)
-        .with_context(|| format!("writing {}", output_path.display()))?;
-    writer.write_record(&headers)?;
-    for record in &output_records {
-        writer.write_record(record)?;
-    }
-    writer.flush()?;
-
-    Ok(())
+enum CsvParams {
+    Perp(PerpParams),
+    Price(PriceParams),
+    Lending(LendingParams),
+    Vault(VaultParams),
+    Lp(LpParams),
+    /// Unknown CSV type — will be copied as-is.
+    Passthrough(std::path::PathBuf),
 }
 
-/// Group records into periods.
-/// For options: group by snapshot number (multiple rows per snapshot).
-/// For all other CSV types: each row is its own period.
-fn group_into_periods(
-    records: &[csv::StringRecord],
-    headers: &csv::StringRecord,
-    kind: &str,
-) -> Vec<Vec<usize>> {
-    if kind == "options" {
-        if let Some(snap_col) = headers.iter().position(|h| h == "snapshot") {
-            let mut groups: Vec<Vec<usize>> = Vec::new();
-            let mut current_snapshot = String::new();
-
-            for (i, record) in records.iter().enumerate() {
-                let snap = record[snap_col].to_string();
-                if snap != current_snapshot {
-                    groups.push(Vec::new());
-                    current_snapshot = snap;
-                }
-                groups.last_mut().unwrap().push(i);
-            }
-            return groups;
+impl CsvParams {
+    fn n_periods(&self) -> usize {
+        match self {
+            CsvParams::Perp(p) => p.n_periods,
+            CsvParams::Price(p) => p.n_periods,
+            CsvParams::Lending(p) => p.n_periods,
+            CsvParams::Vault(p) => p.n_periods,
+            CsvParams::Lp(p) => p.n_periods,
+            CsvParams::Passthrough(_) => 0,
         }
     }
-
-    // Default: each row is its own period
-    (0..records.len()).map(|i| vec![i]).collect()
 }
 
-/// Group price columns that should share the same GBM factor.
-/// Correlated columns (e.g. mark/index/bid/ask for perps) share one factor
-/// so their relationships are preserved. Independent assets (e.g. LP token A vs B)
-/// get separate factors.
-fn price_column_groups(headers: &csv::StringRecord, kind: &str) -> Vec<Vec<usize>> {
-    let find = |name: &str| headers.iter().position(|h| h == name);
-
+fn estimate_params(path: &Path, kind: &str) -> Result<CsvParams> {
     match kind {
-        "perp" => {
-            // All perp price columns are the same asset — share one GBM factor
-            let cols: Vec<usize> = [
-                "mark_price",
-                "index_price",
-                "bid",
-                "ask",
-                "mid_price",
-                "last_price",
-            ]
-            .iter()
-            .filter_map(|n| find(n))
-            .collect();
-            if cols.is_empty() { vec![] } else { vec![cols] }
-        }
-        "options" => {
-            // spot_price is one asset
-            if let Some(c) = find("spot_price") { vec![vec![c]] } else { vec![] }
-        }
-        "lp" => {
-            // Each LP token is a different asset — separate factors
-            ["price_a", "price_b", "reward_token_price"]
-                .iter()
-                .filter_map(|n| find(n).map(|c| vec![c]))
-                .collect()
-        }
-        "pendle" => {
-            // PT/YT/underlying derive from same asset — share one GBM factor
-            let cols: Vec<usize> = ["pt_price", "yt_price", "underlying_price"]
-                .iter()
-                .filter_map(|n| find(n))
-                .collect();
-            if cols.is_empty() { vec![] } else { vec![cols] }
-        }
-        _ => vec![], // lending/vault have no price columns
+        "perp" => estimate_perp_params(path).map(CsvParams::Perp),
+        "price" => estimate_price_params(path).map(CsvParams::Price),
+        "lending" => estimate_lending_params(path).map(CsvParams::Lending),
+        "vault" => estimate_vault_params(path).map(CsvParams::Vault),
+        "lp" => estimate_lp_params(path).map(CsvParams::Lp),
+        _ => Ok(CsvParams::Passthrough(path.to_path_buf())),
     }
 }
 
-/// Compute per-period log-return volatility from a price column.
-fn compute_volatility(
-    records: &[csv::StringRecord],
-    periods: &[Vec<usize>],
-    col: usize,
-) -> f64 {
-    // Extract one price per period (first row of each period)
-    let prices: Vec<f64> = periods
-        .iter()
-        .filter_map(|period| {
-            period
-                .first()
-                .and_then(|&idx| records[idx][col].parse::<f64>().ok())
+fn estimate_perp_params(path: &Path) -> Result<PerpParams> {
+    let mut reader = csv::Reader::from_path(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    let rows: Vec<crate::venues::perps::data::PerpCsvRow> = reader
+        .deserialize()
+        .collect::<Result<_, _>>()
+        .with_context(|| format!("parsing {}", path.display()))?;
+
+    if rows.len() < 10 {
+        anyhow::bail!("too few rows for perp params estimation");
+    }
+
+    let n = rows.len();
+    let timestamps: Vec<u64> = rows.iter().map(|r| r.timestamp).collect();
+
+    // Price GBM parameters from log returns
+    let log_returns: Vec<f64> = rows
+        .windows(2)
+        .filter_map(|w| {
+            if w[0].mark_price > 0.0 && w[1].mark_price > 0.0 {
+                Some((w[1].mark_price / w[0].mark_price).ln())
+            } else {
+                None
+            }
         })
-        .filter(|p| *p > 0.0)
+        .collect();
+    let price_drift = mean(&log_returns);
+    let price_vol = std_dev(&log_returns);
+
+    // Funding rate OU parameters
+    let funding_rates: Vec<f64> = rows.iter().map(|r| r.funding_rate).collect();
+    let funding_mean = mean(&funding_rates);
+    let (funding_theta, funding_sigma) = estimate_ou(&funding_rates);
+
+    // Rewards APY
+    let rewards_mean = mean(&rows.iter().map(|r| r.rewards_apy).collect::<Vec<_>>());
+
+    // Bid-ask spread
+    let spreads: Vec<f64> = rows
+        .iter()
+        .filter(|r| r.mark_price > 0.0)
+        .map(|r| (r.ask - r.bid) / r.mark_price)
+        .collect();
+    let spread_frac = mean(&spreads).max(0.0001);
+
+    Ok(PerpParams {
+        n_periods: n,
+        start_price: rows[0].mark_price,
+        price_drift,
+        price_vol,
+        funding_mean,
+        funding_theta,
+        funding_sigma,
+        rewards_mean,
+        spread_frac,
+        symbol: rows[0].symbol.clone(),
+        timestamps,
+    })
+}
+
+fn estimate_price_params(path: &Path) -> Result<PriceParams> {
+    let mut reader = csv::Reader::from_path(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    let rows: Vec<crate::venues::perps::data::PriceCsvRow> = reader
+        .deserialize()
+        .collect::<Result<_, _>>()
+        .with_context(|| format!("parsing {}", path.display()))?;
+
+    if rows.len() < 2 {
+        anyhow::bail!("too few rows for price params");
+    }
+
+    let spreads: Vec<f64> = rows
+        .iter()
+        .filter(|r| r.price > 0.0)
+        .map(|r| (r.ask - r.bid) / r.price)
         .collect();
 
-    if prices.len() < 3 {
-        return 0.01; // minimal volatility
-    }
-
-    // Compute log returns
-    let log_returns: Vec<f64> = prices.windows(2).map(|w| (w[1] / w[0]).ln()).collect();
-
-    let mean = log_returns.iter().sum::<f64>() / log_returns.len() as f64;
-    let variance = log_returns
-        .iter()
-        .map(|r| (r - mean).powi(2))
-        .sum::<f64>()
-        / (log_returns.len() - 1) as f64;
-
-    variance.sqrt()
+    Ok(PriceParams {
+        n_periods: rows.len(),
+        start_price: rows[0].price,
+        spread_frac: mean(&spreads).max(0.0001),
+        timestamps: rows.iter().map(|r| r.timestamp).collect(),
+    })
 }
 
-/// Block bootstrap: resample period indices using blocks of consecutive periods.
-/// Blocks wrap around to preserve the full dataset.
-fn block_bootstrap(n_periods: usize, block_size: usize, rng: &mut impl Rng) -> Vec<usize> {
-    let bs = block_size.max(1).min(n_periods);
-    let n_blocks = (n_periods + bs - 1) / bs;
-    let mut indices = Vec::with_capacity(n_blocks * bs);
+fn estimate_lending_params(path: &Path) -> Result<LendingParams> {
+    let mut reader = csv::Reader::from_path(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    let rows: Vec<crate::venues::lending::data::LendingCsvRow> = reader
+        .deserialize()
+        .collect::<Result<_, _>>()
+        .with_context(|| format!("parsing {}", path.display()))?;
 
-    for _ in 0..n_blocks {
-        let start = rng.random_range(0..n_periods);
-        for j in 0..bs {
-            indices.push((start + j) % n_periods);
-        }
+    if rows.len() < 2 {
+        anyhow::bail!("too few rows for lending params");
     }
 
-    indices.truncate(n_periods);
-    indices
+    let supply_apys: Vec<f64> = rows.iter().map(|r| r.supply_apy).collect();
+    let borrow_apys: Vec<f64> = rows.iter().map(|r| r.borrow_apy).collect();
+    let reward_apys: Vec<f64> = rows.iter().map(|r| r.reward_apy).collect();
+    let utils: Vec<f64> = rows.iter().map(|r| r.utilization).collect();
+
+    Ok(LendingParams {
+        n_periods: rows.len(),
+        supply_apy_mean: mean(&supply_apys),
+        supply_apy_std: std_dev(&supply_apys),
+        borrow_apy_mean: mean(&borrow_apys),
+        reward_apy_mean: mean(&reward_apys),
+        reward_apy_std: std_dev(&reward_apys),
+        utilization_mean: mean(&utils),
+        ar1_coeff: estimate_ar1(&supply_apys),
+        timestamps: rows.iter().map(|r| r.timestamp).collect(),
+    })
 }
 
-/// Generate cumulative GBM scaling factors.
-/// S_t = exp(sum_{j=1..t} (-0.5*sigma^2 + sigma*Z_j)) where Z_j ~ N(0,1)
-fn generate_gbm_factors(n: usize, sigma: f64, rng: &mut impl Rng) -> Vec<f64> {
-    let mut factors = Vec::with_capacity(n);
-    let mut cumulative = 0.0_f64;
+fn estimate_vault_params(path: &Path) -> Result<VaultParams> {
+    let mut reader = csv::Reader::from_path(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    let rows: Vec<crate::venues::vault::data::VaultCsvRow> = reader
+        .deserialize()
+        .collect::<Result<_, _>>()
+        .with_context(|| format!("parsing {}", path.display()))?;
+
+    if rows.len() < 2 {
+        anyhow::bail!("too few rows for vault params");
+    }
+
+    let apys: Vec<f64> = rows.iter().map(|r| r.apy).collect();
+    let reward_apys: Vec<f64> = rows.iter().map(|r| r.reward_apy).collect();
+
+    Ok(VaultParams {
+        n_periods: rows.len(),
+        apy_mean: mean(&apys),
+        apy_std: std_dev(&apys),
+        reward_apy_mean: mean(&reward_apys),
+        reward_apy_std: std_dev(&reward_apys),
+        ar1_coeff: estimate_ar1(&apys),
+        timestamps: rows.iter().map(|r| r.timestamp).collect(),
+    })
+}
+
+// ── Synthetic data generation ─────────────────────────────────────────
+
+/// Generate a GBM price path: S_t = S_0 * exp(sum(drift + vol*Z_i))
+/// Returns price multipliers (relative to start) for each period.
+fn generate_gbm_prices(
+    n: usize,
+    drift: f64,
+    vol: f64,
+    rng: &mut impl Rng,
+) -> Vec<f64> {
+    let mut prices = Vec::with_capacity(n);
+    let mut log_cum = 0.0;
 
     for _ in 0..n {
         let z = standard_normal(rng);
-        cumulative += -0.5 * sigma * sigma + sigma * z;
-        factors.push(cumulative.exp());
+        log_cum += drift - 0.5 * vol * vol + vol * z;
+        prices.push(log_cum.exp());
+    }
+    prices
+}
+
+/// Generate an OU (mean-reverting) path for funding rates.
+/// dx = theta * (mu - x) * dt + sigma * dW
+fn generate_ou_path(
+    n: usize,
+    mu: f64,
+    theta: f64,
+    sigma: f64,
+    rng: &mut impl Rng,
+) -> Vec<f64> {
+    let mut path = Vec::with_capacity(n);
+    let mut x = mu;
+
+    for _ in 0..n {
+        let z = standard_normal(rng);
+        x += theta * (mu - x) + sigma * z;
+        path.push(x);
+    }
+    path
+}
+
+/// Generate an AR(1) path around a mean: x_t = mean + phi*(x_{t-1} - mean) + sigma*Z
+fn generate_ar1_path(
+    n: usize,
+    mu: f64,
+    sigma: f64,
+    phi: f64,
+    rng: &mut impl Rng,
+) -> Vec<f64> {
+    let mut path = Vec::with_capacity(n);
+    let mut x = mu;
+
+    for _ in 0..n {
+        let z = standard_normal(rng);
+        x = mu + phi * (x - mu) + sigma * z;
+        path.push(x.max(0.0)); // APY can't be negative
+    }
+    path
+}
+
+/// Write a synthetic CSV for the given kind and parameters.
+/// `shared_gbm` provides correlated price multipliers across files.
+fn generate_synthetic_csv(
+    output_path: &Path,
+    _kind: &str,
+    params: &CsvParams,
+    shared_gbm: &[f64],
+    rng: &mut impl Rng,
+) -> Result<()> {
+    match params {
+        CsvParams::Perp(p) => generate_perp_csv(output_path, p, shared_gbm, rng),
+        CsvParams::Price(p) => generate_price_csv(output_path, p, shared_gbm),
+        CsvParams::Lending(p) => generate_lending_csv(output_path, p, rng),
+        CsvParams::Vault(p) => generate_vault_csv(output_path, p, rng),
+        CsvParams::Lp(p) => generate_lp_csv(output_path, p, shared_gbm, rng),
+        CsvParams::Passthrough(src) => {
+            std::fs::copy(src, output_path)?;
+            Ok(())
+        }
+    }
+}
+
+fn generate_perp_csv(
+    output_path: &Path,
+    params: &PerpParams,
+    shared_gbm: &[f64],
+    rng: &mut impl Rng,
+) -> Result<()> {
+    let n = params.n_periods;
+
+    // Generate funding rate path (OU process)
+    let funding_path = generate_ou_path(
+        n,
+        params.funding_mean,
+        params.funding_theta,
+        params.funding_sigma,
+        rng,
+    );
+
+    let mut writer = csv::Writer::from_path(output_path)
+        .with_context(|| format!("writing {}", output_path.display()))?;
+
+    writer.write_record([
+        "symbol",
+        "mark_price",
+        "index_price",
+        "funding_rate",
+        "open_interest",
+        "volume_24h",
+        "bid",
+        "ask",
+        "mid_price",
+        "last_price",
+        "premium",
+        "basis",
+        "timestamp",
+        "funding_apy",
+        "rewards_apy",
+    ])?;
+
+    for i in 0..n {
+        let gbm_factor = if i < shared_gbm.len() { shared_gbm[i] } else { 1.0 };
+        let price = params.start_price * gbm_factor;
+        let half_spread = price * params.spread_frac * 0.5;
+        let bid = price - half_spread;
+        let ask = price + half_spread;
+        let fr = funding_path[i];
+        let ts = if i < params.timestamps.len() {
+            params.timestamps[i]
+        } else {
+            params.timestamps.last().copied().unwrap_or(0) + (i as u64 * 28800)
+        };
+
+        writer.write_record(&[
+            params.symbol.clone(),
+            format!("{price}"),
+            format!("{price}"),
+            format!("{fr}"),
+            "0".to_string(),
+            "0".to_string(),
+            format!("{bid}"),
+            format!("{ask}"),
+            format!("{price}"),
+            format!("{price}"),
+            "0".to_string(),
+            "0".to_string(),
+            format!("{ts}"),
+            format!("{}", fr * 8760.0),
+            format!("{}", params.rewards_mean),
+        ])?;
     }
 
-    factors
+    writer.flush()?;
+    Ok(())
+}
+
+fn generate_price_csv(
+    output_path: &Path,
+    params: &PriceParams,
+    shared_gbm: &[f64],
+) -> Result<()> {
+    let n = params.n_periods;
+
+    let mut writer = csv::Writer::from_path(output_path)
+        .with_context(|| format!("writing {}", output_path.display()))?;
+
+    writer.write_record(["timestamp", "price", "bid", "ask"])?;
+
+    for i in 0..n {
+        let gbm_factor = if i < shared_gbm.len() { shared_gbm[i] } else { 1.0 };
+        let price = params.start_price * gbm_factor;
+        let half_spread = price * params.spread_frac * 0.5;
+        let ts = if i < params.timestamps.len() {
+            params.timestamps[i]
+        } else {
+            params.timestamps.last().copied().unwrap_or(0) + (i as u64 * 28800)
+        };
+
+        writer.write_record(&[
+            format!("{ts}"),
+            format!("{price}"),
+            format!("{}", price - half_spread),
+            format!("{}", price + half_spread),
+        ])?;
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+fn generate_lending_csv(
+    output_path: &Path,
+    params: &LendingParams,
+    rng: &mut impl Rng,
+) -> Result<()> {
+    let supply_path = generate_ar1_path(
+        params.n_periods,
+        params.supply_apy_mean,
+        params.supply_apy_std,
+        params.ar1_coeff,
+        rng,
+    );
+    let reward_path = generate_ar1_path(
+        params.n_periods,
+        params.reward_apy_mean,
+        params.reward_apy_std,
+        params.ar1_coeff,
+        rng,
+    );
+
+    let mut writer = csv::Writer::from_path(output_path)
+        .with_context(|| format!("writing {}", output_path.display()))?;
+
+    writer.write_record(["timestamp", "supply_apy", "borrow_apy", "utilization", "reward_apy"])?;
+
+    for i in 0..params.n_periods {
+        let ts = if i < params.timestamps.len() {
+            params.timestamps[i]
+        } else {
+            params.timestamps.last().copied().unwrap_or(0) + (i as u64 * 28800)
+        };
+        // borrow_apy scales with supply_apy using historical ratio
+        let borrow_ratio = if params.supply_apy_mean > 0.0 {
+            params.borrow_apy_mean / params.supply_apy_mean
+        } else {
+            1.5
+        };
+
+        writer.write_record(&[
+            format!("{ts}"),
+            format!("{}", supply_path[i]),
+            format!("{}", (supply_path[i] * borrow_ratio).max(0.0)),
+            format!("{}", params.utilization_mean),
+            format!("{}", reward_path[i]),
+        ])?;
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+fn generate_vault_csv(
+    output_path: &Path,
+    params: &VaultParams,
+    rng: &mut impl Rng,
+) -> Result<()> {
+    let apy_path = generate_ar1_path(
+        params.n_periods,
+        params.apy_mean,
+        params.apy_std,
+        params.ar1_coeff,
+        rng,
+    );
+    let reward_path = generate_ar1_path(
+        params.n_periods,
+        params.reward_apy_mean,
+        params.reward_apy_std,
+        params.ar1_coeff,
+        rng,
+    );
+
+    let mut writer = csv::Writer::from_path(output_path)
+        .with_context(|| format!("writing {}", output_path.display()))?;
+
+    writer.write_record(["timestamp", "apy", "reward_apy"])?;
+
+    for i in 0..params.n_periods {
+        let ts = if i < params.timestamps.len() {
+            params.timestamps[i]
+        } else {
+            params.timestamps.last().copied().unwrap_or(0) + (i as u64 * 28800)
+        };
+
+        writer.write_record(&[
+            format!("{ts}"),
+            format!("{}", apy_path[i]),
+            format!("{}", reward_path[i]),
+        ])?;
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+fn estimate_lp_params(path: &Path) -> Result<LpParams> {
+    let mut reader = csv::Reader::from_path(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    let rows: Vec<crate::venues::lp::data::LpCsvRow> = reader
+        .deserialize()
+        .collect::<Result<_, _>>()
+        .with_context(|| format!("parsing {}", path.display()))?;
+
+    if rows.len() < 10 {
+        anyhow::bail!("too few rows for LP params estimation");
+    }
+
+    let timestamps: Vec<u64> = rows.iter().map(|r| r.timestamp).collect();
+
+    // Tick OU parameters
+    let ticks: Vec<f64> = rows.iter().map(|r| r.current_tick as f64).collect();
+    let (tick_theta, tick_sigma) = estimate_ou(&ticks);
+
+    // Fee APY AR(1) parameters
+    let fee_apys: Vec<f64> = rows.iter().map(|r| r.fee_apy).collect();
+    let fee_ar1 = estimate_ar1(&fee_apys);
+
+    // Reward rate AR(1) parameters
+    let reward_rates: Vec<f64> = rows.iter().map(|r| r.reward_rate).collect();
+    let reward_ar1 = estimate_ar1(&reward_rates);
+
+    Ok(LpParams {
+        n_periods: rows.len(),
+        tick_start: rows[0].current_tick,
+        tick_theta,
+        tick_sigma,
+        start_price_a: rows[0].price_a,
+        price_b: rows[0].price_b,
+        fee_apy_mean: mean(&fee_apys),
+        fee_apy_std: std_dev(&fee_apys),
+        fee_ar1,
+        reward_rate_mean: mean(&reward_rates),
+        reward_rate_std: std_dev(&reward_rates),
+        reward_ar1,
+        reward_token_price: mean(&rows.iter().map(|r| r.reward_token_price).collect::<Vec<_>>()),
+        timestamps,
+    })
+}
+
+fn generate_lp_csv(
+    output_path: &Path,
+    params: &LpParams,
+    shared_gbm: &[f64],
+    rng: &mut impl Rng,
+) -> Result<()> {
+    let n = params.n_periods;
+
+    // Tick follows OU process (mean-reverting around starting tick)
+    let tick_mean = params.tick_start as f64;
+    let tick_path = generate_ou_path(n, tick_mean, params.tick_theta, params.tick_sigma, rng);
+
+    // Fee APY follows AR(1)
+    let fee_path = generate_ar1_path(
+        n,
+        params.fee_apy_mean,
+        params.fee_apy_std,
+        params.fee_ar1,
+        rng,
+    );
+
+    // Reward rate follows AR(1)
+    let reward_path = generate_ar1_path(
+        n,
+        params.reward_rate_mean,
+        params.reward_rate_std,
+        params.reward_ar1,
+        rng,
+    );
+
+    let mut writer = csv::Writer::from_path(output_path)
+        .with_context(|| format!("writing {}", output_path.display()))?;
+
+    writer.write_record([
+        "timestamp",
+        "current_tick",
+        "price_a",
+        "price_b",
+        "fee_apy",
+        "reward_rate",
+        "reward_token_price",
+    ])?;
+
+    for i in 0..n {
+        // price_a (e.g. WETH) follows shared GBM for correlation with spot/perp
+        let gbm_factor = if i < shared_gbm.len() { shared_gbm[i] } else { 1.0 };
+        let price_a = params.start_price_a * gbm_factor;
+
+        let ts = if i < params.timestamps.len() {
+            params.timestamps[i]
+        } else {
+            params.timestamps.last().copied().unwrap_or(0) + (i as u64 * 28800)
+        };
+
+        writer.write_record(&[
+            format!("{ts}"),
+            format!("{}", tick_path[i] as i32),
+            format!("{price_a}"),
+            format!("{}", params.price_b),
+            format!("{}", fee_path[i]),
+            format!("{}", reward_path[i]),
+            format!("{}", params.reward_token_price),
+        ])?;
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+// ── Statistical helpers ──────────────────────────────────────────────
+
+fn mean(xs: &[f64]) -> f64 {
+    if xs.is_empty() { return 0.0; }
+    xs.iter().sum::<f64>() / xs.len() as f64
+}
+
+fn std_dev(xs: &[f64]) -> f64 {
+    if xs.len() < 2 { return 0.0; }
+    let m = mean(xs);
+    let var = xs.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (xs.len() - 1) as f64;
+    var.sqrt()
+}
+
+/// Estimate AR(1) coefficient: phi = corr(x_t, x_{t-1})
+fn estimate_ar1(xs: &[f64]) -> f64 {
+    if xs.len() < 3 { return 0.5; }
+    let m = mean(xs);
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for i in 1..xs.len() {
+        num += (xs[i] - m) * (xs[i - 1] - m);
+        den += (xs[i - 1] - m).powi(2);
+    }
+    if den < 1e-12 { return 0.5; }
+    (num / den).clamp(0.0, 0.99)
+}
+
+/// Estimate OU parameters: theta (mean-reversion speed) and sigma (noise vol).
+/// From discrete observations: x_{t+1} = x_t + theta*(mu - x_t) + sigma*Z
+fn estimate_ou(xs: &[f64]) -> (f64, f64) {
+    if xs.len() < 3 {
+        return (0.1, std_dev(xs));
+    }
+
+    let mu = mean(xs);
+    // Regress dx on (mu - x) to get theta
+    let mut sum_xy = 0.0;
+    let mut sum_x2 = 0.0;
+    let mut residuals = Vec::new();
+
+    for i in 1..xs.len() {
+        let dx = xs[i] - xs[i - 1];
+        let deviation = mu - xs[i - 1];
+        sum_xy += dx * deviation;
+        sum_x2 += deviation * deviation;
+    }
+
+    let theta = if sum_x2 > 1e-20 {
+        (sum_xy / sum_x2).clamp(0.001, 1.0)
+    } else {
+        0.1
+    };
+
+    // Estimate sigma from residuals
+    for i in 1..xs.len() {
+        let dx = xs[i] - xs[i - 1];
+        let predicted = theta * (mu - xs[i - 1]);
+        residuals.push(dx - predicted);
+    }
+
+    let sigma = std_dev(&residuals).max(1e-10);
+
+    (theta, sigma)
 }
 
 /// Box-Muller transform to generate N(0,1) samples.
@@ -445,8 +948,6 @@ fn standard_normal(rng: &mut impl Rng) -> f64 {
     let u2: f64 = rng.random_range(0.0f64..std::f64::consts::TAU);
     (-2.0 * u1.ln()).sqrt() * u2.cos()
 }
-
-// ── Percentile Utility ────────────────────────────────────────────────
 
 /// Linear interpolation percentile on a sorted slice.
 fn percentile(sorted: &[f64], pct: f64) -> f64 {

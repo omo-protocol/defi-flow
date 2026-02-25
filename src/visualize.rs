@@ -235,12 +235,6 @@ fn node_detail(node: &Node) -> String {
         Node::Spot {
             venue, pair, side, ..
         } => format!("{venue:?} {side:?} {pair}"),
-        Node::Lp {
-            venue,
-            pool,
-            action,
-            ..
-        } => format!("{venue:?} {action:?} {pool}"),
         Node::Movement {
             movement_type,
             provider,
@@ -283,6 +277,20 @@ fn node_detail(node: &Node) -> String {
         Node::Pendle {
             market, action, ..
         } => format!("{action:?} {market}"),
+        Node::Lp {
+            venue,
+            pool,
+            action,
+            tick_lower,
+            tick_upper,
+            ..
+        } => {
+            let range = match (tick_lower, tick_upper) {
+                (Some(lo), Some(hi)) => format!(" [{lo}:{hi}]"),
+                _ => " [full]".to_string(),
+            };
+            format!("{venue:?} {action:?} {pool}{range}")
+        }
         Node::Optimizer {
             strategy,
             kelly_fraction,
@@ -303,11 +311,11 @@ fn node_dot_style(node: &Node) -> String {
         Node::Perp { .. } => ("box", "#c62828"),
         Node::Options { .. } => ("box", "#ad1457"),
         Node::Spot { .. } => ("box", "#1565c0"),
-        Node::Lp { .. } => ("box", "#6a1b9a"),
         Node::Movement { .. } => ("parallelogram", "#e65100"),
         Node::Lending { .. } => ("box", "#00838f"),
         Node::Vault { .. } => ("box", "#00695c"),
         Node::Pendle { .. } => ("box", "#37474f"),
+        Node::Lp { .. } => ("box", "#6a1b9a"),
         Node::Optimizer { .. } => ("diamond", "#f9a825"),
     };
 
