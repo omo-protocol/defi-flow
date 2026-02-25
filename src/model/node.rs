@@ -936,21 +936,23 @@ impl Node {
                 margin_token,
                 action,
                 ..
-            } => match venue {
-                // Hyperliquid USDC lives on HyperCore — skip token validation.
-                PerpVenue::Hyperliquid => None,
-                _ => match action {
-                    PerpAction::Open | PerpAction::Adjust => {
-                        let tok = margin_token
-                            .as_deref()
-                            .unwrap_or(perp_venue_default_margin(venue));
-                        Some(TokenFlow {
-                            token: tok.to_string(),
-                            chain: Some(Chain::hyperevm()),
-                        })
-                    }
-                    _ => None,
-                },
+            } => match action {
+                PerpAction::Open | PerpAction::Adjust => {
+                    let tok = margin_token
+                        .as_deref()
+                        .unwrap_or(perp_venue_default_margin(venue));
+                    // Hyperliquid: USDC margin lives on HyperCore (non-EVM),
+                    // so skip chain validation but still validate the token.
+                    let chain = match venue {
+                        PerpVenue::Hyperliquid => None,
+                        PerpVenue::Hyena => Some(Chain::hyperevm()),
+                    };
+                    Some(TokenFlow {
+                        token: tok.to_string(),
+                        chain,
+                    })
+                }
+                _ => None,
             },
             Node::Lending {
                 action,
@@ -1005,7 +1007,33 @@ impl Node {
                 }),
                 _ => None,
             },
-            Node::Spot { .. } | Node::Optimizer { .. } => None,
+            Node::Spot {
+                venue,
+                pair,
+                side,
+                ..
+            } => {
+                let parts: Vec<&str> = pair.split('/').collect();
+                if parts.len() == 2 {
+                    // Buy ETH/USDC → needs USDC input; Sell ETH/USDC → needs ETH input
+                    let tok = match side {
+                        SpotSide::Buy => parts[1],
+                        SpotSide::Sell => parts[0],
+                    };
+                    // Hyperliquid spot: margin flows via HyperCore (non-EVM),
+                    // so skip chain validation but still validate the token.
+                    let chain = match venue {
+                        SpotVenue::Hyperliquid => None,
+                    };
+                    Some(TokenFlow {
+                        token: tok.to_string(),
+                        chain,
+                    })
+                } else {
+                    None
+                }
+            }
+            Node::Optimizer { .. } => None,
         }
     }
 }

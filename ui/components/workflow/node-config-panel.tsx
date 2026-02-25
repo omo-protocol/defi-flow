@@ -1,6 +1,6 @@
 "use client";
 
-import { useAtomValue, useSetAtom, useAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import {
   nodesAtom,
   edgesAtom,
@@ -9,6 +9,8 @@ import {
   deleteNodeAtom,
   deleteEdgeAtom,
   updateNodeDataAtom,
+  tokensManifestAtom,
+  contractsManifestAtom,
 } from "@/lib/workflow-store";
 import type { CanvasEdge, CanvasEdgeData } from "@/lib/types/canvas";
 import { getNodeConfig } from "@/lib/node-registry";
@@ -127,7 +129,95 @@ function EdgeConfig({ edge }: { edge: CanvasEdge }) {
   );
 }
 
+function ManifestEditor({
+  title,
+  manifest,
+  setManifest,
+}: {
+  title: string;
+  manifest: Record<string, Record<string, string>> | undefined;
+  setManifest: (m: Record<string, Record<string, string>> | undefined) => void;
+}) {
+  if (!manifest || Object.keys(manifest).length === 0) return null;
+
+  const updateEntry = (key: string, chain: string, value: string) => {
+    const updated = structuredClone(manifest);
+    updated[key][chain] = value;
+    setManifest(updated);
+  };
+
+  const addEntry = () => {
+    const updated = structuredClone(manifest) ?? {};
+    const name = `new_${Object.keys(updated).length}`;
+    updated[name] = { hyperevm: "" };
+    setManifest(updated);
+  };
+
+  const removeEntry = (key: string) => {
+    const updated = structuredClone(manifest);
+    delete updated[key];
+    setManifest(Object.keys(updated).length > 0 ? updated : undefined);
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <h4 className="text-xs font-semibold">{title}</h4>
+        <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[10px]" onClick={addEntry}>
+          + Add
+        </Button>
+      </div>
+      {Object.entries(manifest).map(([key, chains]) => (
+        <div key={key} className="rounded border p-2 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-mono font-medium truncate">{key}</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 w-5 p-0 text-destructive"
+              onClick={() => removeEntry(key)}
+            >
+              <Trash2 className="w-3 h-3" />
+            </Button>
+          </div>
+          {Object.entries(chains).map(([chain, addr]) => (
+            <div key={chain} className="flex items-center gap-1.5">
+              <span className="text-[10px] text-muted-foreground w-16 shrink-0">{chain}</span>
+              <Input
+                className="h-6 text-[10px] font-mono"
+                value={addr}
+                onChange={(e) => updateEntry(key, chain, e.target.value)}
+                placeholder="0x..."
+              />
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function EmptyState() {
+  const [tokens, setTokens] = useAtom(tokensManifestAtom);
+  const [contracts, setContracts] = useAtom(contractsManifestAtom);
+
+  const hasManifests =
+    (tokens && Object.keys(tokens).length > 0) ||
+    (contracts && Object.keys(contracts).length > 0);
+
+  if (hasManifests) {
+    return (
+      <div className="h-full overflow-y-auto p-4 space-y-4">
+        <p className="text-xs text-muted-foreground">
+          Select a node or edge to configure it. Manifests below:
+        </p>
+        <ManifestEditor title="Token Addresses" manifest={tokens} setManifest={setTokens} />
+        <Separator />
+        <ManifestEditor title="Contract Addresses" manifest={contracts} setManifest={setContracts} />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col items-center justify-center h-full text-center p-6">
       <p className="text-sm text-muted-foreground">

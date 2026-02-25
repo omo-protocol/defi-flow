@@ -9,7 +9,7 @@ import {
   type Connection as XYFlowConnection,
   type Edge as XYFlowEdge,
 } from "@xyflow/react";
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { useAtom, useSetAtom } from "jotai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas } from "@/components/ai-elements/canvas";
 import { Connection } from "@/components/ai-elements/connection";
@@ -27,7 +27,6 @@ import {
   onEdgesChangeAtom,
   onNodesChangeAtom,
   redoAtom,
-  rightPanelWidthAtom,
   selectedEdgeAtom,
   selectedNodeAtom,
   showMinimapAtom,
@@ -46,7 +45,6 @@ export function WorkflowCanvas() {
   const [nodes, setNodes] = useAtom(nodesAtom);
   const [edges, setEdges] = useAtom(edgesAtom);
   const [showMinimap] = useAtom(showMinimapAtom);
-  const rightPanelWidth = useAtomValue(rightPanelWidthAtom);
   const onNodesChange = useSetAtom(onNodesChangeAtom);
   const onEdgesChange = useSetAtom(onEdgesChangeAtom);
   const setSelectedNode = useSetAtom(selectedNodeAtom);
@@ -191,12 +189,7 @@ export function WorkflowCanvas() {
   }, [setSelectedNode, setSelectedEdge]);
 
   return (
-    <div
-      className="relative h-full bg-background"
-      style={{
-        width: rightPanelWidth ? `calc(100% - ${rightPanelWidth})` : "100%",
-      }}
-    >
+    <div className="relative h-full w-full bg-background">
       <WorkflowToolbar />
       <Canvas
         className="bg-background"

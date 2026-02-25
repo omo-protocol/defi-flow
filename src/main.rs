@@ -1,5 +1,6 @@
 use clap::Parser;
 
+mod api;
 mod backtest;
 mod cli;
 mod data;
@@ -62,6 +63,14 @@ fn main() -> anyhow::Result<()> {
             once,
             slippage_bps,
         }),
+        cli::Command::Api {
+            host,
+            port,
+            data_dir,
+        } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(api::serve(&host, port, &data_dir))
+        }
         cli::Command::FetchData {
             file,
             output_dir,

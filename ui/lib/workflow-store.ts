@@ -15,6 +15,13 @@ export const selectedEdgeAtom = atom<string | null>(null);
 export const workflowNameAtom = atom<string>("Untitled Strategy");
 export const workflowDescriptionAtom = atom<string>("");
 
+// ── Manifests (tokens & contracts address maps) ─────────────────────
+
+type Manifest = Record<string, Record<string, string>>;
+
+export const tokensManifestAtom = atom<Manifest | undefined>(undefined);
+export const contractsManifestAtom = atom<Manifest | undefined>(undefined);
+
 // ── User settings (in-memory only) ──────────────────────────────────
 
 export const privateKeyAtom = atom<string>("");
@@ -38,10 +45,12 @@ export const autosaveAtom = atom(
       const edges = get(edgesAtom);
       const name = get(workflowNameAtom);
       const desc = get(workflowDescriptionAtom);
+      const tokens = get(tokensManifestAtom);
+      const contracts = get(contractsManifestAtom);
       try {
         localStorage.setItem(
           "defi-flow-current",
-          JSON.stringify({ name, description: desc, nodes, edges })
+          JSON.stringify({ name, description: desc, nodes, edges, tokens, contracts })
         );
       } catch {
         // quota exceeded — ignore

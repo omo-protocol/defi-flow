@@ -171,38 +171,12 @@ pub async fn check_and_manage(
         target_idle,
     );
 
-    // Compute total venue value for pro-rata unwinding
-    let mut total_venue_value = 0.0;
-    let venue_ids: Vec<String> = engine.venues.keys().cloned().collect();
-    for id in &venue_ids {
-        if let Some(venue) = engine.venues.get(id.as_str()) {
-            total_venue_value += venue.total_value().await.unwrap_or(0.0);
-        }
-    }
-
-    if total_venue_value <= 0.0 {
-        eprintln!("[reserve] no venue positions to unwind");
-        return Ok(None);
-    }
-
-    // Unwind fraction to free the deficit
-    let unwind_fraction = (deficit / total_venue_value).min(1.0);
-    eprintln!(
-        "[reserve] unwinding {:.1}% from all venues (venue_total=${:.2})",
-        unwind_fraction * 100.0,
-        total_venue_value,
-    );
-
-    let mut total_freed = 0.0;
-    for id in &venue_ids {
-        if let Some(venue) = engine.venues.get_mut(id.as_str()) {
-            let freed = venue.unwind(unwind_fraction).await.unwrap_or(0.0);
-            if freed > 0.0 {
-                total_freed += freed;
-                eprintln!("[reserve]   {} → freed ${:.2}", id, freed);
-            }
-        }
-    }
+    // Try optimizer-aware unwind (takes more from low-alpha groups),
+    // fall back to flat pro-rata if no optimizer node exists.
+    let total_freed = match engine.optimizer_unwind(deficit).await {
+        Ok(freed) => freed,
+        Err(_) => flat_pro_rata_unwind(engine, deficit).await,
+    };
 
     if total_freed > 0.0 {
         let vault_addr = evm::resolve_contract(contracts, &config.vault_address, &config.vault_chain)
@@ -314,6 +288,43 @@ fn make_signer_provider(
     Ok(ProviderBuilder::new()
         .wallet(wallet)
         .connect_http(rpc_url.parse()?))
+}
+
+/// Flat pro-rata unwind: same fraction from every venue.
+/// Used as fallback when no optimizer node exists.
+async fn flat_pro_rata_unwind(engine: &mut Engine, deficit: f64) -> f64 {
+    let mut total_venue_value = 0.0;
+    let venue_ids: Vec<String> = engine.venues.keys().cloned().collect();
+    for id in &venue_ids {
+        if let Some(venue) = engine.venues.get(id.as_str()) {
+            total_venue_value += venue.total_value().await.unwrap_or(0.0);
+        }
+    }
+
+    if total_venue_value <= 0.0 {
+        eprintln!("[reserve] no venue positions to unwind");
+        return 0.0;
+    }
+
+    let unwind_fraction = (deficit / total_venue_value).min(1.0);
+    eprintln!(
+        "[reserve] flat pro-rata: unwinding {:.1}% from all venues (venue_total=${:.2})",
+        unwind_fraction * 100.0,
+        total_venue_value,
+    );
+
+    let mut total_freed = 0.0;
+    for id in &venue_ids {
+        if let Some(venue) = engine.venues.get_mut(id.as_str()) {
+            let freed = venue.unwind(unwind_fraction).await.unwrap_or(0.0);
+            if freed > 0.0 {
+                total_freed += freed;
+                eprintln!("[reserve]   {} → freed ${:.2}", id, freed);
+            }
+        }
+    }
+
+    total_freed
 }
 
 fn token_decimals_for(symbol: &str) -> u8 {

@@ -61,6 +61,16 @@ pub enum ValidationError {
     #[error("Perp node `{node_id}` with action {action} requires `leverage` field")]
     PerpMissingLeverage { node_id: String, action: String },
 
+    #[error("Wallet `{node_id}` has empty address")]
+    WalletEmptyAddress { node_id: String },
+
+    #[error("Wallet `{node_id}` on EVM chain `{chain}` has invalid address `{address}` (expected 0x-prefixed, 42-char hex)")]
+    WalletInvalidAddress {
+        node_id: String,
+        chain: String,
+        address: String,
+    },
+
     #[error("Token `{token}` on chain `{chain}` has no address in the tokens manifest")]
     TokenNotInManifest { token: String, chain: String },
 

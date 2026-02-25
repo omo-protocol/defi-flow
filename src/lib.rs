@@ -1,4 +1,6 @@
 #[cfg(feature = "full")]
+pub mod api;
+#[cfg(feature = "full")]
 pub mod backtest;
 #[cfg(feature = "full")]
 pub mod cli;

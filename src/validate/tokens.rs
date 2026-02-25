@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::model::node::{MovementType, Node, PerpAction, TokenFlow};
+use crate::model::node::{MovementType, Node, PerpAction, PerpVenue, TokenFlow};
 use crate::model::Workflow;
 
 use super::ValidationError;
@@ -8,6 +8,9 @@ use super::ValidationError;
 /// Check token compatibility, chain flow, and node-specific constraints.
 pub fn check_token_compatibility(workflow: &Workflow) -> Vec<ValidationError> {
     let mut errors = Vec::new();
+
+    // Wallet address validation
+    errors.extend(check_wallet_nodes(workflow));
 
     // Movement-specific checks (bridge same-chain, etc.)
     errors.extend(check_movement_nodes(workflow));
@@ -25,6 +28,50 @@ pub fn check_token_compatibility(workflow: &Workflow) -> Vec<ValidationError> {
     errors.extend(check_perp_nodes(workflow));
 
     errors
+}
+
+// ── Wallet validation ───────────────────────────────────────────────
+
+/// Validate wallet node addresses:
+/// - Address must be non-empty.
+/// - On EVM chains (chain_id present): must be 0x-prefixed, 42-char hex.
+fn check_wallet_nodes(workflow: &Workflow) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+
+    for node in &workflow.nodes {
+        if let Node::Wallet {
+            id,
+            chain,
+            address,
+            ..
+        } = node
+        {
+            if address.is_empty() {
+                errors.push(ValidationError::WalletEmptyAddress {
+                    node_id: id.clone(),
+                });
+                continue;
+            }
+
+            // EVM chains (have chain_id) require a valid 0x-prefixed hex address
+            if chain.chain_id.is_some() && !is_valid_evm_address(address) {
+                errors.push(ValidationError::WalletInvalidAddress {
+                    node_id: id.clone(),
+                    chain: chain.name.clone(),
+                    address: address.clone(),
+                });
+            }
+        }
+    }
+
+    errors
+}
+
+/// Check if a string is a valid EVM address: 0x-prefixed, 42 chars total, hex digits.
+fn is_valid_evm_address(addr: &str) -> bool {
+    addr.len() == 42
+        && addr.starts_with("0x")
+        && addr[2..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
 // ── Edge flow validation ────────────────────────────────────────────
@@ -253,9 +300,18 @@ fn check_token_manifest(workflow: &Workflow) -> Vec<ValidationError> {
             Node::Vault { asset, chain, .. } => {
                 check(asset, &chain.name);
             }
-            Node::Perp { margin_token, .. } => {
+            Node::Perp {
+                venue,
+                margin_token,
+                ..
+            } => {
                 if let Some(mt) = margin_token {
-                    check(mt, "hyperevm");
+                    // Hyperliquid margin lives on HyperCore (non-EVM) — no manifest address.
+                    // Hyena margin lives on HyperEVM — check manifest.
+                    match venue {
+                        PerpVenue::Hyperliquid => {}
+                        PerpVenue::Hyena => check(mt, "hyperevm"),
+                    }
                 }
             }
             Node::Lp { pool, chain, .. } => {

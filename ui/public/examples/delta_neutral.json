@@ -1,6 +1,6 @@
 {
   "name": "ETH Delta-Neutral Funding Arb",
-  "description": "Delta-neutral with Kelly optimizer: Kelly decides split between alpha (spot+perp pair) and idle lending. Alpha pair always splits 50/50 for perfect delta neutrality. Yield = funding + lending APY. Weekly rebalance on 5% drift.",
+  "description": "Delta-neutral with Kelly optimizer: Kelly decides split between alpha (spot+perp pair) and idle lending. Alpha pair always splits 50/50 for perfect delta neutrality. Yield = funding + lending APY. Weekly rebalance on 5% drift. Starts from USDC on Base, bridges to HyperEVM for lending.",
   "tokens": {
     "USDC": {
       "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f",
@@ -19,9 +19,19 @@
     {
       "type": "wallet",
       "id": "wallet",
-      "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+      "chain": { "name": "base", "chain_id": 8453, "rpc_url": "https://mainnet.base.org" },
       "token": "USDC",
       "address": "0x7BB51c8a55D8F0431f4E9CaA5cC502d7a381aC6b"
+    },
+    {
+      "type": "movement",
+      "id": "bridge_usdc",
+      "movement_type": "bridge",
+      "provider": "Stargate",
+      "from_token": "USDC",
+      "to_token": "USDC",
+      "from_chain": { "name": "base", "chain_id": 8453, "rpc_url": "https://mainnet.base.org" },
+      "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
     },
     {
       "type": "optimizer",
@@ -76,6 +86,12 @@
   "edges": [
     {
       "from_node": "wallet",
+      "to_node": "bridge_usdc",
+      "token": "USDC",
+      "amount": { "type": "all" }
+    },
+    {
+      "from_node": "bridge_usdc",
       "to_node": "kelly",
       "token": "USDC",
       "amount": { "type": "all" }

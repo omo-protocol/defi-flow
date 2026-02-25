@@ -109,6 +109,21 @@ pub enum Command {
         slippage_bps: f64,
     },
 
+    /// Start the HTTP API server
+    Api {
+        /// Host address to bind to
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// Port to listen on
+        #[arg(long, short = 'p', default_value = "8080")]
+        port: u16,
+
+        /// Data directory for uploads, history, etc.
+        #[arg(long, default_value = "~/.defi-flow")]
+        data_dir: PathBuf,
+    },
+
     /// Fetch historical data from venue APIs for backtesting
     FetchData {
         /// Path to the workflow JSON file

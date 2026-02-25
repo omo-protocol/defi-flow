@@ -11,6 +11,8 @@ import {
   redoAtom,
   addNodeAtom,
   autosaveAtom,
+  tokensManifestAtom,
+  contractsManifestAtom,
 } from "@/lib/workflow-store";
 import { NODE_REGISTRY, CATEGORIES, type NodeTypeConfig } from "@/lib/node-registry";
 import { createDefaultNode, getNodeLabel, type DefiNodeType } from "@/lib/types/defi-flow";
@@ -41,6 +43,7 @@ import { useReactFlow } from "@xyflow/react";
 import { nanoid } from "nanoid";
 import { toast } from "sonner";
 import { validateWorkflow } from "@/lib/wasm";
+import { validateWorkflow as validateWorkflowApi } from "@/lib/api";
 import { useState } from "react";
 
 export function WorkflowToolbar() {
@@ -53,6 +56,8 @@ export function WorkflowToolbar() {
   const redo = useSetAtom(redoAtom);
   const addNode = useSetAtom(addNodeAtom);
   const save = useSetAtom(autosaveAtom);
+  const [tokensManifest, setTokensManifest] = useAtom(tokensManifestAtom);
+  const [contractsManifest, setContractsManifest] = useAtom(contractsManifestAtom);
   const { screenToFlowPosition, fitView } = useReactFlow();
 
   // ── Add node ───────────────────────────────────────────────────────
@@ -104,10 +109,12 @@ export function WorkflowToolbar() {
           });
         }
         const workflow: DefiFlowWorkflow = JSON.parse(text);
-        const { nodes: newNodes, edges: newEdges } = convertDefiFlowToCanvas(workflow);
+        const { nodes: newNodes, edges: newEdges, tokens, contracts } = convertDefiFlowToCanvas(workflow);
         setNodes(newNodes);
         setEdges(newEdges);
         setName(workflow.name || "Imported Strategy");
+        setTokensManifest(tokens);
+        setContractsManifest(contracts);
         toast.success(`Imported "${workflow.name}" (${workflow.nodes.length} nodes)`);
         setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 100);
       } catch (err) {
@@ -120,7 +127,7 @@ export function WorkflowToolbar() {
   // ── Export ─────────────────────────────────────────────────────────
 
   const handleExport = () => {
-    const workflow = convertCanvasToDefiFlow(nodes, edges, name);
+    const workflow = convertCanvasToDefiFlow(nodes, edges, name, undefined, tokensManifest, contractsManifest);
     const json = JSON.stringify(workflow, null, 2);
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -135,12 +142,66 @@ export function WorkflowToolbar() {
   // ── Validate ───────────────────────────────────────────────────────
 
   const [validating, setValidating] = useState(false);
+  const [validatingOnchain, setValidatingOnchain] = useState(false);
+
+  const handleValidateOnchain = async () => {
+    setValidatingOnchain(true);
+    try {
+      const workflow = convertCanvasToDefiFlow(nodes, edges, name, undefined, tokensManifest, contractsManifest);
+      const result = await validateWorkflowApi(workflow, true);
+
+      if (result.valid) {
+        setNodes(nodes.map((n) => ({
+          ...n,
+          data: { ...n.data, status: "valid" as const, validationErrors: undefined },
+        })));
+        toast.success("On-chain validation passed");
+        if (result.warnings?.length) {
+          for (const w of result.warnings) {
+            toast.warning(w);
+          }
+        }
+      } else {
+        const nodeErrorMap = new Map<string, string[]>();
+        const globalErrors: string[] = [];
+        for (const err of result.errors ?? []) {
+          const nodeMatch = err.match(/node [`"]([^`"]+)[`"]/);
+          if (nodeMatch) {
+            const id = nodeMatch[1];
+            const existing = nodeErrorMap.get(id) ?? [];
+            existing.push(err);
+            nodeErrorMap.set(id, existing);
+          } else {
+            globalErrors.push(err);
+          }
+        }
+        setNodes(nodes.map((n) => {
+          const errs = nodeErrorMap.get(n.data.defiNode.id);
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              status: errs ? ("error" as const) : ("valid" as const),
+              validationErrors: errs,
+            },
+          };
+        }));
+        toast.error(`${(result.errors ?? []).length} error(s)`, {
+          description: globalErrors[0],
+        });
+      }
+    } catch (err) {
+      toast.error("On-chain validation failed: " + (err instanceof Error ? err.message : "API error"));
+    } finally {
+      setValidatingOnchain(false);
+    }
+  };
 
   const handleValidate = async () => {
     setValidating(true);
     try {
       // Convert canvas → defi-flow JSON, then run Rust validator via WASM
-      const workflow = convertCanvasToDefiFlow(nodes, edges, name);
+      const workflow = convertCanvasToDefiFlow(nodes, edges, name, undefined, tokensManifest, contractsManifest);
       const json = JSON.stringify(workflow);
       const result = await validateWorkflow(json);
 
@@ -255,6 +316,10 @@ export function WorkflowToolbar() {
       <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={handleValidate} disabled={validating}>
         <CheckCircle className="w-3.5 h-3.5 mr-1" />
         {validating ? "Validating..." : "Validate"}
+      </Button>
+      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={handleValidateOnchain} disabled={validatingOnchain}>
+        <CheckCircle className="w-3.5 h-3.5 mr-1" />
+        {validatingOnchain ? "Checking..." : "On-Chain"}
       </Button>
 
       <Separator orientation="vertical" className="h-5" />

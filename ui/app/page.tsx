@@ -6,9 +6,12 @@ import {
   nodesAtom,
   edgesAtom,
   workflowNameAtom,
+  tokensManifestAtom,
+  contractsManifestAtom,
 } from "@/lib/workflow-store";
 import { WorkflowCanvas } from "@/components/workflow/workflow-canvas";
 import { NodeConfigPanel } from "@/components/workflow/node-config-panel";
+import { StatusDashboard } from "@/components/workflow/status-dashboard";
 import { useEffect, useState } from "react";
 import { convertDefiFlowToCanvas } from "@/lib/converters/canvas-defi-flow";
 import type { DefiFlowWorkflow } from "@/lib/types/defi-flow";
@@ -23,16 +26,20 @@ function WelcomeOverlay({ onClose }: { onClose: () => void }) {
   const setNodes = useSetAtom(nodesAtom);
   const setEdges = useSetAtom(edgesAtom);
   const setName = useSetAtom(workflowNameAtom);
+  const setTokens = useSetAtom(tokensManifestAtom);
+  const setContracts = useSetAtom(contractsManifestAtom);
   const { fitView } = useReactFlow();
 
   const loadExample = async (file: string) => {
     try {
       const res = await fetch(`/examples/${file}`);
       const workflow: DefiFlowWorkflow = await res.json();
-      const { nodes, edges } = convertDefiFlowToCanvas(workflow);
+      const { nodes, edges, tokens, contracts } = convertDefiFlowToCanvas(workflow);
       setNodes(nodes);
       setEdges(edges);
       setName(workflow.name);
+      setTokens(tokens);
+      setContracts(contracts);
       onClose();
       setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 200);
     } catch {
@@ -80,19 +87,24 @@ export default function Home() {
   const [nodes, setNodes] = useAtom(nodesAtom);
   const setEdges = useSetAtom(edgesAtom);
   const setName = useSetAtom(workflowNameAtom);
+  const setTokensManifest = useSetAtom(tokensManifestAtom);
+  const setContractsManifest = useSetAtom(contractsManifestAtom);
   const [showWelcome, setShowWelcome] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [showDashboard, setShowDashboard] = useState(false);
 
   // Restore from localStorage on mount
   useEffect(() => {
     try {
       const saved = localStorage.getItem("defi-flow-current");
       if (saved) {
-        const { name, nodes: n, edges: e } = JSON.parse(saved);
+        const { name, nodes: n, edges: e, tokens, contracts } = JSON.parse(saved);
         if (n && n.length > 0) {
           setNodes(n);
           setEdges(e);
           if (name) setName(name);
+          if (tokens) setTokensManifest(tokens);
+          if (contracts) setContractsManifest(contracts);
           setLoaded(true);
           return;
         }
@@ -108,21 +120,38 @@ export default function Home() {
   if (!loaded) return null;
 
   return (
-    <div className="h-dvh w-full flex">
-      {/* Canvas */}
-      <div className="flex-1 relative">
-        <WorkflowCanvas />
+    <div className="h-dvh w-full flex flex-col">
+      <div className="flex-1 flex min-h-0">
+        {/* Canvas */}
+        <div className="flex-1 relative">
+          <WorkflowCanvas />
+        </div>
+
+        {/* Right panel */}
+        {rightPanelWidth && (
+          <div
+            className="border-l bg-card h-full overflow-hidden"
+            style={{ width: rightPanelWidth }}
+          >
+            <NodeConfigPanel />
+          </div>
+        )}
       </div>
 
-      {/* Right panel */}
-      {rightPanelWidth && (
-        <div
-          className="border-l bg-card h-full overflow-hidden"
-          style={{ width: rightPanelWidth }}
-        >
-          <NodeConfigPanel />
+      {/* Bottom dashboard panel */}
+      {showDashboard && (
+        <div className="border-t bg-card" style={{ height: "320px" }}>
+          <StatusDashboard />
         </div>
       )}
+
+      {/* Dashboard toggle */}
+      <button
+        onClick={() => setShowDashboard(!showDashboard)}
+        className="absolute bottom-2 left-2 z-10 px-2 py-1 text-[10px] rounded bg-card/95 backdrop-blur border shadow-sm hover:bg-accent transition-colors"
+      >
+        {showDashboard ? "Hide" : "Engine"}
+      </button>
 
       {/* Welcome overlay */}
       {showWelcome && <WelcomeOverlay onClose={() => setShowWelcome(false)} />}

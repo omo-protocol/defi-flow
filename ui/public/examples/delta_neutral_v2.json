@@ -1,6 +1,6 @@
 {
   "name": "ETH Delta-Neutral Yield Farm v2",
-  "description": "Delta-neutral: short ETH perp (funding income) + long ETH via spot->lending (ETH yield on HyperLend) + idle USDC lending. All 3 legs earn yield. Kelly splits between alpha pair (spot+perp) and USDC lending. Weekly rebalance on 5% drift.",
+  "description": "Delta-neutral: short ETH perp (funding income) + long ETH via spot->lending (ETH yield on HyperLend) + idle USDC lending. All 3 legs earn yield. Kelly splits between alpha pair (spot+perp) and USDC lending. Weekly rebalance on 5% drift. Starts from USDC on Base, bridges to HyperEVM.",
   "tokens": {
     "USDC": {
       "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f",
@@ -22,9 +22,19 @@
     {
       "type": "wallet",
       "id": "wallet",
-      "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+      "chain": { "name": "base", "chain_id": 8453, "rpc_url": "https://mainnet.base.org" },
       "token": "USDC",
       "address": "0x7BB51c8a55D8F0431f4E9CaA5cC502d7a381aC6b"
+    },
+    {
+      "type": "movement",
+      "id": "bridge_usdc",
+      "movement_type": "bridge",
+      "provider": "Stargate",
+      "from_token": "USDC",
+      "to_token": "USDC",
+      "from_chain": { "name": "base", "chain_id": 8453, "rpc_url": "https://mainnet.base.org" },
+      "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
     },
     {
       "type": "optimizer",
@@ -90,6 +100,12 @@
   "edges": [
     {
       "from_node": "wallet",
+      "to_node": "bridge_usdc",
+      "token": "USDC",
+      "amount": { "type": "all" }
+    },
+    {
+      "from_node": "bridge_usdc",
       "to_node": "kelly",
       "token": "USDC",
       "amount": { "type": "all" }

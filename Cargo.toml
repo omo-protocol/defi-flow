@@ -10,6 +10,7 @@ full = [
     "dep:notify", "dep:rayon", "dep:indicatif", "dep:ferrofluid",
     "dep:clap", "dep:async-trait",
     "dep:rand", "dep:chrono", "dep:csv",
+    "dep:axum", "dep:tower-http", "dep:uuid", "dep:tokio-stream", "dep:async-stream",
 ]
 wasm = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen"]
 
@@ -41,6 +42,11 @@ rustls = { version = "0.23", features = ["aws_lc_rs"], optional = true }
 async-trait = { version = "0.1", optional = true }
 notify = { version = "7", optional = true }
 rayon = { version = "1.11.0", optional = true }
+axum = { version = "0.8", optional = true, features = ["multipart"] }
+tower-http = { version = "0.6", optional = true, features = ["cors"] }
+uuid = { version = "1", optional = true, features = ["v4"] }
+tokio-stream = { version = "0.1", optional = true }
+async-stream = { version = "0.3", optional = true }
 
 # WASM deps - optional, included via "wasm" feature
 wasm-bindgen = { version = "0.2", optional = true }
