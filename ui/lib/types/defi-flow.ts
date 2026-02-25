@@ -2,11 +2,12 @@
 
 export type Chain = {
   name: string;
-  chain_id: number;
-  rpc_url: string;
+  chain_id?: number;
+  rpc_url?: string;
 };
 
 export const KNOWN_CHAINS: Chain[] = [
+  { name: "hyperliquid" },
   { name: "hyperevm", chain_id: 999, rpc_url: "https://rpc.hyperliquid.xyz/evm" },
   { name: "ethereum", chain_id: 1, rpc_url: "https://eth.llamarpc.com" },
   { name: "arbitrum", chain_id: 42161, rpc_url: "https://arb1.arbitrum.io/rpc" },
@@ -276,15 +277,113 @@ export function createDefaultNode(type: DefiNodeType, id: string): DefiNode {
   }
 }
 
-/** Strip undefined/null optional fields for clean JSON export */
+/** Infer the output token of a node (what it sends downstream). */
+export function getOutputToken(node: DefiNode): string {
+  switch (node.type) {
+    case "wallet":
+      return node.token;
+    case "perp":
+      // Perp outputs margin (quote currency): ETH/USDC → USDC
+      return node.pair.split("/")[1] ?? "USDC";
+    case "spot":
+      // Buy ETH/USDC → outputs ETH. Sell ETH/USDC → outputs USDC.
+      return node.side === "buy"
+        ? node.pair.split("/")[0] ?? "ETH"
+        : node.pair.split("/")[1] ?? "USDC";
+    case "lending":
+      return node.asset;
+    case "vault":
+      return node.asset;
+    case "lp":
+      // LP outputs the base token of the pool
+      return node.pool.split("/")[0]?.replace("W", "") ?? "ETH";
+    case "movement":
+      return node.to_token;
+    case "optimizer":
+      return "USDC";
+    case "options":
+      return "USDC";
+    case "pendle":
+      return "USDC";
+  }
+}
+
+/** Infer the input token of a node (what it expects from upstream). */
+export function getInputToken(node: DefiNode): string {
+  switch (node.type) {
+    case "wallet":
+      return node.token;
+    case "perp":
+      // Perp takes margin (quote currency): ETH/USDC → USDC
+      return node.margin_token ?? node.pair.split("/")[1] ?? "USDC";
+    case "spot":
+      // Buy ETH/USDC → needs USDC. Sell ETH/USDC → needs ETH.
+      return node.side === "buy"
+        ? node.pair.split("/")[1] ?? "USDC"
+        : node.pair.split("/")[0] ?? "ETH";
+    case "lending":
+      return node.asset;
+    case "vault":
+      return node.asset;
+    case "lp":
+      return node.pool.split("/")[1] ?? "USDC";
+    case "movement":
+      return node.from_token;
+    case "optimizer":
+      return "USDC";
+    case "options":
+      return "USDC";
+    case "pendle":
+      return "USDC";
+  }
+}
+
+/** Infer the edge token between two nodes. */
+export function inferEdgeToken(from: DefiNode, to: DefiNode): string {
+  const out = getOutputToken(from);
+  const inp = getInputToken(to);
+  // If output matches input, use it
+  if (out === inp) return out;
+  // Prefer the source's output token
+  return out;
+}
+
+/** Allowed fields per node type — prevents extra fields leaking into JSON */
+const NODE_FIELDS: Record<string, string[]> = {
+  wallet: ["type", "id", "chain", "token", "address"],
+  perp: ["type", "id", "venue", "pair", "action", "direction", "leverage", "margin_token", "trigger"],
+  spot: ["type", "id", "venue", "pair", "side", "trigger"],
+  lending: ["type", "id", "archetype", "chain", "pool_address", "asset", "action", "rewards_controller", "defillama_slug", "trigger"],
+  vault: ["type", "id", "archetype", "chain", "vault_address", "asset", "action", "defillama_slug", "trigger"],
+  lp: ["type", "id", "venue", "pool", "action", "tick_lower", "tick_upper", "tick_spacing", "chain", "trigger"],
+  options: ["type", "id", "venue", "asset", "action", "delta_target", "days_to_expiry", "min_apy", "batch_size", "roll_days_before", "trigger"],
+  pendle: ["type", "id", "market", "action", "trigger"],
+  movement: ["type", "id", "movement_type", "provider", "from_token", "to_token", "from_chain", "to_chain", "trigger"],
+  optimizer: ["type", "id", "strategy", "kelly_fraction", "max_allocation", "drift_threshold", "allocations", "trigger"],
+};
+
+/** Clean a Chain object — strip undefined/null chain_id and rpc_url for namespace-only chains */
+function cleanChain(chain: Chain): Chain {
+  const result: Record<string, unknown> = { name: chain.name };
+  if (chain.chain_id != null) result.chain_id = chain.chain_id;
+  if (chain.rpc_url != null && chain.rpc_url !== "") result.rpc_url = chain.rpc_url;
+  return result as Chain;
+}
+
+/** Strip fields that don't belong on this node type + remove undefined/null */
 export function cleanNodeForExport(node: DefiNode): DefiNode {
+  const allowed = new Set(NODE_FIELDS[node.type] ?? []);
   const cleaned: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(node)) {
-    if (v !== undefined && v !== null && v !== "") {
-      // Skip empty arrays for target_nodes in allocations
-      if (Array.isArray(v) && v.length === 0 && k !== "allocations") continue;
-      cleaned[k] = v;
+    if (!allowed.has(k)) continue;
+    if (v === undefined || v === null || v === "") continue;
+    if (Array.isArray(v) && v.length === 0 && k !== "allocations") continue;
+    // Clean nested Chain objects
+    if ((k === "chain" || k === "from_chain" || k === "to_chain") && v && typeof v === "object" && "name" in v) {
+      cleaned[k] = cleanChain(v as Chain);
+      continue;
     }
+    cleaned[k] = v;
   }
   return cleaned as DefiNode;
 }

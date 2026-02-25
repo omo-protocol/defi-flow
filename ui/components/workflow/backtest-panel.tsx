@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAtomValue } from "jotai";
 import {
   nodesAtom,
@@ -12,6 +12,8 @@ import {
 import { convertCanvasToDefiFlow } from "@/lib/converters/canvas-defi-flow";
 import {
   runBacktest,
+  fetchData,
+  uploadData,
   listBacktests,
   type BacktestResult,
   type BacktestSummary,
@@ -19,8 +21,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
-import { Play, History, TrendingUp, TrendingDown } from "lucide-react";
+import { Play, History, Download, Upload, FolderSync } from "lucide-react";
 import { toast } from "sonner";
 
 export function BacktestPanel() {
@@ -34,14 +37,20 @@ export function BacktestPanel() {
   const [slippage, setSlippage] = useState("10");
   const [seed, setSeed] = useState("42");
   const [dataDir, setDataDir] = useState("");
+  const [autoFetch, setAutoFetch] = useState(true);
   const [running, setRunning] = useState(false);
+  const [fetching, setFetching] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [history, setHistory] = useState<BacktestSummary[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     listBacktests().then(setHistory).catch(() => {});
   }, [result]);
+
+  const getWorkflow = () =>
+    convertCanvasToDefiFlow(nodes, edges, name, undefined, tokens, contracts);
 
   const handleRun = async () => {
     if (nodes.length === 0) {
@@ -52,18 +61,12 @@ export function BacktestPanel() {
     setRunning(true);
     setResult(null);
     try {
-      const workflow = convertCanvasToDefiFlow(
-        nodes,
-        edges,
-        name,
-        undefined,
-        tokens,
-        contracts
-      );
+      const workflow = getWorkflow();
       const res = await runBacktest(workflow, {
         capital: parseFloat(capital),
         slippage_bps: parseFloat(slippage),
         seed: parseInt(seed),
+        auto_fetch: autoFetch,
         ...(dataDir ? { data_dir: dataDir } : {}),
       });
       setResult(res.result);
@@ -78,46 +81,131 @@ export function BacktestPanel() {
     }
   };
 
+  const handleFetchData = async () => {
+    if (nodes.length === 0) {
+      toast.error("No nodes to fetch data for");
+      return;
+    }
+
+    setFetching(true);
+    try {
+      const workflow = getWorkflow();
+      const res = await fetchData(workflow, {
+        ...(dataDir ? { output_dir: dataDir } : {}),
+      });
+      toast.success(`Data fetched to ${res.data_dir}`);
+      if (!dataDir) {
+        setDataDir(res.data_dir);
+      }
+    } catch (err) {
+      toast.error(
+        "Fetch failed: " +
+          (err instanceof Error ? err.message : "Unknown error")
+      );
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    try {
+      const res = await uploadData(files);
+      toast.success(`Uploaded ${res.count} file(s) to ${res.data_dir}`);
+      setDataDir(res.data_dir);
+    } catch (err) {
+      toast.error(
+        "Upload failed: " +
+          (err instanceof Error ? err.message : "Unknown error")
+      );
+    }
+    // Reset input
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
   return (
     <div className="p-4 space-y-4 text-sm">
       <h3 className="font-semibold text-base">Backtest</h3>
 
-      {/* Config form */}
+      {/* Data source */}
       <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs text-muted-foreground">Data</Label>
+          <div className="flex gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 px-2 text-[10px]"
+              onClick={handleFetchData}
+              disabled={fetching || nodes.length === 0}
+            >
+              <FolderSync className="w-3 h-3 mr-1" />
+              {fetching ? "Fetching..." : "Fetch"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 px-2 text-[10px]"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Upload className="w-3 h-3 mr-1" />
+              Upload
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,.json"
+              multiple
+              className="hidden"
+              onChange={handleUpload}
+            />
+          </div>
+        </div>
+        <Input
+          className="h-7 text-xs font-mono"
+          value={dataDir}
+          onChange={(e) => setDataDir(e.target.value)}
+          placeholder="auto (fetches from APIs)"
+        />
+        <div className="flex items-center space-x-2">
+          <Checkbox
+            id="auto-fetch"
+            checked={autoFetch}
+            onCheckedChange={(v) => setAutoFetch(v === true)}
+          />
+          <Label htmlFor="auto-fetch" className="text-xs text-muted-foreground">
+            Auto-fetch if no local data
+          </Label>
+        </div>
+      </div>
+
+      {/* Params */}
+      <div className="grid grid-cols-3 gap-2">
         <div>
-          <Label className="text-xs text-muted-foreground">Data Directory</Label>
+          <Label className="text-xs text-muted-foreground">Capital ($)</Label>
           <Input
-            className="h-7 text-xs font-mono"
-            value={dataDir}
-            onChange={(e) => setDataDir(e.target.value)}
-            placeholder="data/delta_neutral_v2"
+            className="h-7 text-xs"
+            value={capital}
+            onChange={(e) => setCapital(e.target.value)}
           />
         </div>
-        <div className="grid grid-cols-3 gap-2">
-          <div>
-            <Label className="text-xs text-muted-foreground">Capital ($)</Label>
-            <Input
-              className="h-7 text-xs"
-              value={capital}
-              onChange={(e) => setCapital(e.target.value)}
-            />
-          </div>
-          <div>
-            <Label className="text-xs text-muted-foreground">Slippage (bps)</Label>
-            <Input
-              className="h-7 text-xs"
-              value={slippage}
-              onChange={(e) => setSlippage(e.target.value)}
-            />
-          </div>
-          <div>
-            <Label className="text-xs text-muted-foreground">Seed</Label>
-            <Input
-              className="h-7 text-xs"
-              value={seed}
-              onChange={(e) => setSeed(e.target.value)}
-            />
-          </div>
+        <div>
+          <Label className="text-xs text-muted-foreground">Slippage (bps)</Label>
+          <Input
+            className="h-7 text-xs"
+            value={slippage}
+            onChange={(e) => setSlippage(e.target.value)}
+          />
+        </div>
+        <div>
+          <Label className="text-xs text-muted-foreground">Seed</Label>
+          <Input
+            className="h-7 text-xs"
+            value={seed}
+            onChange={(e) => setSeed(e.target.value)}
+          />
         </div>
       </div>
 

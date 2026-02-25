@@ -1,21 +1,28 @@
 "use client";
 
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { atom } from "jotai";
 import {
   rightPanelWidthAtom,
   nodesAtom,
   edgesAtom,
   workflowNameAtom,
+  selectedNodeAtom,
+  selectedEdgeAtom,
   tokensManifestAtom,
   contractsManifestAtom,
 } from "@/lib/workflow-store";
 import { WorkflowCanvas } from "@/components/workflow/workflow-canvas";
 import { NodeConfigPanel } from "@/components/workflow/node-config-panel";
 import { StatusDashboard } from "@/components/workflow/status-dashboard";
+import { AgentPanel } from "@/components/ai-agent/agent-panel";
 import { useEffect, useState } from "react";
 import { convertDefiFlowToCanvas } from "@/lib/converters/canvas-defi-flow";
 import type { DefiFlowWorkflow } from "@/lib/types/defi-flow";
 import { useReactFlow } from "@xyflow/react";
+
+// Right panel mode: "config" when a node/edge is selected, "engine" for backtest/run, "agent" for AI builder
+export const panelModeAtom = atom<"config" | "engine" | "agent">("config");
 
 const EXAMPLES = [
   { name: "Delta Neutral v1", file: "delta_neutral.json" },
@@ -82,6 +89,68 @@ function WelcomeOverlay({ onClose }: { onClose: () => void }) {
   );
 }
 
+function RightPanel() {
+  const [panelMode, setPanelMode] = useAtom(panelModeAtom);
+  const selectedNodeId = useAtomValue(selectedNodeAtom);
+  const selectedEdgeId = useAtomValue(selectedEdgeAtom);
+
+  // Auto-switch to config when a node/edge is selected
+  useEffect(() => {
+    if (selectedNodeId || selectedEdgeId) {
+      setPanelMode("config");
+    }
+  }, [selectedNodeId, selectedEdgeId, setPanelMode]);
+
+  return (
+    <div className="h-full flex flex-col">
+      {/* Tab bar */}
+      <div className="flex border-b bg-card">
+        <button
+          onClick={() => setPanelMode("config")}
+          className={`flex-1 px-3 py-1.5 text-xs font-medium transition-colors ${
+            panelMode === "config"
+              ? "text-foreground border-b-2 border-primary"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Config
+        </button>
+        <button
+          onClick={() => setPanelMode("engine")}
+          className={`flex-1 px-3 py-1.5 text-xs font-medium transition-colors ${
+            panelMode === "engine"
+              ? "text-foreground border-b-2 border-primary"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Engine
+        </button>
+        <button
+          onClick={() => setPanelMode("agent")}
+          className={`flex-1 px-3 py-1.5 text-xs font-medium transition-colors ${
+            panelMode === "agent"
+              ? "text-foreground border-b-2 border-primary"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Agent
+        </button>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-hidden">
+        {panelMode === "config" ? (
+          <NodeConfigPanel />
+        ) : panelMode === "engine" ? (
+          <StatusDashboard />
+        ) : (
+          <AgentPanel />
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const rightPanelWidth = useAtomValue(rightPanelWidthAtom);
   const [nodes, setNodes] = useAtom(nodesAtom);
@@ -91,7 +160,6 @@ export default function Home() {
   const setContractsManifest = useSetAtom(contractsManifestAtom);
   const [showWelcome, setShowWelcome] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [showDashboard, setShowDashboard] = useState(false);
 
   // Restore from localStorage on mount
   useEffect(() => {
@@ -120,38 +188,21 @@ export default function Home() {
   if (!loaded) return null;
 
   return (
-    <div className="h-dvh w-full flex flex-col">
-      <div className="flex-1 flex min-h-0">
-        {/* Canvas */}
-        <div className="flex-1 relative">
-          <WorkflowCanvas />
-        </div>
-
-        {/* Right panel */}
-        {rightPanelWidth && (
-          <div
-            className="border-l bg-card h-full overflow-hidden"
-            style={{ width: rightPanelWidth }}
-          >
-            <NodeConfigPanel />
-          </div>
-        )}
+    <div className="h-dvh w-full flex">
+      {/* Canvas */}
+      <div className="flex-1 relative">
+        <WorkflowCanvas />
       </div>
 
-      {/* Bottom dashboard panel */}
-      {showDashboard && (
-        <div className="border-t bg-card" style={{ height: "320px" }}>
-          <StatusDashboard />
+      {/* Right panel — Config / Engine tabs */}
+      {rightPanelWidth && (
+        <div
+          className="border-l bg-card h-full overflow-hidden"
+          style={{ width: rightPanelWidth }}
+        >
+          <RightPanel />
         </div>
       )}
-
-      {/* Dashboard toggle */}
-      <button
-        onClick={() => setShowDashboard(!showDashboard)}
-        className="absolute bottom-2 left-2 z-10 px-2 py-1 text-[10px] rounded bg-card/95 backdrop-blur border shadow-sm hover:bg-accent transition-colors"
-      >
-        {showDashboard ? "Hide" : "Engine"}
-      </button>
 
       {/* Welcome overlay */}
       {showWelcome && <WelcomeOverlay onClose={() => setShowWelcome(false)} />}

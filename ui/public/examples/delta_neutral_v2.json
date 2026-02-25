@@ -1,10 +1,9 @@
 {
   "name": "ETH Delta-Neutral Yield Farm v2",
-  "description": "Delta-neutral: short ETH perp (funding income) + long ETH via spot->lending (ETH yield on HyperLend) + idle USDC lending. All 3 legs earn yield. Kelly splits between alpha pair (spot+perp) and USDC lending. Weekly rebalance on 5% drift. Starts from USDC on Base, bridges to HyperEVM.",
+  "description": "Delta-neutral: short ETH perp (funding) + long ETH spot, bridged to HyperLend for ETH lending yield + idle USDC lending on HyperLend. Kelly splits between DN alpha pair and USDC lending. Weekly rebalance on 5% drift.",
   "tokens": {
     "USDC": {
-      "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f",
-      "base": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f"
     },
     "ETH": {
       "hyperevm": "0xbe6727b535545c67d5caa73dea54865b92cf7907"
@@ -22,19 +21,9 @@
     {
       "type": "wallet",
       "id": "wallet",
-      "chain": { "name": "base", "chain_id": 8453, "rpc_url": "https://mainnet.base.org" },
+      "chain": { "name": "hyperliquid" },
       "token": "USDC",
       "address": "0x7BB51c8a55D8F0431f4E9CaA5cC502d7a381aC6b"
-    },
-    {
-      "type": "movement",
-      "id": "bridge_usdc",
-      "movement_type": "bridge",
-      "provider": "Stargate",
-      "from_token": "USDC",
-      "to_token": "USDC",
-      "from_chain": { "name": "base", "chain_id": 8453, "rpc_url": "https://mainnet.base.org" },
-      "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
     },
     {
       "type": "optimizer",
@@ -75,6 +64,26 @@
       "leverage": 1.0
     },
     {
+      "type": "movement",
+      "id": "bridge_usdc",
+      "movement_type": "bridge",
+      "provider": "Stargate",
+      "from_token": "USDC",
+      "to_token": "USDC",
+      "from_chain": { "name": "hyperliquid" },
+      "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
+    },
+    {
+      "type": "movement",
+      "id": "bridge_eth",
+      "movement_type": "bridge",
+      "provider": "Stargate",
+      "from_token": "ETH",
+      "to_token": "ETH",
+      "from_chain": { "name": "hyperliquid" },
+      "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
+    },
+    {
       "type": "lending",
       "id": "lend_eth",
       "archetype": "aave_v3",
@@ -100,12 +109,6 @@
   "edges": [
     {
       "from_node": "wallet",
-      "to_node": "bridge_usdc",
-      "token": "USDC",
-      "amount": { "type": "all" }
-    },
-    {
-      "from_node": "bridge_usdc",
       "to_node": "kelly",
       "token": "USDC",
       "amount": { "type": "all" }
@@ -124,12 +127,24 @@
     },
     {
       "from_node": "kelly",
+      "to_node": "bridge_usdc",
+      "token": "USDC",
+      "amount": { "type": "all" }
+    },
+    {
+      "from_node": "bridge_usdc",
       "to_node": "lend_usdc",
       "token": "USDC",
       "amount": { "type": "all" }
     },
     {
       "from_node": "buy_eth",
+      "to_node": "bridge_eth",
+      "token": "ETH",
+      "amount": { "type": "all" }
+    },
+    {
+      "from_node": "bridge_eth",
       "to_node": "lend_eth",
       "token": "ETH",
       "amount": { "type": "all" }

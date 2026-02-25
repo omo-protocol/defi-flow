@@ -74,6 +74,12 @@ pub enum ValidationError {
     #[error("Token `{token}` on chain `{chain}` has no address in the tokens manifest")]
     TokenNotInManifest { token: String, chain: String },
 
+    #[error("Hyperliquid perp asset `{asset}` not found in universe (node `{node_id}`). Check https://app.hyperliquid.xyz for listed assets.")]
+    HyperliquidUnknownPerpAsset { node_id: String, asset: String },
+
+    #[error("Hyperliquid spot token `{token}` not found in universe (node `{node_id}`). Check https://app.hyperliquid.xyz/spot for listed tokens.")]
+    HyperliquidUnknownSpotToken { node_id: String, token: String },
+
     #[error("Contract `{contract}` on {chain} not in contracts manifest (node `{node_id}`)")]
     ContractNotInManifest {
         contract: String,

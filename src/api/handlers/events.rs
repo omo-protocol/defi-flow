@@ -18,10 +18,22 @@ pub async fn event_stream(
         .get(&session_id)
         .ok_or_else(|| ApiError::NotFound(format!("session '{session_id}' not found")))?;
 
+    // Grab replay buffer BEFORE subscribing so we don't double-send
+    let replay = {
+        let log = session.event_log.lock().await;
+        log.clone()
+    };
     let mut rx = session.event_tx.subscribe();
     drop(state_inner);
 
     let stream = async_stream::stream! {
+        // Replay all events that happened before this SSE connection
+        for event in replay {
+            let json = serde_json::to_string(&event).unwrap_or_default();
+            yield Ok(Event::default().data(json));
+        }
+
+        // Then stream live events
         loop {
             match rx.recv().await {
                 Ok(event) => {

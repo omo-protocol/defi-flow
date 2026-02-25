@@ -62,9 +62,15 @@ export type BacktestResult = {
   trajectory: TrajectoryPoint[];
 };
 
+export type MonteCarloOutput = {
+  n_simulations: number;
+  simulations: BacktestResult[];
+};
+
 export type BacktestResponse = {
   id: string;
   result: BacktestResult;
+  monte_carlo?: MonteCarloOutput;
 };
 
 export type BacktestSummary = {
@@ -83,6 +89,8 @@ export async function runBacktest(
     slippage_bps?: number;
     seed?: number;
     data_dir?: string;
+    auto_fetch?: boolean;
+    monte_carlo?: number;
   } = {}
 ): Promise<BacktestResponse> {
   return request<BacktestResponse>("/api/backtest", {
@@ -135,6 +143,7 @@ export async function startDaemon(
     network?: string;
     dry_run?: boolean;
     slippage_bps?: number;
+    private_key?: string;
   } = {}
 ): Promise<RunStartResponse> {
   return request<RunStartResponse>("/api/run/start", {
@@ -165,6 +174,16 @@ export function subscribeEvents(sessionId: string): EventSource {
 }
 
 // ── Data ──────────────────────────────────────────────────────────────
+
+export async function fetchData(
+  workflow: unknown,
+  options: { days?: number; interval?: string; output_dir?: string } = {}
+): Promise<{ status: string; data_dir: string }> {
+  return request<{ status: string; data_dir: string }>("/api/data/fetch", {
+    method: "POST",
+    body: JSON.stringify({ workflow, ...options }),
+  });
+}
 
 export async function uploadData(files: FileList) {
   const form = new FormData();

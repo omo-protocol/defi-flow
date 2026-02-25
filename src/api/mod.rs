@@ -48,6 +48,7 @@ pub async fn serve(host: &str, port: u16, data_dir: &Path) -> Result<()> {
         .route("/api/run/{id}/stop", post(handlers::run::stop_run))
         .route("/api/run/{id}/events", get(handlers::events::event_stream))
         // Data
+        .route("/api/data/fetch", post(handlers::data::fetch_data))
         .route("/api/data/upload", post(handlers::data::upload_data))
         .route("/api/data/manifest", get(handlers::data::get_manifest))
         // Schema

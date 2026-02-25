@@ -32,7 +32,7 @@ import {
   showMinimapAtom,
   undoAtom,
 } from "@/lib/workflow-store";
-import { createDefaultNode, getNodeLabel } from "@/lib/types/defi-flow";
+import { createDefaultNode, getNodeLabel, inferEdgeToken } from "@/lib/types/defi-flow";
 import type { CanvasNode, CanvasEdge } from "@/lib/types/canvas";
 import { DefiNode } from "./nodes/defi-node";
 import { DefiEdge } from "./edges/defi-edge";
@@ -55,6 +55,28 @@ export function WorkflowCanvas() {
   const redo = useSetAtom(redoAtom);
   const deleteSelected = useSetAtom(deleteSelectedItemsAtom);
   const { screenToFlowPosition, fitView } = useReactFlow();
+
+  // Auto-sync edge tokens whenever nodes change
+  // Auto-sync edge tokens + sourceType whenever nodes change
+  const prevNodeDataRef = useRef<string>("");
+  useEffect(() => {
+    const fingerprint = nodes.map((n) => `${n.id}:${JSON.stringify(n.data.defiNode)}`).join("|");
+    if (fingerprint === prevNodeDataRef.current) return;
+    prevNodeDataRef.current = fingerprint;
+
+    let changed = false;
+    const updated = edges.map((edge) => {
+      const src = nodes.find((n) => n.id === edge.source);
+      const tgt = nodes.find((n) => n.id === edge.target);
+      if (!src || !tgt) return edge;
+      const inferred = inferEdgeToken(src.data.defiNode, tgt.data.defiNode);
+      const srcType = src.data.defiNode.type;
+      if (edge.data?.token === inferred && edge.data?.sourceType === srcType) return edge;
+      changed = true;
+      return { ...edge, data: { ...edge.data!, token: inferred, sourceType: srcType } } as CanvasEdge;
+    });
+    if (changed) setEdges(updated);
+  }, [nodes, edges, setEdges]);
 
   const connectingNodeId = useRef<string | null>(null);
   const connectingHandleType = useRef<"source" | "target" | null>(null);
@@ -100,19 +122,28 @@ export function WorkflowCanvas() {
 
   const onConnect: OnConnect = useCallback(
     (connection: XYFlowConnection) => {
+      // Auto-detect edge token from source/target nodes
+      const srcNode = nodes.find((n) => n.id === connection.source);
+      const tgtNode = nodes.find((n) => n.id === connection.target);
+      const token =
+        srcNode && tgtNode
+          ? inferEdgeToken(srcNode.data.defiNode, tgtNode.data.defiNode)
+          : "USDC";
+
       const newEdge: CanvasEdge = {
         id: nanoid(),
         ...connection,
         type: "defi-edge",
         data: {
-          token: "USDC",
+          token,
           amount: { type: "all" },
+          sourceType: srcNode?.data.defiNode.type,
         },
       };
       setEdges([...edges, newEdge]);
       triggerAutosave({ immediate: true });
     },
-    [edges, setEdges, triggerAutosave]
+    [nodes, edges, setEdges, triggerAutosave]
   );
 
   const onConnectStart = useCallback(
@@ -163,12 +194,21 @@ export function WorkflowCanvas() {
       setSelectedNode(nodeId);
 
       const fromSource = connectingHandleType.current === "source";
+      const edgeSource = fromSource ? sourceId : nodeId;
+      const edgeTarget = fromSource ? nodeId : sourceId;
+      const srcNode = nodes.find((n) => n.id === edgeSource);
+      const tgtNode = edgeTarget === nodeId ? newNode : nodes.find((n) => n.id === edgeTarget);
+      const edgeToken =
+        srcNode && tgtNode
+          ? inferEdgeToken(srcNode.data.defiNode, tgtNode.data.defiNode)
+          : "USDC";
+
       const newEdge: CanvasEdge = {
         id: nanoid(),
-        source: fromSource ? sourceId : nodeId,
-        target: fromSource ? nodeId : sourceId,
+        source: edgeSource,
+        target: edgeTarget,
         type: "defi-edge",
-        data: { token: "USDC", amount: { type: "all" } },
+        data: { token: edgeToken, amount: { type: "all" }, sourceType: srcNode?.data.defiNode.type },
       };
       setEdges([...edges, newEdge]);
       triggerAutosave({ immediate: true });

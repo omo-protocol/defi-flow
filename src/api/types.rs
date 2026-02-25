@@ -23,6 +23,13 @@ pub struct BacktestRequest {
     pub seed: u64,
     pub data_dir: Option<String>,
     pub monte_carlo: Option<u32>,
+    /// Auto-fetch data from venue APIs if no local data exists (default: true)
+    #[serde(default = "default_true")]
+    pub auto_fetch: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_capital() -> f64 {
@@ -38,6 +45,8 @@ fn default_seed() -> u64 {
 #[derive(Deserialize)]
 pub struct RunStartRequest {
     pub workflow: Workflow,
+    /// Hex private key (without 0x prefix). Required for live runs, optional for dry_run.
+    pub private_key: Option<String>,
     #[serde(default = "default_network")]
     pub network: String,
     #[serde(default)]
@@ -65,6 +74,8 @@ pub struct ValidateResponse {
 pub struct BacktestResponse {
     pub id: String,
     pub result: BacktestResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monte_carlo: Option<crate::backtest::MonteCarloOutput>,
 }
 
 #[derive(Serialize)]

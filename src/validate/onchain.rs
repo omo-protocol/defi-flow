@@ -1,12 +1,13 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use alloy::primitives::Address;
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::sol;
+use ferrofluid::InfoProvider;
 
 use crate::model::chain::Chain;
-use crate::model::node::Node;
+use crate::model::node::{Node, PerpVenue, SpotVenue};
 use crate::model::Workflow;
 
 use super::ValidationError;
@@ -72,6 +73,9 @@ struct AddressCheck {
 /// deployed code, and correct interfaces at all manifest addresses.
 pub async fn validate_onchain(workflow: &Workflow) -> Vec<ValidationError> {
     let mut errors = Vec::new();
+
+    // Hyperliquid universe check (namespace chains — perps + spot)
+    errors.extend(check_hyperliquid_universe(workflow).await);
 
     let chain_map = collect_chains(workflow);
     let contract_roles = infer_contract_roles(workflow);
@@ -457,4 +461,111 @@ async fn probe_interface(
             None // Code check is sufficient
         }
     }
+}
+
+// ── Hyperliquid universe validation ─────────────────────────────────
+
+/// Verify that Hyperliquid perp coins and spot tokens actually exist
+/// in the live Hyperliquid universe (API check).
+///
+/// Note: on Hyperliquid, major assets (ETH, BTC) are traded "spot" via the
+/// perp infrastructure, not the HIP-2 spot meta. So we check spot base tokens
+/// against BOTH perp universe AND spot token list.
+async fn check_hyperliquid_universe(workflow: &Workflow) -> Vec<ValidationError> {
+    let mut perp_coins: Vec<(String, String)> = Vec::new(); // (node_id, coin)
+    let mut spot_bases: Vec<(String, String)> = Vec::new(); // (node_id, base_token)
+
+    for node in &workflow.nodes {
+        match node {
+            Node::Perp { id, venue, pair, .. } if matches!(venue, PerpVenue::Hyperliquid) => {
+                let coin = pair.split('/').next().unwrap_or(pair).to_string();
+                perp_coins.push((id.clone(), coin));
+            }
+            Node::Spot { id, venue, pair, .. } if matches!(venue, SpotVenue::Hyperliquid) => {
+                // Only check the base token (e.g. "ETH" from "ETH/USDC")
+                // Quote token (USDC) is always valid on HL
+                let base = pair.split('/').next().unwrap_or(pair).trim().to_string();
+                spot_bases.push((id.clone(), base));
+            }
+            _ => {}
+        }
+    }
+
+    if perp_coins.is_empty() && spot_bases.is_empty() {
+        return Vec::new();
+    }
+
+    let info = InfoProvider::mainnet();
+    let mut errors = Vec::new();
+
+    // Fetch perp universe (needed for both perp + spot validation)
+    let perp_known: HashSet<String> =
+        match tokio::time::timeout(Duration::from_secs(10), info.meta()).await {
+            Ok(Ok(meta)) => {
+                let known: HashSet<String> = meta
+                    .universe
+                    .iter()
+                    .filter(|a| !a.is_delisted.unwrap_or(false))
+                    .map(|a| a.name.to_uppercase())
+                    .collect();
+                println!("  HL perp universe: {} listed assets", known.len());
+                known
+            }
+            Ok(Err(e)) => {
+                eprintln!("  warning: could not fetch HL perp meta: {e}");
+                HashSet::new()
+            }
+            Err(_) => {
+                eprintln!("  warning: HL perp meta request timed out");
+                HashSet::new()
+            }
+        };
+
+    // Check perp coins
+    for (node_id, coin) in &perp_coins {
+        if !perp_known.is_empty() && !perp_known.contains(&coin.to_uppercase()) {
+            errors.push(ValidationError::HyperliquidUnknownPerpAsset {
+                node_id: node_id.clone(),
+                asset: coin.clone(),
+            });
+        }
+    }
+
+    // Check spot base tokens: valid if in perp universe OR spot token list
+    if !spot_bases.is_empty() {
+        // Also fetch spot tokens for HIP-2 memecoins
+        let spot_known: HashSet<String> =
+            match tokio::time::timeout(Duration::from_secs(10), info.spot_meta()).await {
+                Ok(Ok(spot_meta)) => {
+                    let known: HashSet<String> = spot_meta
+                        .tokens
+                        .iter()
+                        .map(|t| t.name.to_uppercase())
+                        .collect();
+                    println!("  HL spot universe: {} listed tokens", known.len());
+                    known
+                }
+                Ok(Err(e)) => {
+                    eprintln!("  warning: could not fetch HL spot meta: {e}");
+                    HashSet::new()
+                }
+                Err(_) => {
+                    eprintln!("  warning: HL spot meta request timed out");
+                    HashSet::new()
+                }
+            };
+
+        for (node_id, base) in &spot_bases {
+            let upper = base.to_uppercase();
+            let found = perp_known.contains(&upper) || spot_known.contains(&upper);
+            if !perp_known.is_empty() && !spot_known.is_empty() && !found {
+                errors.push(ValidationError::HyperliquidUnknownSpotToken {
+                    node_id: node_id.clone(),
+                    token: base.clone(),
+                });
+            }
+        }
+    }
+
+    errors
 }

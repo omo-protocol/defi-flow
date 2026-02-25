@@ -746,9 +746,9 @@ impl Node {
                 // Output chain: prefer to_chain, fallback to from_chain
                 to_chain.clone().or_else(|| from_chain.clone())
             }
-            Node::Perp { .. } => Some(Chain::hyperevm()),
+            Node::Perp { venue, .. } => Some(perp_venue_chain(venue)),
             Node::Options { .. } => Some(Chain::hyperevm()),
-            Node::Spot { .. } => Some(Chain::hyperevm()),
+            Node::Spot { venue, .. } => Some(spot_venue_chain(venue)),
             Node::Lending { chain, .. } => Some(chain.clone()),
             Node::Vault { chain, .. } => Some(chain.clone()),
             Node::Pendle { .. } => Some(Chain::hyperevm()),
@@ -792,6 +792,20 @@ pub fn perp_venue_default_margin(venue: &PerpVenue) -> &'static str {
     }
 }
 
+/// Map a perp venue to its chain.
+/// Both Hyperliquid and Hyena (HIP-3) operate on HyperCore (L1, non-EVM).
+pub fn perp_venue_chain(_venue: &PerpVenue) -> Chain {
+    Chain::hyperliquid()
+}
+
+/// Map a spot venue to its chain.
+/// Hyperliquid spot operates on HyperCore (L1, non-EVM).
+pub fn spot_venue_chain(venue: &SpotVenue) -> Chain {
+    match venue {
+        SpotVenue::Hyperliquid => Chain::hyperliquid(),
+    }
+}
+
 // ── Token flow for validation ──────────────────────────────────────
 
 /// Describes a token on a specific chain, used for flow validation.
@@ -830,7 +844,7 @@ impl Node {
                         .unwrap_or(perp_venue_default_margin(venue));
                     Some(TokenFlow {
                         token: tok.to_string(),
-                        chain: Some(Chain::hyperevm()),
+                        chain: Some(perp_venue_chain(venue)),
                     })
                 }
                 _ => None,
@@ -941,12 +955,9 @@ impl Node {
                     let tok = margin_token
                         .as_deref()
                         .unwrap_or(perp_venue_default_margin(venue));
-                    // Hyperliquid: USDC margin lives on HyperCore (non-EVM),
-                    // so skip chain validation but still validate the token.
-                    let chain = match venue {
-                        PerpVenue::Hyperliquid => None,
-                        PerpVenue::Hyena => Some(Chain::hyperevm()),
-                    };
+                    // Both Hyperliquid and Hyena margin goes via HyperCore API
+                    // (non-EVM), so skip chain validation but still validate the token.
+                    let chain: Option<Chain> = None;
                     Some(TokenFlow {
                         token: tok.to_string(),
                         chain,

@@ -16,6 +16,7 @@ pub struct RuntimeConfig {
 }
 
 impl RuntimeConfig {
+    /// Build from CLI args. Private key comes from env var.
     pub fn from_cli(cli: &crate::run::RunConfig) -> Result<Self> {
         let private_key = std::env::var("DEFI_FLOW_PRIVATE_KEY").map_err(|_| {
             anyhow::anyhow!(
@@ -24,7 +25,28 @@ impl RuntimeConfig {
             )
         })?;
 
-        let network = match cli.network.to_lowercase().as_str() {
+        Self::build(private_key, &cli.network, cli.state_file.clone(), cli.dry_run, cli.once, cli.slippage_bps)
+    }
+
+    /// Build from explicit args. Used by the API server where the PK comes from the request.
+    pub fn from_args(
+        private_key: String,
+        network: &str,
+        dry_run: bool,
+        slippage_bps: f64,
+    ) -> Result<Self> {
+        Self::build(private_key, network, PathBuf::from("/dev/null"), dry_run, dry_run, slippage_bps)
+    }
+
+    fn build(
+        private_key: String,
+        network: &str,
+        state_file: PathBuf,
+        dry_run: bool,
+        once: bool,
+        slippage_bps: f64,
+    ) -> Result<Self> {
+        let network = match network.to_lowercase().as_str() {
             "mainnet" => Network::Mainnet,
             "testnet" => Network::Testnet,
             other => bail!("Invalid network '{other}'. Use 'mainnet' or 'testnet'."),
@@ -41,10 +63,10 @@ impl RuntimeConfig {
             network,
             wallet_address,
             private_key,
-            state_file: cli.state_file.clone(),
-            dry_run: cli.dry_run,
-            once: cli.once,
-            slippage_bps: cli.slippage_bps,
+            state_file,
+            dry_run,
+            once,
+            slippage_bps,
         })
     }
 }

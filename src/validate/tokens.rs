@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::model::node::{MovementType, Node, PerpAction, PerpVenue, TokenFlow};
+use crate::model::chain::Chain;
+use crate::model::node::{MovementType, Node, PerpAction, TokenFlow};
 use crate::model::Workflow;
 
 use super::ValidationError;
@@ -76,16 +77,59 @@ fn is_valid_evm_address(addr: &str) -> bool {
 
 // ── Edge flow validation ────────────────────────────────────────────
 
+/// Trace back through chain-agnostic nodes to find the origin chain of tokens
+/// arriving at a given node. Follows incoming edges through agnostic nodes
+/// (like Optimizer) until hitting a chain-aware node.
+fn trace_origin_chain<'a>(
+    node_id: &str,
+    node_map: &HashMap<&str, &'a Node>,
+    incoming: &HashMap<&str, Vec<&str>>,
+    visited: &mut HashSet<String>,
+) -> Option<Chain> {
+    if !visited.insert(node_id.to_string()) {
+        return None; // cycle guard
+    }
+
+    // If this node has a chain, that's the origin
+    if let Some(node) = node_map.get(node_id) {
+        if let Some(chain) = node.chain() {
+            return Some(chain);
+        }
+    }
+
+    // Otherwise trace back through incoming edges
+    if let Some(sources) = incoming.get(node_id) {
+        for src in sources {
+            if let Some(chain) = trace_origin_chain(src, node_map, incoming, visited) {
+                return Some(chain);
+            }
+        }
+    }
+
+    None
+}
+
 /// Validate every edge for token and chain compatibility.
-/// Produces actionable error messages suggesting intermediate nodes to insert.
+/// For edges FROM chain-agnostic nodes (like Optimizer), traces back to find
+/// the actual origin chain so mismatches aren't hidden.
 fn check_edge_flows(workflow: &Workflow) -> Vec<ValidationError> {
     let node_map: HashMap<&str, &Node> = workflow.nodes.iter().map(|n| (n.id(), n)).collect();
+
+    // Build incoming-edge map for back-tracing
+    let mut incoming: HashMap<&str, Vec<&str>> = HashMap::new();
+    for edge in &workflow.edges {
+        incoming
+            .entry(edge.to_node.as_str())
+            .or_default()
+            .push(edge.from_node.as_str());
+    }
+
     let mut errors = Vec::new();
 
     for edge in &workflow.edges {
         let from_node = match node_map.get(edge.from_node.as_str()) {
             Some(n) => n,
-            None => continue, // caught by reference checks
+            None => continue,
         };
         let to_node = match node_map.get(edge.to_node.as_str()) {
             Some(n) => n,
@@ -93,7 +137,7 @@ fn check_edge_flows(workflow: &Workflow) -> Vec<ValidationError> {
         };
 
         // What the source node outputs (fallback: edge token on source's chain)
-        let source = from_node.output_token().unwrap_or_else(|| TokenFlow {
+        let mut source = from_node.output_token().unwrap_or_else(|| TokenFlow {
             token: edge.token.clone(),
             chain: from_node.chain(),
         });
@@ -104,19 +148,27 @@ fn check_edge_flows(workflow: &Workflow) -> Vec<ValidationError> {
             chain: to_node.input_chain(),
         });
 
-        // Chain compatibility (skip if either is chain-agnostic)
+        // If the source is chain-agnostic, trace back to find actual origin chain.
+        // This catches: bridge(→hyperevm) → optimizer → perp(hyperliquid)
+        // The optimizer has no chain, but the tokens actually came from hyperevm.
+        if source.chain.is_none() {
+            let mut visited = HashSet::new();
+            source.chain = trace_origin_chain(
+                edge.from_node.as_str(),
+                &node_map,
+                &incoming,
+                &mut visited,
+            );
+        }
+
+        // Chain compatibility (skip if either side is truly unknown)
         let chain_ok = match (&source.chain, &dest.chain) {
             (Some(sc), Some(dc)) => sc.name.eq_ignore_ascii_case(&dc.name),
             _ => true,
         };
 
-        // Token compatibility (source output vs dest expectation)
         let token_ok = source.token.eq_ignore_ascii_case(&dest.token);
-
-        // Edge token vs source output
         let edge_vs_source = source.token.eq_ignore_ascii_case(&edge.token);
-
-        // Edge token vs dest expectation
         let edge_vs_dest = dest.token.eq_ignore_ascii_case(&edge.token);
 
         if chain_ok && token_ok && edge_vs_source && edge_vs_dest {
@@ -251,11 +303,35 @@ fn check_token_manifest(workflow: &Workflow) -> Vec<ValidationError> {
         None => return Vec::new(),
     };
 
+    // Collect namespace-only chains (no chain_id → no contract addresses).
+    // Tokens on these chains are identified by name, not address.
+    let namespace_chains: HashSet<String> = {
+        let mut set = HashSet::new();
+        for node in &workflow.nodes {
+            if let Some(chain) = node.chain() {
+                if chain.chain_id.is_none() {
+                    set.insert(chain.name.to_lowercase());
+                }
+            }
+            if let Some(chain) = node.input_chain() {
+                if chain.chain_id.is_none() {
+                    set.insert(chain.name.to_lowercase());
+                }
+            }
+        }
+        set
+    };
+
     let node_map: HashMap<&str, &Node> = workflow.nodes.iter().map(|n| (n.id(), n)).collect();
     let mut seen: HashSet<(String, String)> = HashSet::new();
     let mut errors = Vec::new();
 
     let mut check = |token: &str, chain: &str| {
+        // Skip namespace-only chains — tokens are names, not addresses
+        if namespace_chains.contains(&chain.to_lowercase()) {
+            return;
+        }
+
         let key = (token.to_string(), chain.to_lowercase());
         if seen.contains(&key) {
             return;
@@ -274,11 +350,13 @@ fn check_token_manifest(workflow: &Workflow) -> Vec<ValidationError> {
         }
     };
 
-    // Check all node tokens
+    // Check all node tokens (skip non-EVM chains — no contract addresses)
     for node in &workflow.nodes {
         match node {
             Node::Wallet { token, chain, .. } => {
-                check(token, &chain.name);
+                if chain.chain_id.is_some() {
+                    check(token, &chain.name);
+                }
             }
             Node::Movement {
                 from_token,
@@ -288,40 +366,42 @@ fn check_token_manifest(workflow: &Workflow) -> Vec<ValidationError> {
                 ..
             } => {
                 if let Some(fc) = from_chain {
-                    check(from_token, &fc.name);
+                    if fc.chain_id.is_some() {
+                        check(from_token, &fc.name);
+                    }
                 }
                 if let Some(tc) = to_chain {
-                    check(to_token, &tc.name);
-                }
-            }
-            Node::Lending { asset, chain, .. } => {
-                check(asset, &chain.name);
-            }
-            Node::Vault { asset, chain, .. } => {
-                check(asset, &chain.name);
-            }
-            Node::Perp {
-                venue,
-                margin_token,
-                ..
-            } => {
-                if let Some(mt) = margin_token {
-                    // Hyperliquid margin lives on HyperCore (non-EVM) — no manifest address.
-                    // Hyena margin lives on HyperEVM — check manifest.
-                    match venue {
-                        PerpVenue::Hyperliquid => {}
-                        PerpVenue::Hyena => check(mt, "hyperevm"),
+                    if tc.chain_id.is_some() {
+                        check(to_token, &tc.name);
                     }
                 }
             }
+            Node::Lending { asset, chain, .. } => {
+                if chain.chain_id.is_some() {
+                    check(asset, &chain.name);
+                }
+            }
+            Node::Vault { asset, chain, .. } => {
+                if chain.chain_id.is_some() {
+                    check(asset, &chain.name);
+                }
+            }
+            Node::Perp { margin_token, .. } => {
+                // Both Hyperliquid and Hyena margin lives on HyperCore (non-EVM)
+                // — no EVM token manifest address to check.
+                let _ = margin_token;
+            }
             Node::Lp { pool, chain, .. } => {
                 // Pool is "TOKEN0/TOKEN1" — validate both tokens on the LP chain
-                let chain_name = chain
-                    .as_ref()
-                    .map(|c| c.name.as_str())
-                    .unwrap_or("base");
-                for token in pool.split('/') {
-                    check(token.trim(), chain_name);
+                // Skip namespace-only chains (no addresses needed)
+                let lp_chain = chain.as_ref();
+                if lp_chain.map(|c| c.chain_id.is_some()).unwrap_or(true) {
+                    let chain_name = lp_chain
+                        .map(|c| c.name.as_str())
+                        .unwrap_or("base");
+                    for token in pool.split('/') {
+                        check(token.trim(), chain_name);
+                    }
                 }
             }
             _ => {}
@@ -329,15 +409,20 @@ fn check_token_manifest(workflow: &Workflow) -> Vec<ValidationError> {
     }
 
     // Check edge tokens against the chain of the source/dest node
+    // (skip non-EVM chains — no contract addresses to verify)
     for edge in &workflow.edges {
         if let Some(from_node) = node_map.get(edge.from_node.as_str()) {
             if let Some(chain) = from_node.chain() {
-                check(&edge.token, &chain.name);
+                if chain.chain_id.is_some() {
+                    check(&edge.token, &chain.name);
+                }
             }
         }
         if let Some(to_node) = node_map.get(edge.to_node.as_str()) {
             if let Some(chain) = to_node.input_chain() {
-                check(&edge.token, &chain.name);
+                if chain.chain_id.is_some() {
+                    check(&edge.token, &chain.name);
+                }
             }
         }
     }
@@ -384,12 +469,33 @@ fn check_movement_nodes(workflow: &Workflow) -> Vec<ValidationError> {
 fn check_optimizer_nodes(workflow: &Workflow) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
-    let mut outgoing_targets: HashMap<&str, HashSet<&str>> = HashMap::new();
+    // Build adjacency list for reachability check
+    let mut adj: HashMap<&str, HashSet<&str>> = HashMap::new();
     for edge in &workflow.edges {
-        outgoing_targets
-            .entry(edge.from_node.as_str())
+        adj.entry(edge.from_node.as_str())
             .or_default()
             .insert(edge.to_node.as_str());
+    }
+
+    /// BFS reachability from `start` to `target` through the edge graph.
+    fn is_reachable(start: &str, target: &str, adj: &HashMap<&str, HashSet<&str>>) -> bool {
+        let mut queue = std::collections::VecDeque::new();
+        let mut visited = HashSet::new();
+        queue.push_back(start);
+        visited.insert(start);
+        while let Some(node) = queue.pop_front() {
+            if let Some(neighbors) = adj.get(node) {
+                for &next in neighbors {
+                    if next == target {
+                        return true;
+                    }
+                    if visited.insert(next) {
+                        queue.push_back(next);
+                    }
+                }
+            }
+        }
+        false
     }
 
     for node in &workflow.nodes {
@@ -423,13 +529,9 @@ fn check_optimizer_nodes(workflow: &Workflow) -> Vec<ValidationError> {
                 }
             }
 
-            let targets = outgoing_targets.get(id.as_str());
             for alloc in allocations {
                 for target in alloc.targets() {
-                    let connected = targets
-                        .map(|t| t.contains(target))
-                        .unwrap_or(false);
-                    if !connected {
+                    if !is_reachable(id.as_str(), target, &adj) {
                         errors.push(ValidationError::OptimizerTargetNotConnected {
                             node_id: id.clone(),
                             target_node: target.to_string(),

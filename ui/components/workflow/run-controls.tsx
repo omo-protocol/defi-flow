@@ -19,6 +19,7 @@ import {
   type RunStatusResponse,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
@@ -32,7 +33,11 @@ import {
 import { Play, Square, RefreshCw, Radio } from "lucide-react";
 import { toast } from "sonner";
 
-export function RunControls() {
+export function RunControls({
+  onSessionSelect,
+}: {
+  onSessionSelect?: (id: string | null) => void;
+}) {
   const nodes = useAtomValue(nodesAtom);
   const edges = useAtomValue(edgesAtom);
   const name = useAtomValue(workflowNameAtom);
@@ -41,6 +46,7 @@ export function RunControls() {
 
   const [network, setNetwork] = useState("testnet");
   const [dryRun, setDryRun] = useState(true);
+  const [privateKey, setPrivateKey] = useState("");
   const [starting, setStarting] = useState(false);
   const [sessions, setSessions] = useState<RunListEntry[]>([]);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
@@ -89,9 +95,11 @@ export function RunControls() {
       const res = await startDaemon(workflow, {
         network,
         dry_run: dryRun,
+        ...(privateKey ? { private_key: privateKey } : {}),
       });
       toast.success(`Daemon started: ${res.session_id.slice(0, 8)}...`);
       setSelectedSession(res.session_id);
+      onSessionSelect?.(res.session_id);
       // Refresh list
       listRuns().then(setSessions).catch(() => {});
     } catch (err) {
@@ -113,6 +121,7 @@ export function RunControls() {
         listRuns().then(setSessions).catch(() => {});
         if (selectedSession === sessionId) {
           setSelectedSession(null);
+          onSessionSelect?.(null);
         }
       }, 1000);
     } catch (err) {
@@ -153,6 +162,19 @@ export function RunControls() {
           </Label>
         </div>
 
+        <div>
+          <Label className="text-xs text-muted-foreground">
+            Private Key {dryRun ? "(or set DEFI_FLOW_PRIVATE_KEY env)" : "(required)"}
+          </Label>
+          <Input
+            className="h-7 text-xs font-mono"
+            type="password"
+            value={privateKey}
+            onChange={(e) => setPrivateKey(e.target.value)}
+            placeholder="hex key without 0x prefix"
+          />
+        </div>
+
         <Button
           onClick={handleStart}
           disabled={starting || nodes.length === 0}
@@ -181,7 +203,10 @@ export function RunControls() {
                     ? "bg-accent"
                     : "hover:bg-accent/50"
                 }`}
-                onClick={() => setSelectedSession(s.session_id)}
+                onClick={() => {
+                  setSelectedSession(s.session_id);
+                  onSessionSelect?.(s.session_id);
+                }}
               >
                 <div className="flex-1 min-w-0">
                   <div className="font-medium truncate">

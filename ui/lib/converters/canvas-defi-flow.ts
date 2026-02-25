@@ -1,6 +1,6 @@
 import type { CanvasNode, CanvasEdge } from "../types/canvas";
 import type { DefiFlowWorkflow, DefiNode, DefiEdge } from "../types/defi-flow";
-import { getNodeLabel } from "../types/defi-flow";
+import { getNodeLabel, inferEdgeToken, cleanNodeForExport } from "../types/defi-flow";
 
 type Manifest = Record<string, Record<string, string>>;
 
@@ -19,7 +19,7 @@ export function convertCanvasToDefiFlow(
   existingTokens?: Manifest,
   existingContracts?: Manifest,
 ): DefiFlowWorkflow {
-  const defiNodes: DefiNode[] = nodes.map((n) => n.data.defiNode);
+  const defiNodes: DefiNode[] = nodes.map((n) => cleanNodeForExport(n.data.defiNode));
   const defiEdges: DefiEdge[] = edges.map((e) => ({
     from_node: e.source,
     to_node: e.target,
@@ -37,23 +37,32 @@ export function convertCanvasToDefiFlow(
     if (node.type === "wallet" && node.token) edgeTokens.add(node.token);
   }
 
-  // Collect all chains referenced in nodes
+  // Collect all EVM chains referenced in nodes (skip namespace-only chains like "hyperliquid")
   const chainsByToken = new Map<string, Set<string>>();
   for (const tok of edgeTokens) {
     chainsByToken.set(tok, new Set());
   }
   for (const node of defiNodes) {
-    if ("chain" in node && node.chain) {
+    if ("chain" in node && node.chain && node.chain.chain_id != null) {
       const chainName = node.chain.name;
-      // Each edge token could appear on this chain
       for (const tok of edgeTokens) {
         chainsByToken.get(tok)?.add(chainName);
       }
     }
+    // Movement nodes: only add EVM chains
+    if (node.type === "movement") {
+      if (node.from_chain?.chain_id != null) {
+        chainsByToken.get(node.from_token)?.add(node.from_chain.name);
+      }
+      if (node.to_chain?.chain_id != null) {
+        chainsByToken.get(node.to_token)?.add(node.to_chain.name);
+      }
+    }
   }
 
-  // Ensure every token+chain combo has an entry (even if empty string = "fill me in")
+  // Ensure every token+EVM-chain combo has an entry (namespace chains don't need addresses)
   for (const [tok, chains] of chainsByToken) {
+    if (chains.size === 0) continue;
     if (!tokens[tok]) tokens[tok] = {};
     for (const chain of chains) {
       if (!(chain in tokens[tok])) {
@@ -145,17 +154,26 @@ export function convertDefiFlowToCanvas(workflow: DefiFlowWorkflow): {
     },
   }));
 
-  const edges: CanvasEdge[] = workflow.edges.map((defiEdge, i) => ({
-    id: `edge-${i}`,
-    source: defiEdge.from_node,
-    target: defiEdge.to_node,
-    type: "defi-edge",
-    data: {
-      token: defiEdge.token,
-      amount: defiEdge.amount,
-      status: "valid" as const,
-    },
-  }));
+  // Build node lookup for edge token inference
+  const nodeMap = new Map(workflow.nodes.map((n) => [n.id, n]));
+
+  const edges: CanvasEdge[] = workflow.edges.map((defiEdge, i) => {
+    const src = nodeMap.get(defiEdge.from_node);
+    const tgt = nodeMap.get(defiEdge.to_node);
+    const token = src && tgt ? inferEdgeToken(src, tgt) : defiEdge.token;
+    return {
+      id: `edge-${i}`,
+      source: defiEdge.from_node,
+      target: defiEdge.to_node,
+      type: "defi-edge",
+      data: {
+        token,
+        amount: defiEdge.amount,
+        status: "valid" as const,
+        sourceType: src?.type,
+      },
+    };
+  });
 
   return {
     nodes,

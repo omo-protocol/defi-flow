@@ -24,27 +24,86 @@ export function ChainSelect({
   onChange: (chain: Chain) => void;
   label?: string;
 }) {
+  const [custom, setCustom] = useState(false);
+  const isKnown = value && KNOWN_CHAINS.some((c) => c.name === value.name);
+
+  // Show custom editor if current value isn't a known chain or user toggled it
+  const showCustom = custom || (value && !isKnown);
+
   return (
     <div className="space-y-1.5">
-      <Label className="text-xs">{label}</Label>
-      <Select
-        value={value?.name ?? ""}
-        onValueChange={(name) => {
-          const chain = KNOWN_CHAINS.find((c) => c.name === name);
-          if (chain) onChange(chain);
-        }}
-      >
-        <SelectTrigger className="h-8 text-xs">
-          <SelectValue placeholder="Select chain" />
-        </SelectTrigger>
-        <SelectContent>
-          {KNOWN_CHAINS.map((c) => (
-            <SelectItem key={c.name} value={c.name}>
-              {c.name} ({c.chain_id})
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <div className="flex items-center justify-between">
+        <Label className="text-xs">{label}</Label>
+        <button
+          type="button"
+          className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+          onClick={() => setCustom(!showCustom)}
+        >
+          {showCustom ? "preset" : "custom"}
+        </button>
+      </div>
+      {showCustom ? (
+        <div className="space-y-1.5">
+          <Input
+            className="h-7 text-xs"
+            value={value?.name ?? ""}
+            onChange={(e) =>
+              onChange({
+                name: e.target.value,
+                chain_id: value?.chain_id ?? (undefined as any),
+                rpc_url: value?.rpc_url ?? (undefined as any),
+              })
+            }
+            placeholder="namespace (e.g. hyperliquid)"
+          />
+          <div className="flex gap-1.5">
+            <Input
+              className="h-6 text-[10px] w-20"
+              type="number"
+              value={value?.chain_id ?? ""}
+              onChange={(e) =>
+                onChange({
+                  name: value?.name ?? "",
+                  chain_id: e.target.value ? Number(e.target.value) : (undefined as any),
+                  rpc_url: value?.rpc_url ?? (undefined as any),
+                })
+              }
+              placeholder="chain ID"
+            />
+            <Input
+              className="h-6 text-[10px] flex-1"
+              value={value?.rpc_url ?? ""}
+              onChange={(e) =>
+                onChange({
+                  name: value?.name ?? "",
+                  chain_id: value?.chain_id ?? (undefined as any),
+                  rpc_url: e.target.value || (undefined as any),
+                })
+              }
+              placeholder="rpc url (optional)"
+            />
+          </div>
+        </div>
+      ) : (
+        <Select
+          value={value?.name ?? ""}
+          onValueChange={(name) => {
+            const chain = KNOWN_CHAINS.find((c) => c.name === name);
+            if (chain) onChange(chain);
+          }}
+        >
+          <SelectTrigger className="h-8 text-xs">
+            <SelectValue placeholder="Select chain" />
+          </SelectTrigger>
+          <SelectContent>
+            {KNOWN_CHAINS.map((c) => (
+              <SelectItem key={c.name} value={c.name}>
+                {c.name} {c.chain_id ? `(${c.chain_id})` : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
     </div>
   );
 }

@@ -6,7 +6,6 @@ import {
   EdgeLabelRenderer,
   getBezierPath,
   type EdgeProps,
-  type Edge,
 } from "@xyflow/react";
 import type { CanvasEdge, CanvasEdgeData } from "@/lib/types/canvas";
 import { cn } from "@/lib/utils";
@@ -24,6 +23,7 @@ export const DefiEdge = memo(function DefiEdge(props: EdgeProps<CanvasEdge>) {
   } = props;
 
   const data = props.data as CanvasEdgeData | undefined;
+  const srcType = data?.sourceType as string | undefined;
 
   const [edgePath, labelX, labelY] = getBezierPath({
     sourceX,
@@ -33,6 +33,9 @@ export const DefiEdge = memo(function DefiEdge(props: EdgeProps<CanvasEdge>) {
     targetY,
     targetPosition,
   });
+
+  // Only show label on edges from wallet or optimizer nodes
+  const showLabel = srcType === "wallet" || srcType === "optimizer";
 
   const token = data?.token ?? "?";
   const amount = data?.amount;
@@ -56,33 +59,35 @@ export const DefiEdge = memo(function DefiEdge(props: EdgeProps<CanvasEdge>) {
           animation: "dashdraw 0.5s linear infinite",
         }}
       />
-      <EdgeLabelRenderer>
-        <div
-          style={{
-            position: "absolute",
-            transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
-            pointerEvents: "all",
-          }}
-          className="nodrag nopan"
-        >
+      {showLabel && (
+        <EdgeLabelRenderer>
           <div
-            className={cn(
-              "flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border cursor-pointer transition-colors",
-              selected
-                ? "bg-indigo-500 text-white border-indigo-400"
-                : "bg-card text-foreground border-border hover:bg-accent"
-            )}
+            style={{
+              position: "absolute",
+              transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+              pointerEvents: "all",
+            }}
+            className="nodrag nopan"
           >
-            <span>{token}</span>
-            {amountText && (
-              <>
-                <span className="text-muted-foreground">·</span>
-                <span className="text-muted-foreground">{amountText}</span>
-              </>
-            )}
+            <div
+              className={cn(
+                "flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border cursor-pointer transition-colors",
+                selected
+                  ? "bg-indigo-500 text-white border-indigo-400"
+                  : "bg-card text-foreground border-border hover:bg-accent"
+              )}
+            >
+              <span>{token}</span>
+              {amountText && (
+                <>
+                  <span className="text-muted-foreground">·</span>
+                  <span className="text-muted-foreground">{amountText}</span>
+                </>
+              )}
+            </div>
           </div>
-        </div>
-      </EdgeLabelRenderer>
+        </EdgeLabelRenderer>
+      )}
     </>
   );
 });

@@ -1,10 +1,9 @@
 {
   "name": "ETH Delta-Neutral Funding Arb",
-  "description": "Delta-neutral with Kelly optimizer: Kelly decides split between alpha (spot+perp pair) and idle lending. Alpha pair always splits 50/50 for perfect delta neutrality. Yield = funding + lending APY. Weekly rebalance on 5% drift. Starts from USDC on Base, bridges to HyperEVM for lending.",
+  "description": "Delta-neutral with Kelly optimizer: Kelly decides split between alpha (spot+perp pair) and idle lending. Alpha pair always splits 50/50 for perfect delta neutrality. Yield = funding + lending APY. Weekly rebalance on 5% drift.",
   "tokens": {
     "USDC": {
-      "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f",
-      "base": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f"
     }
   },
   "contracts": {
@@ -19,19 +18,9 @@
     {
       "type": "wallet",
       "id": "wallet",
-      "chain": { "name": "base", "chain_id": 8453, "rpc_url": "https://mainnet.base.org" },
+      "chain": { "name": "hyperliquid" },
       "token": "USDC",
       "address": "0x7BB51c8a55D8F0431f4E9CaA5cC502d7a381aC6b"
-    },
-    {
-      "type": "movement",
-      "id": "bridge_usdc",
-      "movement_type": "bridge",
-      "provider": "Stargate",
-      "from_token": "USDC",
-      "to_token": "USDC",
-      "from_chain": { "name": "base", "chain_id": 8453, "rpc_url": "https://mainnet.base.org" },
-      "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
     },
     {
       "type": "optimizer",
@@ -72,6 +61,16 @@
       "leverage": 1.0
     },
     {
+      "type": "movement",
+      "id": "bridge_usdc",
+      "movement_type": "bridge",
+      "provider": "Stargate",
+      "from_token": "USDC",
+      "to_token": "USDC",
+      "from_chain": { "name": "hyperliquid" },
+      "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
+    },
+    {
       "type": "lending",
       "id": "lend_idle",
       "archetype": "aave_v3",
@@ -86,12 +85,6 @@
   "edges": [
     {
       "from_node": "wallet",
-      "to_node": "bridge_usdc",
-      "token": "USDC",
-      "amount": { "type": "all" }
-    },
-    {
-      "from_node": "bridge_usdc",
       "to_node": "kelly",
       "token": "USDC",
       "amount": { "type": "all" }
@@ -110,6 +103,12 @@
     },
     {
       "from_node": "kelly",
+      "to_node": "bridge_usdc",
+      "token": "USDC",
+      "amount": { "type": "all" }
+    },
+    {
+      "from_node": "bridge_usdc",
       "to_node": "lend_idle",
       "token": "USDC",
       "amount": { "type": "all" }

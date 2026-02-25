@@ -15,7 +15,7 @@ import {
   contractsManifestAtom,
 } from "@/lib/workflow-store";
 import { NODE_REGISTRY, CATEGORIES, type NodeTypeConfig } from "@/lib/node-registry";
-import { createDefaultNode, getNodeLabel, type DefiNodeType } from "@/lib/types/defi-flow";
+import { createDefaultNode, getNodeLabel } from "@/lib/types/defi-flow";
 import type { CanvasNode } from "@/lib/types/canvas";
 import { convertCanvasToDefiFlow, convertDefiFlowToCanvas } from "@/lib/converters/canvas-defi-flow";
 import type { DefiFlowWorkflow } from "@/lib/types/defi-flow";
@@ -142,115 +142,91 @@ export function WorkflowToolbar() {
   // ── Validate ───────────────────────────────────────────────────────
 
   const [validating, setValidating] = useState(false);
-  const [validatingOnchain, setValidatingOnchain] = useState(false);
+  const [validatePhase, setValidatePhase] = useState<"" | "offline" | "onchain">("");
 
-  const handleValidateOnchain = async () => {
-    setValidatingOnchain(true);
-    try {
-      const workflow = convertCanvasToDefiFlow(nodes, edges, name, undefined, tokensManifest, contractsManifest);
-      const result = await validateWorkflowApi(workflow, true);
-
-      if (result.valid) {
-        setNodes(nodes.map((n) => ({
-          ...n,
-          data: { ...n.data, status: "valid" as const, validationErrors: undefined },
-        })));
-        toast.success("On-chain validation passed");
-        if (result.warnings?.length) {
-          for (const w of result.warnings) {
-            toast.warning(w);
-          }
-        }
+  /** Map errors to per-node status and show toast */
+  const applyValidationErrors = (errors: string[], allWarnings?: string[]) => {
+    const nodeErrorMap = new Map<string, string[]>();
+    const globalErrors: string[] = [];
+    for (const err of errors) {
+      const nodeMatch = err.match(/node [`"]([^`"]+)[`"]/);
+      if (nodeMatch) {
+        const id = nodeMatch[1];
+        const existing = nodeErrorMap.get(id) ?? [];
+        existing.push(err);
+        nodeErrorMap.set(id, existing);
       } else {
-        const nodeErrorMap = new Map<string, string[]>();
-        const globalErrors: string[] = [];
-        for (const err of result.errors ?? []) {
-          const nodeMatch = err.match(/node [`"]([^`"]+)[`"]/);
-          if (nodeMatch) {
-            const id = nodeMatch[1];
-            const existing = nodeErrorMap.get(id) ?? [];
-            existing.push(err);
-            nodeErrorMap.set(id, existing);
-          } else {
-            globalErrors.push(err);
-          }
-        }
-        setNodes(nodes.map((n) => {
-          const errs = nodeErrorMap.get(n.data.defiNode.id);
-          return {
-            ...n,
-            data: {
-              ...n.data,
-              status: errs ? ("error" as const) : ("valid" as const),
-              validationErrors: errs,
-            },
-          };
-        }));
-        toast.error(`${(result.errors ?? []).length} error(s)`, {
-          description: globalErrors[0],
-        });
+        globalErrors.push(err);
       }
-    } catch (err) {
-      toast.error("On-chain validation failed: " + (err instanceof Error ? err.message : "API error"));
-    } finally {
-      setValidatingOnchain(false);
+    }
+    setNodes(nodes.map((n) => {
+      const errs = nodeErrorMap.get(n.data.defiNode.id);
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          status: errs ? ("error" as const) : ("valid" as const),
+          validationErrors: errs,
+        },
+      };
+    }));
+    if (errors.length > 0) {
+      toast.error(`${errors.length} validation error(s)`, {
+        description: globalErrors[0],
+      });
+    }
+    for (const w of allWarnings ?? []) {
+      toast.warning(w);
     }
   };
 
   const handleValidate = async () => {
     setValidating(true);
     try {
-      // Convert canvas → defi-flow JSON, then run Rust validator via WASM
       const workflow = convertCanvasToDefiFlow(nodes, edges, name, undefined, tokensManifest, contractsManifest);
-      const json = JSON.stringify(workflow);
-      const result = await validateWorkflow(json);
 
-      if (result.valid) {
-        // Mark all nodes as valid
+      // Phase 1: Offline validation via WASM
+      setValidatePhase("offline");
+      const json = JSON.stringify(workflow);
+      const offlineResult = await validateWorkflow(json);
+
+      if (!offlineResult.valid) {
+        applyValidationErrors(offlineResult.errors ?? []);
+        return;
+      }
+
+      toast.success("Offline validation passed");
+
+      // Phase 2: On-chain validation via API (includes HL universe check)
+      setValidatePhase("onchain");
+      try {
+        const onchainResult = await validateWorkflowApi(workflow, true);
+
+        if (onchainResult.valid) {
+          setNodes(nodes.map((n) => ({
+            ...n,
+            data: { ...n.data, status: "valid" as const, validationErrors: undefined },
+          })));
+          toast.success(`Fully validated (${nodes.length} nodes, ${edges.length} edges)`);
+          for (const w of onchainResult.warnings ?? []) {
+            toast.warning(w);
+          }
+        } else {
+          applyValidationErrors(onchainResult.errors ?? [], onchainResult.warnings);
+        }
+      } catch {
+        // API not running — offline-only is still fine
         setNodes(nodes.map((n) => ({
           ...n,
           data: { ...n.data, status: "valid" as const, validationErrors: undefined },
         })));
-        toast.success(`Strategy is valid (${nodes.length} nodes, ${edges.length} edges)`);
-      } else {
-        // Try to map errors to specific nodes
-        const nodeErrorMap = new Map<string, string[]>();
-        const globalErrors: string[] = [];
-
-        for (const err of result.errors ?? []) {
-          // Try to extract node ID from error message patterns like `node "xyz"` or `node_id`
-          const nodeMatch = err.match(/node [`"]([^`"]+)[`"]/);
-          if (nodeMatch) {
-            const id = nodeMatch[1];
-            const existing = nodeErrorMap.get(id) ?? [];
-            existing.push(err);
-            nodeErrorMap.set(id, existing);
-          } else {
-            globalErrors.push(err);
-          }
-        }
-
-        setNodes(nodes.map((n) => {
-          const errs = nodeErrorMap.get(n.data.defiNode.id);
-          return {
-            ...n,
-            data: {
-              ...n.data,
-              status: errs ? ("error" as const) : ("valid" as const),
-              validationErrors: errs,
-            },
-          };
-        }));
-
-        const totalErrors = (result.errors ?? []).length;
-        toast.error(`${totalErrors} validation error(s) found`, {
-          description: globalErrors.length > 0 ? globalErrors[0] : undefined,
-        });
+        toast.success(`Offline valid (${nodes.length} nodes). API unavailable for on-chain checks.`);
       }
     } catch (err) {
       toast.error("Validation failed: " + (err instanceof Error ? err.message : "WASM error"));
     } finally {
       setValidating(false);
+      setValidatePhase("");
     }
   };
 
@@ -315,11 +291,9 @@ export function WorkflowToolbar() {
       </Button>
       <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={handleValidate} disabled={validating}>
         <CheckCircle className="w-3.5 h-3.5 mr-1" />
-        {validating ? "Validating..." : "Validate"}
-      </Button>
-      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={handleValidateOnchain} disabled={validatingOnchain}>
-        <CheckCircle className="w-3.5 h-3.5 mr-1" />
-        {validatingOnchain ? "Checking..." : "On-Chain"}
+        {validating
+          ? validatePhase === "onchain" ? "On-chain..." : "Validating..."
+          : "Validate"}
       </Button>
 
       <Separator orientation="vertical" className="h-5" />

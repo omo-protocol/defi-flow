@@ -621,11 +621,25 @@ impl Engine {
             0.0
         };
 
-        // Add downstream venue values for non-USDC edges (spot→lending chains)
-        for edge in &self.workflow.edges {
-            if edge.from_node == node_id && edge.token != "USDC" {
-                if let Some(downstream) = self.venues.get(edge.to_node.as_str()) {
-                    value += downstream.total_value().await.unwrap_or(0.0);
+        // Walk ALL downstream edges, adding venue values along the way.
+        // Always continue walking — bridge/movement venues exist but are
+        // pass-through (value=0), and we need to reach venues behind them.
+        // No token filter: USDC is just another token, and optimizer edges
+        // originate FROM the optimizer node (not from targets).
+        let mut frontier: Vec<String> = vec![node_id.to_string()];
+        let mut visited: HashSet<String> = HashSet::new();
+        visited.insert(node_id.to_string());
+        while let Some(current) = frontier.pop() {
+            for edge in &self.workflow.edges {
+                if edge.from_node == current
+                    && !visited.contains(&edge.to_node)
+                {
+                    visited.insert(edge.to_node.clone());
+                    if let Some(downstream) = self.venues.get(edge.to_node.as_str()) {
+                        value += downstream.total_value().await.unwrap_or(0.0);
+                    }
+                    // Always continue walking downstream
+                    frontier.push(edge.to_node.clone());
                 }
             }
         }
@@ -635,25 +649,45 @@ impl Engine {
 
     /// Unwind all legs of an allocation group by the given fraction, including
     /// downstream venues (e.g. lend_eth under buy_eth). Returns total USD freed.
+    /// Chains through pass-through nodes (bridge/movement) to reach actual venues.
     async fn unwind_group(&mut self, targets: &[String], fraction: f64) -> f64 {
         let mut total_freed = 0.0;
         for target_id in targets {
             // Downstream venues first (e.g. lend_eth under buy_eth)
-            let downstream_edges: Vec<_> = self
-                .workflow
-                .edges
-                .iter()
-                .filter(|e| e.from_node == *target_id && e.token != "USDC")
-                .cloned()
-                .collect();
-            for edge in &downstream_edges {
-                if let Some(ds_venue) = self.venues.get_mut(edge.to_node.as_str()) {
-                    total_freed += ds_venue.unwind(fraction).await.unwrap_or(0.0);
-                }
-            }
+            total_freed += self.unwind_downstream(target_id, fraction).await;
             // Then the target itself
             if let Some(venue) = self.venues.get_mut(target_id.as_str()) {
                 total_freed += venue.unwind(fraction).await.unwrap_or(0.0);
+            }
+        }
+        total_freed
+    }
+
+    /// Unwind downstream venues reachable from a node.
+    /// Chains through all downstream edges (including pass-through venues).
+    async fn unwind_downstream(&mut self, node_id: &str, fraction: f64) -> f64 {
+        let mut total_freed = 0.0;
+        let mut frontier: Vec<String> = vec![node_id.to_string()];
+        let mut visited: HashSet<String> = HashSet::new();
+        visited.insert(node_id.to_string());
+        while let Some(current) = frontier.pop() {
+            let edges: Vec<_> = self
+                .workflow
+                .edges
+                .iter()
+                .filter(|e| e.from_node == current)
+                .cloned()
+                .collect();
+            for edge in &edges {
+                if visited.contains(&edge.to_node) {
+                    continue;
+                }
+                visited.insert(edge.to_node.clone());
+                if let Some(ds_venue) = self.venues.get_mut(edge.to_node.as_str()) {
+                    total_freed += ds_venue.unwind(fraction).await.unwrap_or(0.0);
+                }
+                // Always continue walking — bridge/movement venues are pass-through
+                frontier.push(edge.to_node.clone());
             }
         }
         total_freed
@@ -798,26 +832,34 @@ impl Engine {
 
     /// Route extracted spot tokens to downstream nodes.
     /// Used by the optimizer which bypasses the normal deploy flow.
+    /// Chains through pass-through nodes (e.g. movement/bridge nodes that
+    /// have no venue) so tokens reach the actual destination venue.
     async fn route_spot_downstream(&mut self, source_id: &str) -> Result<()> {
-        let edges: Vec<_> = self
+        // Walk from source through pass-through nodes until we hit a venue
+        let mut frontier: Vec<(String, String)> = vec![]; // (from_node, token)
+        frontier.push((source_id.to_string(), String::new()));
+
+        // Seed with all downstream edges from the source
+        let initial_edges: Vec<_> = self
             .workflow
             .edges
             .iter()
-            .filter(|e| e.from_node == source_id && e.token != "USDC")
+            .filter(|e| e.from_node == source_id)
             .cloned()
             .collect();
 
-        for edge in &edges {
-            let available = self.balances.get(source_id, &edge.token);
+        // Process each edge, chaining through pass-through nodes
+        let mut to_process = initial_edges;
+        while let Some(edge) = to_process.pop() {
+            let available = self.balances.get(&edge.from_node, &edge.token);
             let amount = state::resolve(available, &edge.amount);
             if amount <= 0.0 {
                 continue;
             }
 
-            self.balances.deduct(source_id, &edge.token, amount);
+            self.balances.deduct(&edge.from_node, &edge.token, amount);
             self.balances.add(&edge.to_node, &edge.token, amount);
 
-            // Execute downstream venue with the routed tokens
             let downstream_node = self
                 .workflow
                 .nodes
@@ -830,6 +872,17 @@ impl Engine {
                     let result = venue.execute(dn, amount).await?;
                     self.distribute_result(&edge.to_node, &edge.token, result)?;
                 }
+                // Always continue routing downstream — bridge/movement venues
+                // produce TokenOutput that lands in balances, then downstream
+                // edges pick it up and forward to the next venue.
+                let next_edges: Vec<_> = self
+                    .workflow
+                    .edges
+                    .iter()
+                    .filter(|e| e.from_node == edge.to_node)
+                    .cloned()
+                    .collect();
+                to_process.extend(next_edges);
             }
         }
 

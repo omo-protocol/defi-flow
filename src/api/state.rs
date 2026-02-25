@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 
-use crate::engine::Engine;
 use crate::model::workflow::Workflow;
 
 use super::events::EngineEvent;
@@ -23,9 +22,10 @@ pub struct AppStateInner {
 
 pub struct RunSession {
     pub workflow: Workflow,
-    pub engine: Arc<RwLock<Engine>>,
     pub shutdown_tx: broadcast::Sender<()>,
     pub event_tx: broadcast::Sender<EngineEvent>,
+    /// All events emitted so far, for replay on SSE connect.
+    pub event_log: Arc<Mutex<Vec<EngineEvent>>>,
     pub started_at: u64,
     pub network: String,
     pub dry_run: bool,

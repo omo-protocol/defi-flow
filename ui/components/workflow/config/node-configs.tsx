@@ -1,14 +1,15 @@
 "use client";
 
+import { useState, useCallback } from "react";
 import type { CanvasNode } from "@/lib/types/canvas";
 import type {
   WalletNode, PerpNode, SpotNode, LendingNode, VaultNode,
   LpNode, OptionsNode, PendleNode, MovementNode, OptimizerNode,
-  DefiNode,
+  DefiNode, VenueAllocation,
 } from "@/lib/types/defi-flow";
 import { getNodeLabel } from "@/lib/types/defi-flow";
 import { useSetAtom, useAtomValue } from "jotai";
-import { updateNodeDataAtom, walletAddressAtom } from "@/lib/workflow-store";
+import { updateNodeDataAtom, walletAddressAtom, edgesAtom, nodesAtom } from "@/lib/workflow-store";
 import { TextField, NumberField, SelectField, ChainSelect, TriggerConfig } from "./shared";
 
 // Generic updater hook
@@ -497,6 +498,232 @@ function MovementConfig({ node, defi, onUpdate }: ConfigProps<MovementNode>) {
 
 // ── Optimizer ────────────────────────────────────────────────────────
 
+function AllocationsEditor({
+  allocations,
+  optimizerId,
+  onChange,
+}: {
+  allocations: VenueAllocation[];
+  optimizerId: string;
+  onChange: (allocs: VenueAllocation[]) => void;
+}) {
+  const edges = useAtomValue(edgesAtom);
+  const nodes = useAtomValue(nodesAtom);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // Downstream node IDs from edges
+  const downstreamIds = edges
+    .filter((e) => e.source === optimizerId)
+    .map((e) => e.target);
+
+  // All node IDs already in an allocation
+  const allocatedIds = new Set(
+    allocations.flatMap((a) => a.target_nodes ?? (a.target_node ? [a.target_node] : []))
+  );
+
+  // Unallocated downstream nodes (connected but not in any allocation yet)
+  const unallocated = downstreamIds.filter((id) => !allocatedIds.has(id));
+
+  // Auto-add unallocated as single-node allocations
+  const autoSync = useCallback(() => {
+    if (unallocated.length === 0) return;
+    const newAllocs = [
+      ...allocations,
+      ...unallocated.map((id) => ({
+        target_node: id,
+        correlation: 0,
+      } as VenueAllocation)),
+    ];
+    onChange(newAllocs);
+  }, [allocations, unallocated, onChange]);
+
+  // Auto-sync on first render or when edges change
+  if (unallocated.length > 0) {
+    // Schedule to avoid render-during-render
+    setTimeout(autoSync, 0);
+  }
+
+  // Remove allocations whose nodes are no longer connected
+  const pruneDisconnected = useCallback(() => {
+    const dsSet = new Set(downstreamIds);
+    const pruned = allocations
+      .map((a) => {
+        if (a.target_nodes) {
+          const kept = a.target_nodes.filter((id) => dsSet.has(id));
+          if (kept.length === 0) return null;
+          if (kept.length === 1) return { ...a, target_node: kept[0], target_nodes: undefined };
+          return { ...a, target_nodes: kept };
+        }
+        if (a.target_node && !dsSet.has(a.target_node)) return null;
+        return a;
+      })
+      .filter(Boolean) as VenueAllocation[];
+    if (pruned.length !== allocations.length) {
+      setTimeout(() => onChange(pruned), 0);
+    }
+  }, [allocations, downstreamIds, onChange]);
+
+  // Check for stale entries
+  const hasStale = allocations.some((a) => {
+    if (a.target_nodes) return a.target_nodes.some((id) => !downstreamIds.includes(id));
+    return a.target_node ? !downstreamIds.includes(a.target_node) : false;
+  });
+  if (hasStale) pruneDisconnected();
+
+  const getNodeLabel = (id: string) => {
+    const n = nodes.find((n) => n.id === id);
+    return n?.data.label ?? id;
+  };
+
+  const getAllocNodeIds = (a: VenueAllocation): string[] =>
+    a.target_nodes ?? (a.target_node ? [a.target_node] : []);
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const groupSelected = () => {
+    if (selected.size < 2) return;
+    const groupIds = Array.from(selected);
+    // Remove selected nodes from their current allocations
+    const remaining = allocations
+      .map((a) => {
+        const ids = getAllocNodeIds(a).filter((id) => !selected.has(id));
+        if (ids.length === 0) return null;
+        if (ids.length === 1) return { ...a, target_node: ids[0], target_nodes: undefined };
+        return { ...a, target_nodes: ids, target_node: undefined };
+      })
+      .filter(Boolean) as VenueAllocation[];
+    // Add the new group
+    remaining.push({ target_nodes: groupIds, correlation: 0 });
+    onChange(remaining);
+    setSelected(new Set());
+  };
+
+  const ungroupAlloc = (idx: number) => {
+    const a = allocations[idx];
+    const ids = getAllocNodeIds(a);
+    if (ids.length <= 1) return;
+    const newAllocs = [
+      ...allocations.slice(0, idx),
+      ...allocations.slice(idx + 1),
+      ...ids.map((id) => ({ target_node: id, correlation: 0 } as VenueAllocation)),
+    ];
+    onChange(newAllocs);
+  };
+
+  const updateCorrelation = (idx: number, corr: number) => {
+    const newAllocs = [...allocations];
+    newAllocs[idx] = { ...newAllocs[idx], correlation: corr };
+    onChange(newAllocs);
+  };
+
+  const removeAlloc = (idx: number) => {
+    onChange([...allocations.slice(0, idx), ...allocations.slice(idx + 1)]);
+  };
+
+  if (downstreamIds.length === 0) {
+    return (
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium">Allocations</label>
+        <p className="text-[10px] text-muted-foreground">
+          Connect edges from optimizer to venue nodes to create allocations.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="text-xs font-medium">
+          Allocations ({allocations.length})
+        </label>
+        {selected.size >= 2 && (
+          <button
+            className="text-[10px] px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 transition-colors"
+            onClick={groupSelected}
+          >
+            Group ({selected.size})
+          </button>
+        )}
+      </div>
+      <p className="text-[10px] text-muted-foreground">
+        Select nodes and click Group to create delta-neutral pairs.
+      </p>
+
+      <div className="space-y-1.5">
+        {allocations.map((alloc, idx) => {
+          const ids = getAllocNodeIds(alloc);
+          const isGroup = ids.length > 1;
+          return (
+            <div
+              key={idx}
+              className="rounded border p-2 space-y-1.5 text-xs"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1 flex-wrap">
+                  {ids.map((id) => (
+                    <button
+                      key={id}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition-colors ${
+                        selected.has(id)
+                          ? "bg-indigo-500 text-white"
+                          : "bg-muted hover:bg-accent"
+                      }`}
+                      onClick={() => toggleSelect(id)}
+                    >
+                      {getNodeLabel(id)}
+                    </button>
+                  ))}
+                  {isGroup && (
+                    <span className="text-[10px] text-muted-foreground ml-1">(group)</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  {isGroup && (
+                    <button
+                      className="text-[10px] text-muted-foreground hover:text-foreground"
+                      onClick={() => ungroupAlloc(idx)}
+                      title="Ungroup"
+                    >
+                      split
+                    </button>
+                  )}
+                  <button
+                    className="text-[10px] text-destructive hover:text-destructive/80"
+                    onClick={() => removeAlloc(idx)}
+                    title="Remove"
+                  >
+                    x
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-muted-foreground w-16 shrink-0">Correlation</span>
+                <input
+                  type="number"
+                  className="h-6 w-20 rounded border bg-transparent px-1.5 text-[10px] font-mono"
+                  value={alloc.correlation}
+                  onChange={(e) => updateCorrelation(idx, Number(e.target.value))}
+                  step={0.1}
+                  min={-1}
+                  max={1}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function OptimizerConfig({ node, defi, onUpdate }: ConfigProps<OptimizerNode>) {
   return (
     <div className="space-y-3">
@@ -533,15 +760,11 @@ function OptimizerConfig({ node, defi, onUpdate }: ConfigProps<OptimizerNode>) {
         min={0}
         max={1}
       />
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium">
-          Allocations ({defi.allocations.length})
-        </label>
-        <p className="text-[10px] text-muted-foreground">
-          Connect optimizer to venue nodes, then configure target_node IDs in JSON export.
-          Allocations are populated from connected edges.
-        </p>
-      </div>
+      <AllocationsEditor
+        allocations={defi.allocations}
+        optimizerId={defi.id}
+        onChange={(allocs) => onUpdate("allocations", allocs)}
+      />
       <TriggerConfig
         value={defi.trigger}
         onChange={(t) => onUpdate("trigger", t)}

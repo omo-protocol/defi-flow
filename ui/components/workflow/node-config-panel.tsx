@@ -31,6 +31,7 @@ import {
 // ── Edge config ──────────────────────────────────────────────────────
 
 function EdgeConfig({ edge }: { edge: CanvasEdge }) {
+  const nodes = useAtomValue(nodesAtom);
   const [edges, setEdges] = useAtom(edgesAtom);
   const deleteEdge = useSetAtom(deleteEdgeAtom);
 
@@ -44,8 +45,15 @@ function EdgeConfig({ edge }: { edge: CanvasEdge }) {
     );
   };
 
+  const srcNode = nodes.find((n) => n.id === edge.source);
+  const tgtNode = nodes.find((n) => n.id === edge.target);
+  const isFromOptimizer = srcNode?.data.defiNode.type === "optimizer";
+
   const token = edge.data?.token ?? "";
   const amount = edge.data?.amount ?? { type: "all" as const };
+
+  const srcLabel = srcNode?.data.label ?? edge.source;
+  const tgtLabel = tgtNode?.data.label ?? edge.target;
 
   return (
     <div className="space-y-4">
@@ -61,6 +69,12 @@ function EdgeConfig({ edge }: { edge: CanvasEdge }) {
         </Button>
       </div>
 
+      <div className="text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">{srcLabel}</span>
+        {" → "}
+        <span className="font-medium text-foreground">{tgtLabel}</span>
+      </div>
+
       <div className="space-y-1.5">
         <Label className="text-xs">Token</Label>
         <Input
@@ -69,61 +83,66 @@ function EdgeConfig({ edge }: { edge: CanvasEdge }) {
           onChange={(e) => updateEdge({ token: e.target.value })}
           placeholder="USDC"
         />
+        <p className="text-[10px] text-muted-foreground">Auto-detected from nodes. Override if needed.</p>
       </div>
 
-      <div className="space-y-1.5">
-        <Label className="text-xs">Amount Type</Label>
-        <Select
-          value={amount.type}
-          onValueChange={(type) => {
-            if (type === "all") updateEdge({ amount: { type: "all" } });
-            else if (type === "percentage")
-              updateEdge({ amount: { type: "percentage", value: 100 } });
-            else updateEdge({ amount: { type: "fixed", value: "1000.0" } });
-          }}
-        >
-          <SelectTrigger className="h-8 text-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Available</SelectItem>
-            <SelectItem value="percentage">Percentage</SelectItem>
-            <SelectItem value="fixed">Fixed Amount</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+      {isFromOptimizer && (
+        <>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Amount Type</Label>
+            <Select
+              value={amount.type}
+              onValueChange={(type) => {
+                if (type === "all") updateEdge({ amount: { type: "all" } });
+                else if (type === "percentage")
+                  updateEdge({ amount: { type: "percentage", value: 100 } });
+                else updateEdge({ amount: { type: "fixed", value: "1000.0" } });
+              }}
+            >
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Available</SelectItem>
+                <SelectItem value="percentage">Percentage</SelectItem>
+                <SelectItem value="fixed">Fixed Amount</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
-      {amount.type === "percentage" && (
-        <div className="space-y-1.5">
-          <Label className="text-xs">Percentage (%)</Label>
-          <Input
-            className="h-8 text-xs"
-            type="number"
-            value={amount.value}
-            onChange={(e) =>
-              updateEdge({
-                amount: { type: "percentage", value: Number(e.target.value) },
-              })
-            }
-            min={0}
-            max={100}
-            step={1}
-          />
-        </div>
-      )}
+          {amount.type === "percentage" && (
+            <div className="space-y-1.5">
+              <Label className="text-xs">Percentage (%)</Label>
+              <Input
+                className="h-8 text-xs"
+                type="number"
+                value={amount.value}
+                onChange={(e) =>
+                  updateEdge({
+                    amount: { type: "percentage", value: Number(e.target.value) },
+                  })
+                }
+                min={0}
+                max={100}
+                step={1}
+              />
+            </div>
+          )}
 
-      {amount.type === "fixed" && (
-        <div className="space-y-1.5">
-          <Label className="text-xs">Amount</Label>
-          <Input
-            className="h-8 text-xs"
-            value={amount.value}
-            onChange={(e) =>
-              updateEdge({ amount: { type: "fixed", value: e.target.value } })
-            }
-            placeholder="1000.0"
-          />
-        </div>
+          {amount.type === "fixed" && (
+            <div className="space-y-1.5">
+              <Label className="text-xs">Amount</Label>
+              <Input
+                className="h-8 text-xs"
+                value={amount.value}
+                onChange={(e) =>
+                  updateEdge({ amount: { type: "fixed", value: e.target.value } })
+                }
+                placeholder="1000.0"
+              />
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -140,9 +159,28 @@ function ManifestEditor({
 }) {
   if (!manifest || Object.keys(manifest).length === 0) return null;
 
-  const updateEntry = (key: string, chain: string, value: string) => {
+  const updateAddress = (key: string, chain: string, value: string) => {
     const updated = structuredClone(manifest);
     updated[key][chain] = value;
+    setManifest(updated);
+  };
+
+  const renameKey = (oldKey: string, newKey: string) => {
+    if (!newKey || newKey === oldKey) return;
+    if (manifest[newKey]) return; // don't overwrite existing
+    const updated: Record<string, Record<string, string>> = {};
+    for (const [k, v] of Object.entries(manifest)) {
+      updated[k === oldKey ? newKey : k] = v;
+    }
+    setManifest(updated);
+  };
+
+  const renameChain = (key: string, oldChain: string, newChain: string) => {
+    if (!newChain || newChain === oldChain) return;
+    const updated = structuredClone(manifest);
+    const addr = updated[key][oldChain];
+    delete updated[key][oldChain];
+    updated[key][newChain] = addr;
     setManifest(updated);
   };
 
@@ -151,6 +189,23 @@ function ManifestEditor({
     const name = `new_${Object.keys(updated).length}`;
     updated[name] = { hyperevm: "" };
     setManifest(updated);
+  };
+
+  const addChain = (key: string) => {
+    const updated = structuredClone(manifest);
+    const existing = Object.keys(updated[key]);
+    const newChain = existing.includes("hyperevm") ? "base" : "hyperevm";
+    updated[key][newChain] = "";
+    setManifest(updated);
+  };
+
+  const removeChain = (key: string, chain: string) => {
+    const updated = structuredClone(manifest);
+    delete updated[key][chain];
+    if (Object.keys(updated[key]).length === 0) {
+      delete updated[key];
+    }
+    setManifest(Object.keys(updated).length > 0 ? updated : undefined);
   };
 
   const removeEntry = (key: string) => {
@@ -169,26 +224,58 @@ function ManifestEditor({
       </div>
       {Object.entries(manifest).map(([key, chains]) => (
         <div key={key} className="rounded border p-2 space-y-1.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-mono font-medium truncate">{key}</span>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-5 w-5 p-0 text-destructive"
-              onClick={() => removeEntry(key)}
-            >
-              <Trash2 className="w-3 h-3" />
-            </Button>
+          <div className="flex items-center justify-between gap-1">
+            <Input
+              className="h-6 text-xs font-mono font-medium border-none bg-transparent p-0 focus-visible:ring-1"
+              value={key}
+              onBlur={(e) => renameKey(key, e.target.value.trim())}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") renameKey(key, (e.target as HTMLInputElement).value.trim());
+              }}
+            />
+            <div className="flex items-center gap-0.5 shrink-0">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-5 px-1 text-[10px] text-muted-foreground"
+                onClick={() => addChain(key)}
+              >
+                +chain
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-5 w-5 p-0 text-destructive"
+                onClick={() => removeEntry(key)}
+              >
+                <Trash2 className="w-3 h-3" />
+              </Button>
+            </div>
           </div>
           {Object.entries(chains).map(([chain, addr]) => (
             <div key={chain} className="flex items-center gap-1.5">
-              <span className="text-[10px] text-muted-foreground w-16 shrink-0">{chain}</span>
+              <Input
+                className="h-6 text-[10px] text-muted-foreground w-20 shrink-0 border-none bg-transparent p-0 focus-visible:ring-1"
+                value={chain}
+                onBlur={(e) => renameChain(key, chain, e.target.value.trim())}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") renameChain(key, chain, (e.target as HTMLInputElement).value.trim());
+                }}
+              />
               <Input
                 className="h-6 text-[10px] font-mono"
                 value={addr}
-                onChange={(e) => updateEntry(key, chain, e.target.value)}
+                onChange={(e) => updateAddress(key, chain, e.target.value)}
                 placeholder="0x..."
               />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-5 w-5 p-0 shrink-0 text-muted-foreground hover:text-destructive"
+                onClick={() => removeChain(key, chain)}
+              >
+                <Trash2 className="w-2.5 h-2.5" />
+              </Button>
             </div>
           ))}
         </div>
