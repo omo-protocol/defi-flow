@@ -114,14 +114,6 @@ jobs:
       matrix: ${{ fromJson(needs.compute-services.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Generate GitHub App token
-        id: app-token
-        uses: tibdex/github-app-token@v2
-        with:
-          app_id: ${{ secrets.GH_APP_ID }}
-          private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
@@ -169,7 +161,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
           build-args: ${{ steps.resolve.outputs.build_args }}
           secrets: |
-            gh_token=${{ steps.app-token.outputs.token }}
+            gh_token=${{ secrets.GH_PAT }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
