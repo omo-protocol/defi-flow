@@ -25,8 +25,8 @@ async function request<T>(
 
 export type ValidateResponse = {
   valid: boolean;
-  errors: string[];
-  warnings: string[];
+  errors?: string[];
+  warnings?: string[];
 };
 
 export async function validateWorkflow(

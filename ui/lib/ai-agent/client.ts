@@ -378,6 +378,7 @@ export async function agentLoop(
   handlers: ToolHandlers,
   onText: (text: string) => void,
   onToolCall?: (name: string, args: string) => void,
+  onToolResult?: (name: string, result: string) => void,
   signal?: AbortSignal,
   baseUrl?: string,
 ): Promise<string> {
@@ -564,6 +565,8 @@ export async function agentLoop(
       } catch (err) {
         result = `Tool error: ${err instanceof Error ? err.message : String(err)}`;
       }
+
+      onToolResult?.(name, result);
 
       conversation.push({
         role: "tool",

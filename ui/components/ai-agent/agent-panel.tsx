@@ -4,7 +4,7 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { nanoid } from "nanoid";
 import { toast } from "sonner";
-import { Bot, Send, Square, Wrench, Search, CheckCircle, Play, CircleStop, Database, Trash2, ChevronRight, LayoutGrid } from "lucide-react";
+import { Bot, Send, Square, Wrench, Search, CheckCircle, Play, CircleStop, Database, Trash2, ChevronRight, LayoutGrid, BarChart3, Loader2, XCircle } from "lucide-react";
 import Markdown from "react-markdown";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -339,9 +339,11 @@ export function AgentPanel() {
         // Try API (offline + on-chain), only fall back to WASM on network errors
         try {
           const result = await validateApi(workflow, true);
-          let output = result.valid ? "Validation passed (offline + on-chain)." : `Validation failed with ${result.errors.length} error(s):\n${result.errors.join("\n")}`;
-          if (result.warnings.length > 0) {
-            output += `\n\nWarnings (${result.warnings.length}):\n${result.warnings.join("\n")}`;
+          const errors = result.errors ?? [];
+          const warnings = result.warnings ?? [];
+          let output = result.valid ? "Validation passed (offline + on-chain)." : `Validation failed with ${errors.length} error(s):\n${errors.join("\n")}`;
+          if (warnings.length > 0) {
+            output += `\n\nWarnings (${warnings.length}):\n${warnings.join("\n")}`;
           }
           return output;
         } catch (err) {
@@ -688,7 +690,31 @@ export function AgentPanel() {
             const last = msgs[msgs.length - 1];
             if (last?.role === "assistant") {
               const activities = [...(last.toolActivities ?? [])];
-              activities.push({ id: nanoid(6), name, args, status: "done" });
+              activities.push({ id: nanoid(6), name, args, status: "running" });
+              msgs[msgs.length - 1] = { ...last, toolActivities: activities };
+            }
+            return msgs;
+          });
+        },
+        // onToolResult
+        (name, result) => {
+          setMessages((prev) => {
+            const msgs = [...prev];
+            const last = msgs[msgs.length - 1];
+            if (last?.role === "assistant" && last.toolActivities) {
+              const activities = [...last.toolActivities];
+              // Find the last activity with this name that is still running
+              for (let j = activities.length - 1; j >= 0; j--) {
+                if (activities[j].name === name && activities[j].status === "running") {
+                  const isError = result.startsWith("Tool error:") || result.startsWith("Error:");
+                  activities[j] = {
+                    ...activities[j],
+                    status: isError ? "error" : "done",
+                    result: (name === "validate" || name === "backtest") ? result : undefined,
+                  };
+                  break;
+                }
+              }
               msgs[msgs.length - 1] = { ...last, toolActivities: activities };
             }
             return msgs;
@@ -885,43 +911,66 @@ export function AgentPanel() {
 
               {/* Inline tool activities */}
               {msg.toolActivities && msg.toolActivities.length > 0 && (
-                <div className="mt-1.5 pt-1.5 border-t border-foreground/10 space-y-0.5">
+                <div className="mt-1.5 pt-1.5 border-t border-foreground/10 space-y-1">
                   {msg.toolActivities.map((ta) => (
-                    <div key={ta.id} className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                      {ta.name === "web_search" ? (
-                        <Search className="w-3 h-3 shrink-0" />
-                      ) : ta.name === "validate" ? (
-                        <CheckCircle className="w-3 h-3 shrink-0" />
-                      ) : ta.name === "start_daemon" ? (
-                        <Play className="w-3 h-3 shrink-0" />
-                      ) : ta.name === "stop_daemon" ? (
-                        <CircleStop className="w-3 h-3 shrink-0" />
-                      ) : ta.name === "fetch_data" || ta.name === "list_data" ? (
-                        <Database className="w-3 h-3 shrink-0" />
-                      ) : ta.name === "clear_canvas" ? (
-                        <Trash2 className="w-3 h-3 shrink-0" />
-                      ) : ta.name === "auto_layout" ? (
-                        <LayoutGrid className="w-3 h-3 shrink-0" />
-                      ) : (
-                        <Wrench className="w-3 h-3 shrink-0" />
-                      )}
-                      <span className="font-mono">{ta.name}</span>
-                      {ta.name === "add_node" && (
-                        <span className="text-foreground/60">
-                          {(() => {
-                            try { return JSON.parse(ta.args).node?.id; } catch { return ""; }
-                          })()}
-                        </span>
-                      )}
-                      {ta.name === "add_edge" && (
-                        <span className="text-foreground/60">
-                          {(() => {
-                            try {
-                              const a = JSON.parse(ta.args);
-                              return `${a.from_node} → ${a.to_node}`;
-                            } catch { return ""; }
-                          })()}
-                        </span>
+                    <div key={ta.id}>
+                      <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                        {ta.status === "running" ? (
+                          <Loader2 className="w-3 h-3 shrink-0 animate-spin" />
+                        ) : ta.status === "error" ? (
+                          <XCircle className="w-3 h-3 shrink-0 text-destructive" />
+                        ) : ta.name === "web_search" ? (
+                          <Search className="w-3 h-3 shrink-0" />
+                        ) : ta.name === "validate" ? (
+                          <CheckCircle className="w-3 h-3 shrink-0" />
+                        ) : ta.name === "backtest" ? (
+                          <BarChart3 className="w-3 h-3 shrink-0" />
+                        ) : ta.name === "start_daemon" ? (
+                          <Play className="w-3 h-3 shrink-0" />
+                        ) : ta.name === "stop_daemon" ? (
+                          <CircleStop className="w-3 h-3 shrink-0" />
+                        ) : ta.name === "fetch_data" || ta.name === "list_data" ? (
+                          <Database className="w-3 h-3 shrink-0" />
+                        ) : ta.name === "clear_canvas" ? (
+                          <Trash2 className="w-3 h-3 shrink-0" />
+                        ) : ta.name === "auto_layout" ? (
+                          <LayoutGrid className="w-3 h-3 shrink-0" />
+                        ) : (
+                          <Wrench className="w-3 h-3 shrink-0" />
+                        )}
+                        <span className="font-mono">{ta.name}</span>
+                        {ta.status === "running" && (
+                          <span className="text-foreground/40 italic">running...</span>
+                        )}
+                        {ta.name === "add_node" && (
+                          <span className="text-foreground/60">
+                            {(() => {
+                              try { return JSON.parse(ta.args).node?.id; } catch { return ""; }
+                            })()}
+                          </span>
+                        )}
+                        {ta.name === "add_edge" && (
+                          <span className="text-foreground/60">
+                            {(() => {
+                              try {
+                                const a = JSON.parse(ta.args);
+                                return `${a.from_node} → ${a.to_node}`;
+                              } catch { return ""; }
+                            })()}
+                          </span>
+                        )}
+                      </div>
+                      {/* Show validate/backtest results inline */}
+                      {ta.result && (ta.name === "validate" || ta.name === "backtest") && (
+                        <details className="ml-[18px] mt-0.5 group">
+                          <summary className="cursor-pointer select-none text-[10px] text-muted-foreground/70 hover:text-muted-foreground flex items-center gap-1">
+                            <ChevronRight className="w-2.5 h-2.5 transition-transform group-open:rotate-90" />
+                            {ta.status === "error" ? "Error details" : "Results"}
+                          </summary>
+                          <pre className="mt-0.5 ml-3.5 text-[9px] leading-tight text-muted-foreground/80 whitespace-pre-wrap bg-background/40 rounded px-2 py-1 max-h-48 overflow-y-auto font-mono">
+                            {ta.result}
+                          </pre>
+                        </details>
                       )}
                     </div>
                   ))}

@@ -107,6 +107,7 @@ NEVER use individual add_node/add_edge calls to build a full strategy from scrat
 - **Fix errors silently when possible.** If validation fails on something you can fix (missing edge, wrong chain, missing manifest entry), fix it and retry without asking the user.
 - **Ask only when you must.** If the user says "delta neutral ETH", you have enough to build. Do not ask "which venue?" or "what leverage?" — use Hyperliquid, 1x, Kelly optimizer as defaults.
 - **Never clear_canvas then rebuild.** Modify in place for edits.
+- **Never make assumptions or mistakes.** Double-check node IDs, edge connections, token symbols, chain IDs, and contract addresses against the schema and example. Every field must match the schema exactly. If unsure, use get_canvas_state or web_search to verify before proceeding. Accuracy is critical — a single wrong field can break the entire strategy.
 
 ## Output Format
 

@@ -6,6 +6,8 @@ export type ToolActivity = {
   name: string;
   args: string;
   status: "running" | "done" | "error";
+  /** Tool result (populated after execution for validate/backtest) */
+  result?: string;
 };
 
 export type Message = {
