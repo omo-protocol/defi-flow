@@ -6,8 +6,8 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::data;
-use crate::engine::clock::SimClock;
 use crate::engine::Engine;
+use crate::engine::clock::SimClock;
 use crate::model::node::Node;
 use crate::validate;
 use crate::venues::{self, BuildMode};
@@ -68,8 +68,7 @@ pub fn run(config: &BacktestConfig) -> Result<()> {
         };
         let file = std::fs::File::create(output_path)
             .with_context(|| format!("creating output file {}", output_path.display()))?;
-        serde_json::to_writer_pretty(file, &output)
-            .context("writing JSON output")?;
+        serde_json::to_writer_pretty(file, &output).context("writing JSON output")?;
         println!("  JSON output written to {}", output_path.display());
     }
 
@@ -115,7 +114,12 @@ pub fn run_single_backtest(config: &BacktestConfig) -> Result<BacktestResult> {
 
     // 6. Run async phases in a tokio runtime
     let rt = tokio::runtime::Runtime::new().context("creating tokio runtime")?;
-    rt.block_on(execute_backtest(&mut engine, clock, config, periods_per_year))
+    rt.block_on(execute_backtest(
+        &mut engine,
+        clock,
+        config,
+        periods_per_year,
+    ))
 }
 
 async fn execute_backtest(
@@ -148,11 +152,10 @@ async fn execute_backtest(
             .venues
             .keys()
             .filter(|id| {
-                !engine
-                    .workflow
-                    .nodes
-                    .iter()
-                    .any(|n| n.id() == id.as_str() && matches!(n, Node::Wallet { .. } | Node::Optimizer { .. }))
+                !engine.workflow.nodes.iter().any(|n| {
+                    n.id() == id.as_str()
+                        && matches!(n, Node::Wallet { .. } | Node::Optimizer { .. })
+                })
             })
             .cloned()
             .collect();
@@ -172,10 +175,7 @@ async fn execute_backtest(
     while clock.advance() {
         let now = clock.current_timestamp();
         let dt_secs = clock.dt_seconds() as f64;
-        engine
-            .tick(now, dt_secs)
-            .await
-            .context("tick phase")?;
+        engine.tick(now, dt_secs).await.context("tick phase")?;
 
         let tvl = engine.total_tvl().await;
         bt_metrics.record_tick(now, tvl);

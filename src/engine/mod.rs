@@ -41,10 +41,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(
-        workflow: Workflow,
-        venues: HashMap<NodeId, Box<dyn Venue>>,
-    ) -> Self {
+    pub fn new(workflow: Workflow, venues: HashMap<NodeId, Box<dyn Venue>>) -> Self {
         let deploy_order = topo::deploy_order(&workflow);
         let triggered_nodes = extract_triggered_nodes(&workflow);
 
@@ -211,10 +208,7 @@ impl Engine {
         }
         for (old, new) in self.workflow.edges.iter().zip(new_workflow.edges.iter()) {
             if old != new {
-                println!(
-                    "[reload]   Edge {}->{} changed",
-                    old.from_node, old.to_node
-                );
+                println!("[reload]   Edge {}->{} changed", old.from_node, old.to_node);
             }
         }
 
@@ -386,9 +380,8 @@ impl Engine {
         let optimizer_balance = self.balances.get(node_id, "USDC");
 
         // Compute group-level Kelly allocations
-        let alloc_result = optimizer::compute_kelly_allocations(
-            node, 0.0, &venue_stats, &venue_risks,
-        )?;
+        let alloc_result =
+            optimizer::compute_kelly_allocations(node, 0.0, &venue_stats, &venue_risks)?;
 
         // Compute current GROUP values
         let mut group_values: Vec<f64> = Vec::new();
@@ -423,13 +416,22 @@ impl Engine {
                     None => continue,
                 };
 
-                let perp_value = self.venues.get(perp_id.as_str())
-                    .unwrap().total_value().await.unwrap_or(0.0);
+                let perp_value = self
+                    .venues
+                    .get(perp_id.as_str())
+                    .unwrap()
+                    .total_value()
+                    .await
+                    .unwrap_or(0.0);
                 if perp_value <= 0.0 {
                     continue;
                 }
 
-                let notional = if ratio > 0.0 { perp_value / ratio } else { perp_value * 10.0 };
+                let notional = if ratio > 0.0 {
+                    perp_value / ratio
+                } else {
+                    perp_value * 10.0
+                };
                 let needed = notional * (Self::OPTIMIZER_MARGIN_TARGET - ratio);
                 if needed <= 0.0 {
                     continue;
@@ -471,7 +473,10 @@ impl Engine {
                     }
                     eprintln!(
                         "  [optimizer] {} margin {:.1}% → added ${:.2} from {:?}",
-                        perp_id, ratio * 100.0, total_freed, donor_ids,
+                        perp_id,
+                        ratio * 100.0,
+                        total_freed,
+                        donor_ids,
                     );
                     margin_topped_up = true;
                 }
@@ -611,7 +616,9 @@ impl Engine {
                 // First pass: find all perps and their group index
                 for (gi, alloc) in allocations.iter().enumerate() {
                     for t in &alloc.targets() {
-                        let is_perp = self.venues.get(*t)
+                        let is_perp = self
+                            .venues
+                            .get(*t)
                             .map(|v| v.margin_ratio().is_some())
                             .unwrap_or(false);
                         if is_perp {
@@ -667,9 +674,7 @@ impl Engine {
         visited.insert(node_id.to_string());
         while let Some(current) = frontier.pop() {
             for edge in &self.workflow.edges {
-                if edge.from_node == current
-                    && !visited.contains(&edge.to_node)
-                {
+                if edge.from_node == current && !visited.contains(&edge.to_node) {
                     visited.insert(edge.to_node.clone());
                     if let Some(downstream) = self.venues.get(edge.to_node.as_str()) {
                         value += downstream.total_value().await.unwrap_or(0.0);

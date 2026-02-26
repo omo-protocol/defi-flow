@@ -1,19 +1,23 @@
 pub mod config;
+pub mod registry;
 pub mod scheduler;
 pub mod state;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 
-use crate::engine::reserve;
 use crate::engine::Engine;
+use crate::engine::reserve;
 use crate::model::workflow::Workflow;
 use crate::venues::{self, BuildMode};
 
 use config::RuntimeConfig;
+use registry::{Registry, RegistryEntry};
 use scheduler::CronScheduler;
 use state::RunState;
 
@@ -24,6 +28,8 @@ pub struct RunConfig {
     pub dry_run: bool,
     pub once: bool,
     pub slippage_bps: f64,
+    pub log_file: Option<PathBuf>,
+    pub registry_dir: Option<PathBuf>,
 }
 
 /// Entry point for the `run` command.
@@ -34,6 +40,13 @@ pub fn run(workflow_path: &Path, cli_config: &RunConfig) -> Result<()> {
     })?;
 
     let config = RuntimeConfig::from_cli(cli_config)?;
+
+    // Ensure log file parent dir exists
+    if let Some(ref log_path) = cli_config.log_file {
+        if let Some(parent) = log_path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+    }
 
     println!("=== defi-flow run ===");
     println!(
@@ -49,11 +62,77 @@ pub fn run(workflow_path: &Path, cli_config: &RunConfig) -> Result<()> {
     println!("Slippage: {} bps", config.slippage_bps);
     println!();
 
+    // Register in daemon registry
+    let strategy_name = workflow.name.clone();
+    let registry_dir = cli_config.registry_dir.clone();
+    let reg_dir_ref = registry_dir.as_deref();
+
+    let log_file = cli_config.log_file.clone().unwrap_or_else(|| {
+        let dir = registry_dir
+            .clone()
+            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".defi-flow"));
+        dir.join("logs").join(format!("{}.log", strategy_name))
+    });
+
+    let entry = RegistryEntry {
+        pid: std::process::id(),
+        strategy_file: workflow_path
+            .canonicalize()
+            .unwrap_or_else(|_| workflow_path.to_path_buf()),
+        state_file: cli_config.state_file.clone(),
+        log_file,
+        mode: if config.dry_run {
+            "dry-run".into()
+        } else {
+            "live".into()
+        },
+        network: cli_config.network.clone(),
+        capital: 0.0, // Updated after deploy
+        started_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    if let Err(e) = Registry::register(reg_dir_ref, &strategy_name, entry) {
+        eprintln!("Warning: failed to register in daemon registry: {:#}", e);
+    } else {
+        println!("Registered in daemon registry as '{}'", strategy_name);
+    }
+
+    // Set up SIGTERM/SIGINT handler — save state but DON'T deregister.
+    // Registry entries must survive container restarts so `resume-all` can relaunch.
+    // Only `defi-flow stop` (explicit user action) deregisters.
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_clone = shutdown.clone();
+    let name_for_handler = strategy_name.clone();
+
+    ctrlc::set_handler(move || {
+        eprintln!("\n[signal] Shutting down '{}' (state will be saved, registry entry kept for resume)...", name_for_handler);
+        shutdown_clone.store(true, Ordering::SeqCst);
+    })
+    .ok();
+
     let rt = tokio::runtime::Runtime::new().context("creating tokio runtime")?;
-    rt.block_on(run_async(workflow, config, workflow_path))
+    let result = rt.block_on(run_async(workflow, config, workflow_path, shutdown));
+
+    // Deregister only on normal exit (--once mode, no errors).
+    // Signal-based shutdown leaves registry intact for resume-all.
+    if result.is_ok() && cli_config.once {
+        if let Err(e) = Registry::deregister(reg_dir_ref, &strategy_name) {
+            eprintln!(
+                "Warning: failed to deregister from daemon registry: {:#}",
+                e
+            );
+        }
+    }
+
+    result
 }
 
-async fn run_async(workflow: Workflow, config: RuntimeConfig, workflow_path: &Path) -> Result<()> {
+async fn run_async(
+    workflow: Workflow,
+    config: RuntimeConfig,
+    workflow_path: &Path,
+    shutdown: Arc<AtomicBool>,
+) -> Result<()> {
     // Install rustls crypto provider (required by ferrofluid's TLS)
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
@@ -114,12 +193,20 @@ async fn run_async(workflow: Workflow, config: RuntimeConfig, workflow_path: &Pa
         // Reserve management (--once mode)
         if let Some(rc) = engine.workflow.reserve.clone() {
             match reserve::check_and_manage(
-                &mut engine, &rc, &contracts, &tokens, &config.private_key, config.dry_run,
-            ).await {
+                &mut engine,
+                &rc,
+                &contracts,
+                &tokens,
+                &config.private_key,
+                config.dry_run,
+            )
+            .await
+            {
                 Ok(Some(action)) => {
                     println!(
                         "[reserve] Unwound ${:.2} (deficit ${:.2}, ratio was {:.1}%)",
-                        action.freed, action.deficit,
+                        action.freed,
+                        action.deficit,
                         action.reserve_ratio * 100.0,
                     );
                     sync_balances(&engine, &mut state);
@@ -158,6 +245,12 @@ async fn run_async(workflow: Workflow, config: RuntimeConfig, workflow_path: &Pa
         );
 
         loop {
+            if shutdown.load(Ordering::SeqCst) {
+                println!("[shutdown] Saving state and exiting...");
+                state.save(&config.state_file)?;
+                break;
+            }
+
             tokio::select! {
                 triggered = scheduler.wait_for_next() => {
                     let now = chrono::Utc::now();
@@ -255,10 +348,7 @@ fn setup_file_watcher(
     let watcher = RecommendedWatcher::new(
         move |res: notify::Result<notify::Event>| {
             if let Ok(event) = res {
-                if matches!(
-                    event.kind,
-                    EventKind::Modify(_) | EventKind::Create(_)
-                ) {
+                if matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
                     for path in event.paths {
                         let _ = tx.try_send(path);
                     }

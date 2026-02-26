@@ -108,20 +108,31 @@ impl AaveLending {
 
         println!(
             "  LENDING SUPPLY: {} {} to pool {}",
-            input_amount, asset_symbol, evm::short_addr(&pool_addr),
+            input_amount,
+            asset_symbol,
+            evm::short_addr(&pool_addr),
         );
 
         if self.dry_run {
             // ── Preflight reads: verify pool supports this asset ──
             let rp = evm::read_provider(rpc_url)?;
             let pool_read = IAavePoolRead::new(pool_addr, &rp);
-            pool_read.getReserveData(token_addr).call().await
-                .with_context(|| format!(
-                    "Aave pool {} does not support {} — getReserveData reverted",
-                    evm::short_addr(&pool_addr), asset_symbol,
-                ))?;
+            pool_read
+                .getReserveData(token_addr)
+                .call()
+                .await
+                .with_context(|| {
+                    format!(
+                        "Aave pool {} does not support {} — getReserveData reverted",
+                        evm::short_addr(&pool_addr),
+                        asset_symbol,
+                    )
+                })?;
             println!("  LENDING: preflight OK — pool supports {}", asset_symbol);
-            println!("  LENDING: [DRY RUN] would approve {} + supply to pool", asset_symbol);
+            println!(
+                "  LENDING: [DRY RUN] would approve {} + supply to pool",
+                asset_symbol
+            );
             self.supplied_value += input_amount;
             return Ok(ExecutionResult::PositionUpdate {
                 consumed: input_amount,
@@ -165,18 +176,26 @@ impl AaveLending {
 
         println!(
             "  LENDING WITHDRAW: {} {} from pool {}",
-            input_amount, asset_symbol, evm::short_addr(&pool_addr),
+            input_amount,
+            asset_symbol,
+            evm::short_addr(&pool_addr),
         );
 
         if self.dry_run {
             // ── Preflight reads: verify pool supports this asset ──
             let rp = evm::read_provider(rpc_url)?;
             let pool_read = IAavePoolRead::new(pool_addr, &rp);
-            pool_read.getReserveData(token_addr).call().await
-                .with_context(|| format!(
-                    "Aave pool {} does not support {} — getReserveData reverted",
-                    evm::short_addr(&pool_addr), asset_symbol,
-                ))?;
+            pool_read
+                .getReserveData(token_addr)
+                .call()
+                .await
+                .with_context(|| {
+                    format!(
+                        "Aave pool {} does not support {} — getReserveData reverted",
+                        evm::short_addr(&pool_addr),
+                        asset_symbol,
+                    )
+                })?;
             println!("  LENDING: preflight OK — pool supports {}", asset_symbol);
             println!("  LENDING: [DRY RUN] would withdraw from pool");
             self.supplied_value = (self.supplied_value - input_amount).max(0.0);
@@ -192,11 +211,17 @@ impl AaveLending {
         // rounding (scaledBalance = amount / liquidityIndex truncates).
         let rp = evm::read_provider(rpc_url)?;
         let pool_read = IAavePoolRead::new(pool_addr, &rp);
-        let reserve_data = pool_read.getReserveData(token_addr).call().await
+        let reserve_data = pool_read
+            .getReserveData(token_addr)
+            .call()
+            .await
             .context("getReserveData failed during withdraw")?;
         let a_token_addr = reserve_data._8; // aTokenAddress
         let a_token = IERC20::new(a_token_addr, &rp);
-        let a_balance = a_token.balanceOf(self.wallet_address).call().await
+        let a_balance = a_token
+            .balanceOf(self.wallet_address)
+            .call()
+            .await
             .context("aToken balanceOf failed")?;
         let withdraw_units = amount_units.min(a_balance);
 
@@ -227,18 +252,26 @@ impl AaveLending {
 
         println!(
             "  LENDING BORROW: {} {} from pool {}",
-            input_amount, asset_symbol, evm::short_addr(&pool_addr),
+            input_amount,
+            asset_symbol,
+            evm::short_addr(&pool_addr),
         );
 
         if self.dry_run {
             // ── Preflight reads: verify pool supports this asset ──
             let rp = evm::read_provider(rpc_url)?;
             let pool_read = IAavePoolRead::new(pool_addr, &rp);
-            pool_read.getReserveData(token_addr).call().await
-                .with_context(|| format!(
-                    "Aave pool {} does not support {} — getReserveData reverted",
-                    evm::short_addr(&pool_addr), asset_symbol,
-                ))?;
+            pool_read
+                .getReserveData(token_addr)
+                .call()
+                .await
+                .with_context(|| {
+                    format!(
+                        "Aave pool {} does not support {} — getReserveData reverted",
+                        evm::short_addr(&pool_addr),
+                        asset_symbol,
+                    )
+                })?;
             println!("  LENDING: preflight OK — pool supports {}", asset_symbol);
             println!("  LENDING: [DRY RUN] would borrow from pool");
             self.borrowed_value += input_amount;
@@ -252,7 +285,13 @@ impl AaveLending {
 
         let pool = IAavePool::new(pool_addr, &provider);
         let borrow_tx = pool
-            .borrow(token_addr, amount_units, U256::from(2), 0, self.wallet_address)
+            .borrow(
+                token_addr,
+                amount_units,
+                U256::from(2),
+                0,
+                self.wallet_address,
+            )
             .gas(500_000);
         let pending = borrow_tx.send().await.context("borrow failed")?;
         let receipt = pending.get_receipt().await.context("borrow receipt")?;
@@ -279,18 +318,26 @@ impl AaveLending {
 
         println!(
             "  LENDING REPAY: {} {} to pool {}",
-            input_amount, asset_symbol, evm::short_addr(&pool_addr),
+            input_amount,
+            asset_symbol,
+            evm::short_addr(&pool_addr),
         );
 
         if self.dry_run {
             // ── Preflight reads: verify pool supports this asset ──
             let rp = evm::read_provider(rpc_url)?;
             let pool_read = IAavePoolRead::new(pool_addr, &rp);
-            pool_read.getReserveData(token_addr).call().await
-                .with_context(|| format!(
-                    "Aave pool {} does not support {} — getReserveData reverted",
-                    evm::short_addr(&pool_addr), asset_symbol,
-                ))?;
+            pool_read
+                .getReserveData(token_addr)
+                .call()
+                .await
+                .with_context(|| {
+                    format!(
+                        "Aave pool {} does not support {} — getReserveData reverted",
+                        evm::short_addr(&pool_addr),
+                        asset_symbol,
+                    )
+                })?;
             println!("  LENDING: preflight OK — pool supports {}", asset_symbol);
             println!("  LENDING: [DRY RUN] would approve + repay to pool");
             self.borrowed_value = (self.borrowed_value - input_amount).max(0.0);
@@ -337,8 +384,13 @@ impl AaveLending {
             }
         };
 
-        let rewards_addr = evm::resolve_contract(&self.contracts, rc_name, chain)
-            .with_context(|| format!("Contract '{}' on {} not in contracts manifest", rc_name, chain))?;
+        let rewards_addr =
+            evm::resolve_contract(&self.contracts, rc_name, chain).with_context(|| {
+                format!(
+                    "Contract '{}' on {} not in contracts manifest",
+                    rc_name, chain
+                )
+            })?;
 
         println!(
             "  LENDING CLAIM: rewards from {}",
@@ -376,13 +428,18 @@ impl Venue for AaveLending {
                 rewards_controller,
                 ..
             } => {
-                let rpc_url = chain
-                    .rpc_url()
-                    .context("lending chain requires RPC URL")?;
+                let rpc_url = chain.rpc_url().context("lending chain requires RPC URL")?;
                 let pool_addr = evm::resolve_contract(&self.contracts, pool_address, chain)
-                    .with_context(|| format!("Contract '{}' on {} not in contracts manifest", pool_address, chain))?;
-                let token_addr = evm::resolve_token(&self.tokens, chain, asset)
-                    .with_context(|| format!("Token '{asset}' on {chain} not in tokens manifest"))?;
+                    .with_context(|| {
+                        format!(
+                            "Contract '{}' on {} not in contracts manifest",
+                            pool_address, chain
+                        )
+                    })?;
+                let token_addr =
+                    evm::resolve_token(&self.tokens, chain, asset).with_context(|| {
+                        format!("Token '{asset}' on {chain} not in tokens manifest")
+                    })?;
 
                 // Cache context for unwind()
                 self.cached_ctx = Some(CachedLendingContext {
@@ -394,19 +451,29 @@ impl Venue for AaveLending {
 
                 match action {
                     LendingAction::Supply => {
-                        self.execute_supply(pool_addr, rpc_url, token_addr, asset, input_amount).await
+                        self.execute_supply(pool_addr, rpc_url, token_addr, asset, input_amount)
+                            .await
                     }
                     LendingAction::Withdraw => {
-                        self.execute_withdraw(pool_addr, rpc_url, token_addr, asset, input_amount).await
+                        self.execute_withdraw(pool_addr, rpc_url, token_addr, asset, input_amount)
+                            .await
                     }
                     LendingAction::Borrow => {
-                        self.execute_borrow(pool_addr, rpc_url, token_addr, asset, input_amount).await
+                        self.execute_borrow(pool_addr, rpc_url, token_addr, asset, input_amount)
+                            .await
                     }
                     LendingAction::Repay => {
-                        self.execute_repay(pool_addr, rpc_url, token_addr, asset, input_amount).await
+                        self.execute_repay(pool_addr, rpc_url, token_addr, asset, input_amount)
+                            .await
                     }
                     LendingAction::ClaimRewards => {
-                        self.execute_claim_rewards(rewards_controller.as_deref(), chain, rpc_url, token_addr).await
+                        self.execute_claim_rewards(
+                            rewards_controller.as_deref(),
+                            chain,
+                            rpc_url,
+                            token_addr,
+                        )
+                        .await
                     }
                 }
             }
@@ -441,9 +508,15 @@ impl Venue for AaveLending {
         let f = fraction.min(1.0);
         let withdraw_amount = total * f;
 
-        println!("  LENDING: UNWIND {:.1}% (${:.2})", f * 100.0, withdraw_amount);
+        println!(
+            "  LENDING: UNWIND {:.1}% (${:.2})",
+            f * 100.0,
+            withdraw_amount
+        );
 
-        let ctx = self.cached_ctx.as_ref()
+        let ctx = self
+            .cached_ctx
+            .as_ref()
             .context("unwind() called before execute() — no cached lending context")?;
 
         // Reuses execute_withdraw() which handles dry_run (preflight only) vs live (actual tx)
@@ -453,7 +526,8 @@ impl Venue for AaveLending {
             ctx.token_addr,
             &ctx.asset_symbol.clone(),
             withdraw_amount,
-        ).await?;
+        )
+        .await?;
 
         Ok(withdraw_amount)
     }

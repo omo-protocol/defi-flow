@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -202,11 +202,7 @@ impl PerpSimulator {
 
 #[async_trait]
 impl Venue for PerpSimulator {
-    async fn execute(
-        &mut self,
-        node: &Node,
-        input_amount: f64,
-    ) -> Result<ExecutionResult> {
+    async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult> {
         let (action, direction, leverage, margin) = match node {
             Node::Perp {
                 action,
@@ -399,11 +395,7 @@ impl SpotSimulator {
 
 #[async_trait]
 impl Venue for SpotSimulator {
-    async fn execute(
-        &mut self,
-        node: &Node,
-        input_amount: f64,
-    ) -> Result<ExecutionResult> {
+    async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult> {
         let (pair, side) = match node {
             Node::Spot { pair, side, .. } => (pair.clone(), *side),
             _ => bail!("SpotSimulator called on non-spot node"),
@@ -518,8 +510,7 @@ fn compute_perp_risk(data: &[PerpCsvRow], slippage_bps: f64) -> Option<RiskParam
     let per_period_vol = var.sqrt();
 
     // Annualize using actual period length
-    let total_secs =
-        (data.last().unwrap().timestamp - data[0].timestamp) as f64;
+    let total_secs = (data.last().unwrap().timestamp - data[0].timestamp) as f64;
     let avg_period_secs = total_secs / (data.len() - 1) as f64;
     let periods_per_year = (365.25 * 86400.0) / avg_period_secs;
     let annual_vol = per_period_vol * periods_per_year.sqrt();
@@ -556,13 +547,11 @@ fn normal_cdf(x: f64) -> f64 {
     let t = 1.0 / (1.0 + 0.2316419 * x.abs());
     let d = 0.3989422804014327; // 1/sqrt(2*pi)
     let p = d * (-x * x / 2.0).exp();
-    let c = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+    let c = t
+        * (0.319381530
+            + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
 
-    if x >= 0.0 {
-        1.0 - p * c
-    } else {
-        p * c
-    }
+    if x >= 0.0 { 1.0 - p * c } else { p * c }
 }
 
 /// Compute annualized funding rate stats from perp data up to `cursor`.

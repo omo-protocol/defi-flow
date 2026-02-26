@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 
 use super::data::OptionsCsvRow;
@@ -176,11 +176,7 @@ impl OptionsSimulator {
 
 #[async_trait]
 impl Venue for OptionsSimulator {
-    async fn execute(
-        &mut self,
-        node: &Node,
-        input_amount: f64,
-    ) -> Result<ExecutionResult> {
+    async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult> {
         let (action, asset, delta_target, days_to_expiry, min_apy, batch_size) = match node {
             Node::Options {
                 action,
@@ -210,13 +206,8 @@ impl Venue for OptionsSimulator {
                     _ => OptionType::CashSecuredPut,
                 };
 
-                let strike_data = self.select_strike(
-                    &asset,
-                    &opt_type,
-                    delta_target,
-                    days_to_expiry,
-                    min_apy,
-                );
+                let strike_data =
+                    self.select_strike(&asset, &opt_type, delta_target, days_to_expiry, min_apy);
 
                 if let Some(strike) = strike_data {
                     let size = if let Some(bs) = batch_size {

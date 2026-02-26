@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use crate::model::node::Node;
 use crate::model::Workflow;
+use crate::model::node::Node;
 
 use super::ValidationError;
 

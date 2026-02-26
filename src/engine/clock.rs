@@ -25,10 +25,7 @@ impl SimClock {
     }
 
     pub fn current_timestamp(&self) -> u64 {
-        self.timestamps
-            .get(self.current_idx)
-            .copied()
-            .unwrap_or(0)
+        self.timestamps.get(self.current_idx).copied().unwrap_or(0)
     }
 
     /// Advance to the next tick. Returns false when exhausted.

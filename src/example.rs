@@ -16,33 +16,51 @@ pub fn run() -> anyhow::Result<()> {
             // Lending contracts
             c.insert("hyperlend_pool".to_string(), {
                 let mut m = std::collections::HashMap::new();
-                m.insert("hyperevm".to_string(), "0xC0EE4e7e60D0A1F9a9AfaE0706D1b5C5A7f5B9b4".to_string());
+                m.insert(
+                    "hyperevm".to_string(),
+                    "0xC0EE4e7e60D0A1F9a9AfaE0706D1b5C5A7f5B9b4".to_string(),
+                );
                 m
             });
             c.insert("hyperlend_rewards".to_string(), {
                 let mut m = std::collections::HashMap::new();
-                m.insert("hyperevm".to_string(), "0x54586bE62E3c3580375aE3723C145253060Ca0C2".to_string());
+                m.insert(
+                    "hyperevm".to_string(),
+                    "0x54586bE62E3c3580375aE3723C145253060Ca0C2".to_string(),
+                );
                 m
             });
             // Pendle
             c.insert("pendle_router".to_string(), {
                 let mut m = std::collections::HashMap::new();
-                m.insert("hyperevm".to_string(), "0x00000000005BBB0EF59571E58418F9a4357b68A0".to_string());
+                m.insert(
+                    "hyperevm".to_string(),
+                    "0x00000000005BBB0EF59571E58418F9a4357b68A0".to_string(),
+                );
                 m
             });
             c.insert("pendle_pt_khype_market".to_string(), {
                 let mut m = std::collections::HashMap::new();
-                m.insert("hyperevm".to_string(), "0x0000000000000000000000000000000000000001".to_string());
+                m.insert(
+                    "hyperevm".to_string(),
+                    "0x0000000000000000000000000000000000000001".to_string(),
+                );
                 m
             });
             c.insert("pendle_pt_khype_sy".to_string(), {
                 let mut m = std::collections::HashMap::new();
-                m.insert("hyperevm".to_string(), "0x0000000000000000000000000000000000000002".to_string());
+                m.insert(
+                    "hyperevm".to_string(),
+                    "0x0000000000000000000000000000000000000002".to_string(),
+                );
                 m
             });
             c.insert("pendle_pt_khype_yt".to_string(), {
                 let mut m = std::collections::HashMap::new();
-                m.insert("hyperevm".to_string(), "0x0000000000000000000000000000000000000003".to_string());
+                m.insert(
+                    "hyperevm".to_string(),
+                    "0x0000000000000000000000000000000000000003".to_string(),
+                );
                 m
             });
             c

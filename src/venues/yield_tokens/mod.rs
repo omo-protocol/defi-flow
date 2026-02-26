@@ -32,9 +32,7 @@ impl VenueCategory for YieldTokensCategory {
         match node {
             Node::Pendle { .. } => match mode {
                 BuildMode::Backtest {
-                    manifest,
-                    data_dir,
-                    ..
+                    manifest, data_dir, ..
                 } => {
                     let id = node.id();
                     let rows = if let Some(entry) = manifest.get(id) {
@@ -44,9 +42,9 @@ impl VenueCategory for YieldTokensCategory {
                     };
                     Ok(Some(Box::new(simulator::YieldSimulator::new(rows))))
                 }
-                BuildMode::Live { config, contracts, .. } => {
-                    Ok(Some(Box::new(pendle::PendleYield::new(config, contracts)?)))
-                }
+                BuildMode::Live {
+                    config, contracts, ..
+                } => Ok(Some(Box::new(pendle::PendleYield::new(config, contracts)?))),
             },
             _ => Ok(None),
         }

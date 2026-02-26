@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 
 use super::super::perps::data::PerpCsvRow;
@@ -65,11 +65,7 @@ impl SwapSimulator {
 
 #[async_trait]
 impl Venue for SwapSimulator {
-    async fn execute(
-        &mut self,
-        node: &Node,
-        input_amount: f64,
-    ) -> Result<ExecutionResult> {
+    async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult> {
         let to_token = match node {
             Node::Movement { to_token, .. } => to_token.clone(),
             _ => bail!("SwapSimulator called on non-movement node"),
@@ -166,11 +162,7 @@ impl BridgeSimulator {
 
 #[async_trait]
 impl Venue for BridgeSimulator {
-    async fn execute(
-        &mut self,
-        node: &Node,
-        input_amount: f64,
-    ) -> Result<ExecutionResult> {
+    async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult> {
         let token = match node {
             Node::Movement { to_token, .. } => to_token.clone(),
             _ => bail!("BridgeSimulator called on non-movement node"),

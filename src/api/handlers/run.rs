@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
 use axum::Json;
+use axum::extract::{Path, State};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::broadcast;
@@ -54,8 +54,8 @@ pub async fn start_run(
         .map_err(|e| ApiError::Internal(format!("writing temp workflow: {e}")))?;
 
     // Build CLI args
-    let binary = std::env::current_exe()
-        .map_err(|e| ApiError::Internal(format!("finding binary: {e}")))?;
+    let binary =
+        std::env::current_exe().map_err(|e| ApiError::Internal(format!("finding binary: {e}")))?;
     let state_file = tmp_dir.join(format!("{}-state.json", session_id));
 
     let mut args = vec![
@@ -144,10 +144,14 @@ async fn run_cli_process(
     let mut child = match child {
         Ok(c) => c,
         Err(e) => {
-            emit(&event_tx, &event_log, EngineEvent::Error {
-                node_id: None,
-                message: format!("failed to spawn CLI: {e}"),
-            })
+            emit(
+                &event_tx,
+                &event_log,
+                EngineEvent::Error {
+                    node_id: None,
+                    message: format!("failed to spawn CLI: {e}"),
+                },
+            )
             .await;
             return;
         }
@@ -209,12 +213,7 @@ async fn run_cli_process(
         Err(e) => format!("process error: {e}"),
     };
 
-    emit(
-        &event_tx,
-        &event_log,
-        EngineEvent::Stopped { reason },
-    )
-    .await;
+    emit(&event_tx, &event_log, EngineEvent::Stopped { reason }).await;
 
     // Don't remove session — keep events around for UI to read
     // Clean up after 5 minutes
@@ -338,9 +337,7 @@ fn parse_stderr_line(line: &str) -> EngineEvent {
     }
 }
 
-pub async fn list_runs(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<RunListEntry>>, ApiError> {
+pub async fn list_runs(State(state): State<AppState>) -> Result<Json<Vec<RunListEntry>>, ApiError> {
     let state_inner = state.inner.read().await;
     let entries: Vec<RunListEntry> = state_inner
         .sessions

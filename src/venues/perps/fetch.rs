@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use crate::data::csv_types::{PerpCsvRow, PriceCsvRow};
 use crate::fetch_data::providers::hyperliquid;
 use crate::fetch_data::types::{
-    coin_from_pair, sanitize, DataSource, FetchConfig, FetchJob, FetchResult,
+    DataSource, FetchConfig, FetchJob, FetchResult, coin_from_pair, sanitize,
 };
 use crate::model::node::Node;
 
@@ -14,7 +14,9 @@ use crate::model::node::Node;
 /// Determine what data a perp/spot node needs.
 pub fn fetch_plan(node: &Node) -> Option<FetchJob> {
     match node {
-        Node::Perp { id, pair, venue, .. } => {
+        Node::Perp {
+            id, pair, venue, ..
+        } => {
             let coin = match venue {
                 crate::model::node::PerpVenue::Hyena => {
                     format!("hyna:{}", coin_from_pair(pair))
@@ -56,12 +58,16 @@ pub async fn fetch(
     config: &FetchConfig,
 ) -> Option<Result<FetchResult>> {
     match &job.source {
-        DataSource::HyperliquidPerp => {
-            Some(fetch_perp(client, &job.key, config).await.map(FetchResult::Perp))
-        }
-        DataSource::HyperliquidSpot => {
-            Some(fetch_spot(client, &job.key, config).await.map(FetchResult::Price))
-        }
+        DataSource::HyperliquidPerp => Some(
+            fetch_perp(client, &job.key, config)
+                .await
+                .map(FetchResult::Perp),
+        ),
+        DataSource::HyperliquidSpot => Some(
+            fetch_spot(client, &job.key, config)
+                .await
+                .map(FetchResult::Price),
+        ),
         _ => None,
     }
 }

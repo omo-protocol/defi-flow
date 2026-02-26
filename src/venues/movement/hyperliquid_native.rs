@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use alloy::primitives::Address;
 use alloy::signers::local::PrivateKeySigner;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use ferrofluid::{ExchangeProvider, InfoProvider, Network};
 
@@ -48,14 +48,8 @@ impl HyperliquidNativeMovement {
             .map_err(|e| anyhow::anyhow!("Invalid private key: {e}"))?;
 
         let (exchange, info) = match config.network {
-            Network::Mainnet => (
-                ExchangeProvider::mainnet(signer),
-                InfoProvider::mainnet(),
-            ),
-            Network::Testnet => (
-                ExchangeProvider::testnet(signer),
-                InfoProvider::testnet(),
-            ),
+            Network::Mainnet => (ExchangeProvider::mainnet(signer), InfoProvider::mainnet()),
+            Network::Testnet => (ExchangeProvider::testnet(signer), InfoProvider::testnet()),
         };
 
         Ok(HyperliquidNativeMovement {
@@ -104,11 +98,7 @@ impl HyperliquidNativeMovement {
     }
 
     /// Transfer spot tokens from HyperCore → HyperEVM via spotSend to system address.
-    async fn core_to_evm(
-        &mut self,
-        token: &str,
-        amount: f64,
-    ) -> Result<ExecutionResult> {
+    async fn core_to_evm(&mut self, token: &str, amount: f64) -> Result<ExecutionResult> {
         let info = self
             .token_map
             .get(&token.to_uppercase())
@@ -152,11 +142,7 @@ impl HyperliquidNativeMovement {
     }
 
     /// Transfer spot tokens from HyperEVM → HyperCore via ERC20 transfer to system address.
-    async fn evm_to_core(
-        &mut self,
-        _token: &str,
-        _amount: f64,
-    ) -> Result<ExecutionResult> {
+    async fn evm_to_core(&mut self, _token: &str, _amount: f64) -> Result<ExecutionResult> {
         // TODO: ERC20 transfer to system address on HyperEVM.
         // Requires: alloy provider + signer with HyperEVM RPC,
         // resolve token symbol → ERC20 address from evm_contract in spot_meta,
@@ -197,15 +183,11 @@ impl Venue for HyperliquidNativeMovement {
                     .unwrap_or_default();
 
                 match (fc.as_str(), tc.as_str()) {
-                    ("hyperliquid", "hyperevm") => {
-                        self.core_to_evm(from_token, input_amount).await
+                    ("hyperliquid", "hyperevm") => self.core_to_evm(from_token, input_amount).await,
+                    ("hyperevm", "hyperliquid") => self.evm_to_core(from_token, input_amount).await,
+                    _ => {
+                        bail!("HyperliquidNative only supports hyperliquid↔hyperevm, got {fc}→{tc}")
                     }
-                    ("hyperevm", "hyperliquid") => {
-                        self.evm_to_core(from_token, input_amount).await
-                    }
-                    _ => bail!(
-                        "HyperliquidNative only supports hyperliquid↔hyperevm, got {fc}→{tc}"
-                    ),
                 }
             }
             _ => Ok(ExecutionResult::Noop),

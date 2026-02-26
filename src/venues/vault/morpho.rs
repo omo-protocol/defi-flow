@@ -86,14 +86,19 @@ impl MorphoVault {
 
         println!(
             "  VAULT DEPOSIT: {} {} to vault {}",
-            input_amount, asset_symbol, evm::short_addr(&vault_addr),
+            input_amount,
+            asset_symbol,
+            evm::short_addr(&vault_addr),
         );
 
         if self.dry_run {
             // ── Preflight reads: verify vault asset matches expected token ──
             let rp = evm::read_provider(rpc_url)?;
             let vault = IMorphoVault::new(vault_addr, &rp);
-            let underlying = vault.asset().call().await
+            let underlying = vault
+                .asset()
+                .call()
+                .await
                 .context("vault.asset() call failed — not a valid ERC4626 vault")?;
             if underlying != token_addr {
                 anyhow::bail!(
@@ -104,8 +109,14 @@ impl MorphoVault {
                     evm::short_addr(&token_addr),
                 );
             }
-            println!("  VAULT: preflight OK — vault asset matches {}", asset_symbol);
-            println!("  VAULT: [DRY RUN] would approve {} + deposit to vault", asset_symbol);
+            println!(
+                "  VAULT: preflight OK — vault asset matches {}",
+                asset_symbol
+            );
+            println!(
+                "  VAULT: [DRY RUN] would approve {} + deposit to vault",
+                asset_symbol
+            );
             self.deposited_value += input_amount;
             return Ok(ExecutionResult::PositionUpdate {
                 consumed: input_amount,
@@ -125,7 +136,9 @@ impl MorphoVault {
 
         // Deposit into vault (ERC4626)
         let vault = IMorphoVault::new(vault_addr, &provider);
-        let deposit_tx = vault.deposit(amount_units, self.wallet_address).gas(500_000);
+        let deposit_tx = vault
+            .deposit(amount_units, self.wallet_address)
+            .gas(500_000);
         let pending = deposit_tx.send().await.context("vault deposit failed")?;
         let receipt = pending.get_receipt().await.context("deposit receipt")?;
         require_success(&receipt, "vault-deposit")?;
@@ -150,14 +163,19 @@ impl MorphoVault {
 
         println!(
             "  VAULT WITHDRAW: {} {} from vault {}",
-            input_amount, asset_symbol, evm::short_addr(&vault_addr),
+            input_amount,
+            asset_symbol,
+            evm::short_addr(&vault_addr),
         );
 
         if self.dry_run {
             // ── Preflight reads: verify vault is valid ERC4626 ──
             let rp = evm::read_provider(rpc_url)?;
             let vault = IMorphoVault::new(vault_addr, &rp);
-            vault.asset().call().await
+            vault
+                .asset()
+                .call()
+                .await
                 .context("vault.asset() call failed — not a valid ERC4626 vault")?;
             println!("  VAULT: preflight OK — vault responds to ERC4626 interface");
             println!("  VAULT: [DRY RUN] would withdraw from vault");
@@ -198,13 +216,18 @@ impl Venue for MorphoVault {
                 action,
                 ..
             } => {
-                let rpc_url = chain
-                    .rpc_url()
-                    .context("vault chain requires RPC URL")?;
+                let rpc_url = chain.rpc_url().context("vault chain requires RPC URL")?;
                 let vault_addr = evm::resolve_contract(&self.contracts, vault_address, chain)
-                    .with_context(|| format!("Contract '{}' on {} not in contracts manifest", vault_address, chain))?;
-                let token_addr = evm::resolve_token(&self.tokens, chain, asset)
-                    .with_context(|| format!("Token '{asset}' on {chain} not in tokens manifest"))?;
+                    .with_context(|| {
+                        format!(
+                            "Contract '{}' on {} not in contracts manifest",
+                            vault_address, chain
+                        )
+                    })?;
+                let token_addr =
+                    evm::resolve_token(&self.tokens, chain, asset).with_context(|| {
+                        format!("Token '{asset}' on {chain} not in tokens manifest")
+                    })?;
 
                 // Cache context for unwind()
                 self.cached_ctx = Some(CachedVaultContext {
@@ -215,10 +238,12 @@ impl Venue for MorphoVault {
 
                 match action {
                     VaultAction::Deposit => {
-                        self.execute_deposit(vault_addr, rpc_url, token_addr, asset, input_amount).await
+                        self.execute_deposit(vault_addr, rpc_url, token_addr, asset, input_amount)
+                            .await
                     }
                     VaultAction::Withdraw => {
-                        self.execute_withdraw(vault_addr, rpc_url, asset, input_amount).await
+                        self.execute_withdraw(vault_addr, rpc_url, asset, input_amount)
+                            .await
                     }
                     VaultAction::ClaimRewards => {
                         // Morpho rewards are claimed via off-chain merkle proofs
@@ -241,10 +266,7 @@ impl Venue for MorphoVault {
 
     async fn tick(&mut self, _now: u64, _dt_secs: f64) -> Result<()> {
         if self.deposited_value > 0.0 {
-            println!(
-                "  VAULT TICK: deposited=${:.2}",
-                self.deposited_value,
-            );
+            println!("  VAULT TICK: deposited=${:.2}", self.deposited_value,);
         }
         Ok(())
     }
@@ -257,9 +279,15 @@ impl Venue for MorphoVault {
         let f = fraction.min(1.0);
         let withdraw_amount = total * f;
 
-        println!("  VAULT: UNWIND {:.1}% (${:.2})", f * 100.0, withdraw_amount);
+        println!(
+            "  VAULT: UNWIND {:.1}% (${:.2})",
+            f * 100.0,
+            withdraw_amount
+        );
 
-        let ctx = self.cached_ctx.as_ref()
+        let ctx = self
+            .cached_ctx
+            .as_ref()
             .context("unwind() called before execute() — no cached vault context")?;
 
         // Reuses execute_withdraw() which handles dry_run (preflight only) vs live (actual tx)
@@ -268,7 +296,8 @@ impl Venue for MorphoVault {
             &ctx.rpc_url.clone(),
             &ctx.asset_symbol.clone(),
             withdraw_amount,
-        ).await?;
+        )
+        .await?;
 
         Ok(withdraw_amount)
     }

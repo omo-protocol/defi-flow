@@ -8,9 +8,13 @@ mod engine;
 mod example;
 mod fetch_data;
 mod list_nodes;
+mod logs;
 mod model;
+mod ps;
+mod resume;
 mod run;
 mod schema;
+mod stop;
 mod validate;
 mod venues;
 mod visualize;
@@ -21,9 +25,12 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         cli::Command::Schema => schema::run(),
         cli::Command::Validate { file } => validate::run(&file),
-        cli::Command::Visualize { file, format, scope, output } => {
-            visualize::run(&file, &format, scope.as_deref(), output.as_deref())
-        }
+        cli::Command::Visualize {
+            file,
+            format,
+            scope,
+            output,
+        } => visualize::run(&file, &format, scope.as_deref(), output.as_deref()),
         cli::Command::ListNodes => list_nodes::run(),
         cli::Command::Example => example::run(),
         cli::Command::Backtest {
@@ -45,9 +52,8 @@ fn main() -> anyhow::Result<()> {
             verbose,
             output,
             tick_csv,
-            monte_carlo: monte_carlo.map(|n| backtest::monte_carlo::MonteCarloConfig {
-                n_simulations: n,
-            }),
+            monte_carlo: monte_carlo
+                .map(|n| backtest::monte_carlo::MonteCarloConfig { n_simulations: n }),
         }),
         cli::Command::Run {
             file,
@@ -56,13 +62,20 @@ fn main() -> anyhow::Result<()> {
             dry_run,
             once,
             slippage_bps,
-        } => run::run(&file, &run::RunConfig {
-            network,
-            state_file,
-            dry_run,
-            once,
-            slippage_bps,
-        }),
+            log_file,
+            registry_dir,
+        } => run::run(
+            &file,
+            &run::RunConfig {
+                network,
+                state_file,
+                dry_run,
+                once,
+                slippage_bps,
+                log_file,
+                registry_dir,
+            },
+        ),
         cli::Command::Api {
             host,
             port,
@@ -71,6 +84,15 @@ fn main() -> anyhow::Result<()> {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(api::serve(&host, port, &data_dir))
         }
+        cli::Command::ResumeAll { registry_dir } => resume::run(registry_dir.as_deref()),
+        cli::Command::Ps { registry_dir } => ps::run(registry_dir.as_deref()),
+        cli::Command::Stop { name, registry_dir } => stop::run(&name, registry_dir.as_deref()),
+        cli::Command::Logs {
+            name,
+            lines,
+            follow,
+            registry_dir,
+        } => logs::run(&name, lines, follow, registry_dir.as_deref()),
         cli::Command::FetchData {
             file,
             output_dir,

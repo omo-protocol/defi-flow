@@ -591,9 +591,8 @@ impl Node {
 
     /// Short label for display (type + key info).
     pub fn label(&self) -> String {
-        let trig_suffix = |trigger: &Option<Trigger>| -> &str {
-            if trigger.is_some() { " [cron]" } else { "" }
-        };
+        let trig_suffix =
+            |trigger: &Option<Trigger>| -> &str { if trigger.is_some() { " [cron]" } else { "" } };
 
         match self {
             Node::Wallet { token, chain, .. } => format!("wallet({}@{})", token, chain),
@@ -656,14 +655,22 @@ impl Node {
                         format!("movement(swap {provider:?} {from_token}->{to_token}{t})")
                     }
                     MovementType::Bridge => {
-                        let fc = from_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
+                        let fc = from_chain
+                            .as_ref()
+                            .map(|c| c.to_string())
+                            .unwrap_or_default();
                         let tc = to_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
                         format!("movement(bridge {provider:?} {from_token} {fc}->{tc}{t})")
                     }
                     MovementType::SwapBridge => {
-                        let fc = from_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
+                        let fc = from_chain
+                            .as_ref()
+                            .map(|c| c.to_string())
+                            .unwrap_or_default();
                         let tc = to_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
-                        format!("movement(swap+bridge {provider:?} {from_token}->{to_token} {fc}->{tc}{t})")
+                        format!(
+                            "movement(swap+bridge {provider:?} {from_token}->{to_token} {fc}->{tc}{t})"
+                        )
                     }
                 }
             }
@@ -742,7 +749,11 @@ impl Node {
     pub fn chain(&self) -> Option<Chain> {
         match self {
             Node::Wallet { chain, .. } => Some(chain.clone()),
-            Node::Movement { to_chain, from_chain, .. } => {
+            Node::Movement {
+                to_chain,
+                from_chain,
+                ..
+            } => {
                 // Output chain: prefer to_chain, fallback to from_chain
                 to_chain.clone().or_else(|| from_chain.clone())
             }
@@ -907,17 +918,15 @@ impl Node {
                 _ => None,
             },
             Node::Pendle { action, .. } => match action {
-                PendleAction::RedeemPt
-                | PendleAction::RedeemYt
-                | PendleAction::ClaimRewards => Some(TokenFlow {
-                    token: "USDC".to_string(),
-                    chain: Some(Chain::hyperevm()),
-                }),
+                PendleAction::RedeemPt | PendleAction::RedeemYt | PendleAction::ClaimRewards => {
+                    Some(TokenFlow {
+                        token: "USDC".to_string(),
+                        chain: Some(Chain::hyperevm()),
+                    })
+                }
                 _ => None,
             },
-            Node::Lp {
-                action, chain, ..
-            } => match action {
+            Node::Lp { action, chain, .. } => match action {
                 LpAction::RemoveLiquidity => Some(TokenFlow {
                     token: "USDC".to_string(),
                     chain: chain.clone().or_else(|| Some(Chain::base())),
@@ -941,7 +950,11 @@ impl Node {
     /// or for actions that don't consume inbound tokens (Close, ClaimRewards, etc.).
     pub fn expected_input_token(&self) -> Option<TokenFlow> {
         match self {
-            Node::Movement { from_token, from_chain, .. } => Some(TokenFlow {
+            Node::Movement {
+                from_token,
+                from_chain,
+                ..
+            } => Some(TokenFlow {
                 token: from_token.clone(),
                 chain: from_chain.clone(),
             }),
@@ -1009,9 +1022,7 @@ impl Node {
                 token: token.clone(),
                 chain: Some(chain.clone()),
             }),
-            Node::Lp {
-                action, chain, ..
-            } => match action {
+            Node::Lp { action, chain, .. } => match action {
                 LpAction::AddLiquidity => Some(TokenFlow {
                     token: "USDC".to_string(),
                     chain: chain.clone().or_else(|| Some(Chain::base())),
@@ -1019,10 +1030,7 @@ impl Node {
                 _ => None,
             },
             Node::Spot {
-                venue,
-                pair,
-                side,
-                ..
+                venue, pair, side, ..
             } => {
                 let parts: Vec<&str> = pair.split('/').collect();
                 if parts.len() == 2 {
@@ -1048,4 +1056,3 @@ impl Node {
         }
     }
 }
-

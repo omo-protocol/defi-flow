@@ -40,10 +40,14 @@ pub enum ValidationError {
     #[error("Bridge node `{node_id}` has identical from_chain and to_chain")]
     BridgeSameChain { node_id: String },
 
-    #[error("Movement `{node_id}`: HyperliquidNative only supports bridge transfers (HyperCore ↔ HyperEVM). For swaps, add a HyperliquidNative bridge to HyperEVM, a LiFi swap node there, then bridge back.")]
+    #[error(
+        "Movement `{node_id}`: HyperliquidNative only supports bridge transfers (HyperCore ↔ HyperEVM). For swaps, add a HyperliquidNative bridge to HyperEVM, a LiFi swap node there, then bridge back."
+    )]
     HyperliquidNativeSwapNotSupported { node_id: String },
 
-    #[error("Movement `{node_id}`: HyperliquidNative bridges only work between hyperliquid (HyperCore) and hyperevm. Got {from_chain} → {to_chain}.")]
+    #[error(
+        "Movement `{node_id}`: HyperliquidNative bridges only work between hyperliquid (HyperCore) and hyperevm. Got {from_chain} → {to_chain}."
+    )]
     HyperliquidNativeWrongChains {
         node_id: String,
         from_chain: String,
@@ -59,24 +63,31 @@ pub enum ValidationError {
     #[error("Optimizer `{node_id}` has max_allocation {value} outside valid range 0.0..=1.0")]
     OptimizerInvalidMaxAllocation { node_id: String, value: f64 },
 
-    #[error("Optimizer `{node_id}` allocation target `{target_node}` has no outgoing edge from optimizer")]
+    #[error(
+        "Optimizer `{node_id}` allocation target `{target_node}` has no outgoing edge from optimizer"
+    )]
     OptimizerTargetNotConnected {
         node_id: String,
         target_node: String,
     },
 
-    #[error("Node `{node_id}` ({node_type}) has no incoming edges — it will never receive tokens. Connect it to the DAG or remove it.")]
+    #[error(
+        "Node `{node_id}` ({node_type}) has no incoming edges — it will never receive tokens. Connect it to the DAG or remove it."
+    )]
     OrphanNode { node_id: String, node_type: String },
 
-
-    #[error("Node `{node_id}` ({node_type} {action}) is a sink — tokens are locked and cannot flow out. Remove outgoing edges or use a separate withdraw/close node downstream.")]
+    #[error(
+        "Node `{node_id}` ({node_type} {action}) is a sink — tokens are locked and cannot flow out. Remove outgoing edges or use a separate withdraw/close node downstream."
+    )]
     SinkHasOutgoingEdge {
         node_id: String,
         node_type: String,
         action: String,
     },
 
-    #[error("Node `{node_id}` has {count} outgoing edges mixing `all` with `percentage` amounts — use one or the other")]
+    #[error(
+        "Node `{node_id}` has {count} outgoing edges mixing `all` with `percentage` amounts — use one or the other"
+    )]
     MixedAmountTypes { node_id: String, count: usize },
 
     #[error("Node `{node_id}` has outgoing percentage edges summing to {sum}% (expected 100%)")]
@@ -91,7 +102,9 @@ pub enum ValidationError {
     #[error("Wallet `{node_id}` has empty address")]
     WalletEmptyAddress { node_id: String },
 
-    #[error("Wallet `{node_id}` on EVM chain `{chain}` has invalid address `{address}` (expected 0x-prefixed, 42-char hex)")]
+    #[error(
+        "Wallet `{node_id}` on EVM chain `{chain}` has invalid address `{address}` (expected 0x-prefixed, 42-char hex)"
+    )]
     WalletInvalidAddress {
         node_id: String,
         chain: String,
@@ -101,10 +114,14 @@ pub enum ValidationError {
     #[error("Token `{token}` on chain `{chain}` has no address in the tokens manifest")]
     TokenNotInManifest { token: String, chain: String },
 
-    #[error("Hyperliquid perp asset `{asset}` not found in universe (node `{node_id}`). Check https://app.hyperliquid.xyz for listed assets.")]
+    #[error(
+        "Hyperliquid perp asset `{asset}` not found in universe (node `{node_id}`). Check https://app.hyperliquid.xyz for listed assets."
+    )]
     HyperliquidUnknownPerpAsset { node_id: String, asset: String },
 
-    #[error("Hyperliquid spot token `{token}` not found in universe (node `{node_id}`). Check https://app.hyperliquid.xyz/spot for listed tokens.")]
+    #[error(
+        "Hyperliquid spot token `{token}` not found in universe (node `{node_id}`). Check https://app.hyperliquid.xyz/spot for listed tokens."
+    )]
     HyperliquidUnknownSpotToken { node_id: String, token: String },
 
     #[error("Contract `{contract}` on {chain} not in contracts manifest (node `{node_id}`)")]
@@ -115,14 +132,17 @@ pub enum ValidationError {
     },
 
     // ── Reserve config validation errors ────────────────────────────
-
     #[error("Reserve config: `{field}` has invalid value {value}")]
     ReserveInvalidThreshold { field: String, value: f64 },
 
-    #[error("Reserve config: trigger_threshold ({trigger}) must be less than target_ratio ({target})")]
+    #[error(
+        "Reserve config: trigger_threshold ({trigger}) must be less than target_ratio ({target})"
+    )]
     ReserveTriggerAboveTarget { trigger: f64, target: f64 },
 
-    #[error("Reserve config: vault_chain `{chain}` has no rpc_url (needed for on-chain vault reads)")]
+    #[error(
+        "Reserve config: vault_chain `{chain}` has no rpc_url (needed for on-chain vault reads)"
+    )]
     ReserveMissingRpc { chain: String },
 
     #[error("Reserve config: vault `{vault}` not found in contracts manifest for chain `{chain}`")]
@@ -132,7 +152,6 @@ pub enum ValidationError {
     ReserveTokenNotInManifest { token: String, chain: String },
 
     // ── On-chain validation errors ──────────────────────────────────
-
     #[error("RPC unreachable for chain `{chain}` at {url}: {reason}")]
     RpcUnreachable {
         chain: String,
@@ -161,7 +180,9 @@ pub enum ValidationError {
         address: String,
     },
 
-    #[error("Contract `{contract}` on {chain} at {address} does not implement expected interface ({expected})")]
+    #[error(
+        "Contract `{contract}` on {chain} at {address} does not implement expected interface ({expected})"
+    )]
     WrongInterface {
         contract: String,
         chain: String,
@@ -170,7 +191,6 @@ pub enum ValidationError {
     },
 
     // ── Movement quote validation errors ──────────────────────────────
-
     #[error("Movement `{node_id}`: no route found via {provider} ({reason})")]
     MovementNoRoute {
         node_id: String,
@@ -234,9 +254,12 @@ pub fn run(path: &std::path::Path) -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     let errors = rt.block_on(onchain::validate_onchain(&wf));
 
-    let (warnings, hard): (Vec<_>, Vec<_>) = errors
-        .into_iter()
-        .partition(|e| matches!(e, ValidationError::RpcUnreachable { .. } | ValidationError::MovementNoRoute { .. }));
+    let (warnings, hard): (Vec<_>, Vec<_>) = errors.into_iter().partition(|e| {
+        matches!(
+            e,
+            ValidationError::RpcUnreachable { .. } | ValidationError::MovementNoRoute { .. }
+        )
+    });
 
     for w in &warnings {
         eprintln!("  warning: {}", w);
@@ -246,10 +269,7 @@ pub fn run(path: &std::path::Path) -> anyhow::Result<()> {
         println!("On-chain validation passed.");
         Ok(())
     } else {
-        eprintln!(
-            "On-chain validation failed with {} error(s):",
-            hard.len()
-        );
+        eprintln!("On-chain validation failed with {} error(s):", hard.len());
         for (i, e) in hard.iter().enumerate() {
             eprintln!("  {}. {}", i + 1, e);
         }

@@ -5,7 +5,7 @@ pub mod simulator;
 
 use std::future::Future;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::data as crate_data;
 use crate::fetch_data::types::{FetchConfig, FetchJob, FetchResult};

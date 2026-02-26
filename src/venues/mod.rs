@@ -1,17 +1,17 @@
 pub mod evm;
 pub mod lending;
 pub mod lp;
-pub mod vault;
 pub mod movement;
 pub mod options;
 pub mod perps;
 pub mod primitives;
+pub mod vault;
 pub mod yield_tokens;
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 
 use crate::data::ManifestEntry;
@@ -120,7 +120,6 @@ pub trait Venue: Send + Sync {
     /// Add margin to the venue (top up a perp position).
     /// Default no-op for venues that don't use margin.
     fn add_margin(&mut self, _amount: f64) {}
-
 }
 
 // ── Build mode ──────────────────────────────────────────────────────

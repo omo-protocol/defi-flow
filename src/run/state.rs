@@ -24,11 +24,13 @@ impl RunState {
     /// Load state from file, or create a fresh state if the file doesn't exist.
     pub fn load_or_new(path: &Path) -> Result<Self> {
         if path.exists() {
-            let contents =
-                std::fs::read_to_string(path).context("reading state file")?;
-            let state: RunState =
-                serde_json::from_str(&contents).context("parsing state file")?;
-            println!("Loaded state from {} (deploy_completed={})", path.display(), state.deploy_completed);
+            let contents = std::fs::read_to_string(path).context("reading state file")?;
+            let state: RunState = serde_json::from_str(&contents).context("parsing state file")?;
+            println!(
+                "Loaded state from {} (deploy_completed={})",
+                path.display(),
+                state.deploy_completed
+            );
             Ok(state)
         } else {
             Ok(RunState::default())
@@ -41,5 +43,4 @@ impl RunState {
         std::fs::write(path, json).context("writing state file")?;
         Ok(())
     }
-
 }

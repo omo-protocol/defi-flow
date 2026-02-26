@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 
 use crate::data::csv_types::PendleCsvRow;
 use crate::fetch_data::providers::defillama;
-use crate::fetch_data::types::{sanitize, DataSource, FetchConfig, FetchJob, FetchResult};
+use crate::fetch_data::types::{DataSource, FetchConfig, FetchJob, FetchResult, sanitize};
 use crate::model::node::Node;
 
 // ── Plan ────────────────────────────────────────────────────────────
@@ -37,7 +37,11 @@ pub async fn fetch(
     }
 
     let market = job.key.strip_prefix("pendle:").unwrap_or(&job.key);
-    Some(fetch_pendle(client, market, config).await.map(FetchResult::Pendle))
+    Some(
+        fetch_pendle(client, market, config)
+            .await
+            .map(FetchResult::Pendle),
+    )
 }
 
 // ── Internal ────────────────────────────────────────────────────────

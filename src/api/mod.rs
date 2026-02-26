@@ -8,8 +8,8 @@ pub mod types;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use axum::routing::{get, post};
 use axum::Router;
+use axum::routing::{get, post};
 use tower_http::cors::{Any, CorsLayer};
 
 use state::AppState;
@@ -68,9 +68,7 @@ pub async fn serve(host: &str, port: u16, data_dir: &Path) -> Result<()> {
         .await
         .with_context(|| format!("binding to {addr}"))?;
 
-    axum::serve(listener, app)
-        .await
-        .context("running server")?;
+    axum::serve(listener, app).await.context("running server")?;
 
     Ok(())
 }

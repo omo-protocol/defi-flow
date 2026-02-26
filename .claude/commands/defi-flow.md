@@ -16,12 +16,12 @@ User's strategy description: $ARGUMENTS
 | Command | Usage |
 |---------|-------|
 | `schema` | Output JSON Schema for workflow definitions |
-| `validate <FILE>` | Validate workflow JSON (exit 0 = valid) |
+| `validate <FILE>` | Validate workflow JSON (offline + on-chain RPC checks) |
 | `visualize <FILE>` | Render graph (`--format ascii\|dot\|svg\|png`, `--output`, `--scope from:to`) |
 | `list-nodes` | Print all node types with fields and enums |
 | `example` | Print example workflow JSON |
 | `fetch-data <FILE>` | Fetch historical data (`--output-dir`, `--days`, `--interval 4h\|8h\|1d`) |
-| `backtest <FILE>` | Simulate (`--data-dir`, `--capital`, `--slippage-bps`, `--monte-carlo N`, `--verbose`, `--output`) |
+| `backtest <FILE>` | Simulate (`--data-dir`, `--capital`, `--slippage-bps`, `--monte-carlo N`, `--verbose`, `--output`, `--tick-csv`) |
 | `run <FILE>` | Execute on-chain (`--network mainnet\|testnet`, `--dry-run`, `--once`, `--state-file`) |
 
 ---
@@ -34,6 +34,7 @@ User's strategy description: $ARGUMENTS
   "description": "Optional",
   "tokens": { "<SYMBOL>": { "<chain>": "0x<address>" } },
   "contracts": { "<key>": { "<chain>": "0x<address>" } },
+  "reserve": { ... },
   "nodes": [ ... ],
   "edges": [ ... ]
 }
@@ -64,6 +65,26 @@ User's strategy description: $ARGUMENTS
 ```
 
 Pendle keys are derived: market `"PT-kHYPE"` -> `pendle_pt_khype_market`, `pendle_pt_khype_sy`, `pendle_pt_khype_yt`.
+
+### Reserve Config (optional)
+
+Vault-based reserve that maintains a cash buffer. On each tick, if reserve drops below `trigger_threshold`, the engine unwinds venues pro-rata to restore `target_ratio`.
+
+```json
+"reserve": {
+  "vault_address": "morpho_usdc_vault",
+  "vault_chain": { "name": "hyperevm", "chain_id": 999 },
+  "vault_token": "USDC",
+  "target_ratio": 0.20,
+  "trigger_threshold": 0.05,
+  "min_unwind": 100.0
+}
+```
+
+- `vault_address`: contracts manifest key (not raw address)
+- `target_ratio`: fraction of TVL to keep in reserve (default 0.20)
+- `trigger_threshold`: rebalance when reserve falls below this (default 0.05)
+- `min_unwind`: minimum USD to unwind per operation (default 100.0)
 
 ### Manifest Validation
 
@@ -127,12 +148,17 @@ Concentrated liquidity provision.
 ### movement
 Token swaps, bridges, or atomic swap+bridge.
 - `movement_type`: `swap` | `bridge` | `swap_bridge` (required)
-- `provider`: `LiFi` | `Stargate` (required)
+- `provider`: `LiFi` | `HyperliquidNative` (required)
 - `from_token`: String (required)
 - `to_token`: String (required)
 - `from_chain`: Chain (required for bridge/swap_bridge)
 - `to_chain`: Chain (required for bridge/swap_bridge)
 - `trigger`: Trigger (optional)
+
+**Movement providers:**
+- **LiFi**: EVM↔EVM bridges and swaps (Base↔Arbitrum, Base↔HyperEVM). Supports `swap`, `bridge`, and `swap_bridge` (atomic swap+bridge in one node). **NEVER chain two LiFi nodes** — use `swap_bridge` instead.
+- **HyperliquidNative**: HyperCore↔HyperEVM only, bridge only (no swaps), uses native `spotSend`. For swaps on Hyperliquid, bridge to HyperEVM first → LiFi swap there → bridge back.
+- Base→Hyperliquid = two nodes: LiFi(Base→HyperEVM) + HyperliquidNative(HyperEVM→Hyperliquid). The LiFi node can be `swap_bridge` if tokens also need swapping.
 
 ### lending
 Lending protocol interactions.
@@ -163,13 +189,22 @@ Yield tokenization.
 - Requires in contracts: `pendle_<normalized>_market`, `_sy`, `_yt`, `pendle_router`
 
 ### optimizer
-Kelly Criterion capital allocator.
+Kelly Criterion capital allocator. Adaptive mode: derives expected_return and volatility from venue data automatically.
 - `strategy`: `kelly` (required)
-- `kelly_fraction`: f64 0.0-1.0 (required)
-- `max_allocation`: f64 0.0-1.0 (optional)
-- `drift_threshold`: f64 (required)
-- `allocations[]`: array of `{ target_node, expected_return, volatility, correlation }` (required)
+- `kelly_fraction`: f64 0.0-1.0 (required, typically 0.5 for half-Kelly)
+- `max_allocation`: f64 0.0-1.0 (optional, default 1.0)
+- `drift_threshold`: f64 (required, typically 0.05)
+- `allocations[]`: array of VenueAllocation (required, at least 1)
 - `trigger`: Trigger (optional)
+
+**VenueAllocation:**
+- `target_node`: String — single target node ID (use for single venues)
+- `target_nodes`: String[] — group of target nodes sharing allocation equally (use for delta-neutral: `["buy_eth", "short_eth"]`)
+- `expected_return`: f64 (optional — omit for adaptive mode, derived from venue data)
+- `volatility`: f64 (optional — omit for adaptive mode)
+- `correlation`: f64 (default 0.0 — correlation with reference asset)
+
+Use `target_nodes` for delta-neutral groups (spot+perp). The optimizer never rebalances between legs within a group.
 
 ---
 
@@ -180,6 +215,11 @@ Kelly Criterion capital allocator.
 ```
 
 Amount types: `{"type": "fixed", "value": "1000.50"}` | `{"type": "percentage", "value": 50.0}` | `{"type": "all"}`
+
+**Distribution rules:**
+- For wallet and optimizer nodes with multiple outgoing edges: use `percentage` type on all edges, must sum to 100%
+- Don't mix `all` with `percentage` on the same node's outgoing edges
+- `all` means the full amount flows to that single target
 
 ## Trigger
 
@@ -195,7 +235,20 @@ Intervals: `hourly` | `daily` | `weekly` | `monthly`. Non-triggered nodes execut
 {"name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm"}
 ```
 
-Known chains (lowercase): `ethereum` (1), `arbitrum` (42161), `optimism` (10), `base` (8453), `mantle` (5000), `hyperevm` (999), `hyperliquid` (no chain_id).
+Known chains (lowercase): `ethereum` (1), `arbitrum` (42161), `optimism` (10), `base` (8453), `mantle` (5000), `hyperevm` (999), `hyperliquid` (1337, namespace — perps/spot L1).
+
+---
+
+## Validation Rules
+
+The validator catches these errors:
+- **Orphan nodes**: Every non-wallet node must have at least one incoming edge
+- **Sink nodes**: Nodes with sink actions (`supply`, `deposit`, `open`, `add_liquidity`, `stake_gauge`) cannot have outgoing edges — tokens are locked
+- **Edge distribution**: Wallet and optimizer nodes with multiple outgoing edges must use `percentage` amounts summing to 100%
+- **Self-loops**: No `from_node == to_node`
+- **Cycles**: DAG must be acyclic
+- **Duplicate IDs**: Node IDs must be unique
+- **On-chain checks** (when using `validate`): RPC connectivity, chain ID verification, contract code existence, LiFi route quoting
 
 ---
 
@@ -209,4 +262,4 @@ Known chains (lowercase): `ethereum` (1), `arbitrum` (42161), `optimism` (10), `
 - Swap nodes for non-stablecoins track spot price via perp price feed
 - Lending data may start later than perp data -> 0 APY for early ticks
 - `pool_address`, `vault_address`, `rewards_controller` are **manifest key names**, not raw 0x addresses
-- Delta-neutral: equal-weight spot + short perp at 1x = zero delta. Use same expected_return/volatility for both legs so Kelly assigns equal weight.
+- Delta-neutral: equal-weight spot + short perp at 1x = zero delta. Use `target_nodes` group in optimizer.

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use axum::extract::{Path, State};
 use axum::Json;
+use axum::extract::{Path, State};
 
 use crate::api::error::ApiError;
 use crate::api::state::AppState;
@@ -81,9 +81,8 @@ pub async fn run_backtest(
             }
         }
 
-        let mc_config = monte_carlo.map(|n| backtest::monte_carlo::MonteCarloConfig {
-            n_simulations: n,
-        });
+        let mc_config =
+            monte_carlo.map(|n| backtest::monte_carlo::MonteCarloConfig { n_simulations: n });
 
         let config = backtest::BacktestConfig {
             workflow_path: workflow_path.clone(),

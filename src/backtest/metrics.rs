@@ -82,10 +82,7 @@ impl BacktestMetrics {
             .ts_history
             .iter()
             .zip(self.tvl_history.iter())
-            .map(|(&ts, &tvl)| TrajectoryPoint {
-                timestamp: ts,
-                tvl,
-            })
+            .map(|(&ts, &tvl)| TrajectoryPoint { timestamp: ts, tvl })
             .collect();
 
         BacktestResult {
@@ -127,11 +124,7 @@ impl BacktestMetrics {
 
         let mean_ret = returns.iter().sum::<f64>() / returns.len() as f64;
         let var = if returns.len() > 1 {
-            returns
-                .iter()
-                .map(|r| (r - mean_ret).powi(2))
-                .sum::<f64>()
-                / (returns.len() - 1) as f64
+            returns.iter().map(|r| (r - mean_ret).powi(2)).sum::<f64>() / (returns.len() - 1) as f64
         } else {
             0.0
         };

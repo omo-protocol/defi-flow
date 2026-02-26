@@ -1,5 +1,5 @@
-use axum::extract::{Multipart, State};
 use axum::Json;
+use axum::extract::{Multipart, State};
 use serde::Deserialize;
 
 use crate::api::error::ApiError;
@@ -100,10 +100,7 @@ pub async fn upload_data(
         .await
         .map_err(|e| ApiError::BadRequest(format!("multipart error: {e}")))?
     {
-        let name = field
-            .file_name()
-            .unwrap_or("unnamed.csv")
-            .to_string();
+        let name = field.file_name().unwrap_or("unnamed.csv").to_string();
         let bytes = field
             .bytes()
             .await

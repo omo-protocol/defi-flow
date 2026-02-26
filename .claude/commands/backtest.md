@@ -14,6 +14,9 @@ Strategy description: $ARGUMENTS
 3. **Fetch data**: `target/release/defi-flow fetch-data strategies/<name>.json --output-dir data/<name> --days 365 --interval 8h`
 
 4. **Backtest**: `target/release/defi-flow backtest strategies/<name>.json --data-dir data/<name> --capital 10000`
+   - Add `--output results/<name>.json` to save metrics to file
+   - Add `--tick-csv results/<name>_ticks.csv` for per-tick venue values
+   - Add `--verbose` for per-tick logging
 
 5. **Report results** to the user: TWRR%, Annualized%, Max Drawdown%, Sharpe, Net PnL, and any notable metrics.
 
@@ -26,7 +29,22 @@ Strategy description: $ARGUMENTS
 - Each node gets its own simulator — don't split open/collect_funding into separate nodes
 - Funding auto-compounds inside perp margin
 - Re-run `fetch-data` after renaming node IDs
-- Delta-neutral: use same expected_return/volatility for spot+perp legs so Kelly assigns equal weight
+- Delta-neutral: use `target_nodes` group in optimizer allocations (spot+perp legs). Omit `expected_return`/`volatility` for adaptive mode.
+- Adaptive Kelly: leave `expected_return` and `volatility` empty in allocations — the optimizer derives them from venue data automatically
+- `target_nodes: ["buy_eth", "short_eth"]` groups legs — optimizer never rebalances between them
+
+## LP Backtest Notes
+
+- Concentrated liquidity uses tick math, fee concentration multiplier, and gauge rewards
+- Backtest simulates: tick as OU process, fee APY as AR(1), reward rate as AR(1), price from shared GBM
+- Use `tick_lower`/`tick_upper` to set range, or omit for full-range
+- Gauge staking rewards require `stake_gauge` action node downstream
+
+## Reserve Config
+
+If the strategy uses a reserve config, the backtest monitors vault TVL each tick:
+- If reserve < `trigger_threshold`, it unwinds venues pro-rata to restore `target_ratio`
+- `min_unwind` prevents dust-level operations (default $100)
 
 ## Interpreting Monte Carlo Results
 

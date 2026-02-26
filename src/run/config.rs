@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use alloy::primitives::Address;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use ferrofluid::Network;
 
 /// Runtime configuration for the `run` command.
@@ -16,16 +16,37 @@ pub struct RuntimeConfig {
 }
 
 impl RuntimeConfig {
-    /// Build from CLI args. Private key comes from env var.
+    /// Build from CLI args. Private key comes from env var or file.
+    ///
+    /// Resolution order:
+    /// 1. `DEFI_FLOW_PRIVATE_KEY` env var (direct value)
+    /// 2. `DEFI_FLOW_PRIVATE_KEY_FILE` env var (path to file containing the key)
+    ///
+    /// Using the _FILE variant is preferred in containers — the key never appears
+    /// in `env` or `printenv` output, reducing accidental exposure.
     pub fn from_cli(cli: &crate::run::RunConfig) -> Result<Self> {
-        let private_key = std::env::var("DEFI_FLOW_PRIVATE_KEY").map_err(|_| {
-            anyhow::anyhow!(
-                "DEFI_FLOW_PRIVATE_KEY env var not set. \
-                 Set it to your hex private key (without 0x prefix)."
-            )
-        })?;
+        let private_key = if let Ok(pk) = std::env::var("DEFI_FLOW_PRIVATE_KEY") {
+            pk
+        } else if let Ok(path) = std::env::var("DEFI_FLOW_PRIVATE_KEY_FILE") {
+            std::fs::read_to_string(&path)
+                .map_err(|e| anyhow::anyhow!("Failed to read private key from {path}: {e}"))?
+                .trim()
+                .to_string()
+        } else {
+            return Err(anyhow::anyhow!(
+                "Private key not configured. Set DEFI_FLOW_PRIVATE_KEY env var \
+                 or DEFI_FLOW_PRIVATE_KEY_FILE pointing to a file containing the key."
+            ));
+        };
 
-        Self::build(private_key, &cli.network, cli.state_file.clone(), cli.dry_run, cli.once, cli.slippage_bps)
+        Self::build(
+            private_key,
+            &cli.network,
+            cli.state_file.clone(),
+            cli.dry_run,
+            cli.once,
+            cli.slippage_bps,
+        )
     }
 
     /// Build from explicit args. Used by the API server where the PK comes from the request.
@@ -35,7 +56,14 @@ impl RuntimeConfig {
         dry_run: bool,
         slippage_bps: f64,
     ) -> Result<Self> {
-        Self::build(private_key, network, PathBuf::from("/dev/null"), dry_run, dry_run, slippage_bps)
+        Self::build(
+            private_key,
+            network,
+            PathBuf::from("/dev/null"),
+            dry_run,
+            dry_run,
+            slippage_bps,
+        )
     }
 
     fn build(

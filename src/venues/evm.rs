@@ -73,8 +73,6 @@ pub fn resolve_contract(manifest: &ContractManifest, name: &str, chain: &Chain) 
 }
 
 /// Create a read-only provider (no wallet/signer) for on-chain queries.
-pub fn read_provider(
-    rpc_url: &str,
-) -> anyhow::Result<impl alloy::providers::Provider + Clone> {
+pub fn read_provider(rpc_url: &str) -> anyhow::Result<impl alloy::providers::Provider + Clone> {
     Ok(alloy::providers::ProviderBuilder::new().connect_http(rpc_url.parse()?))
 }

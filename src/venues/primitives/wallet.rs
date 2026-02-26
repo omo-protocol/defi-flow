@@ -17,11 +17,7 @@ impl WalletVenue {
 
 #[async_trait]
 impl Venue for WalletVenue {
-    async fn execute(
-        &mut self,
-        _node: &Node,
-        input_amount: f64,
-    ) -> Result<ExecutionResult> {
+    async fn execute(&mut self, _node: &Node, input_amount: f64) -> Result<ExecutionResult> {
         self.balance += input_amount;
         Ok(ExecutionResult::Noop)
     }

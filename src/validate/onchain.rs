@@ -6,9 +6,9 @@ use alloy::providers::{Provider, ProviderBuilder};
 use alloy::sol;
 use ferrofluid::InfoProvider;
 
+use crate::model::Workflow;
 use crate::model::chain::Chain;
 use crate::model::node::{MovementType, Node, PerpVenue, SpotVenue};
-use crate::model::Workflow;
 
 use super::ValidationError;
 
@@ -105,12 +105,7 @@ pub async fn validate_onchain(workflow: &Workflow) -> Vec<ValidationError> {
 
         // Check chain ID
         if let Some(expected) = chain.chain_id() {
-            match tokio::time::timeout(
-                Duration::from_secs(10),
-                provider.get_chain_id(),
-            )
-            .await
-            {
+            match tokio::time::timeout(Duration::from_secs(10), provider.get_chain_id()).await {
                 Ok(Ok(actual)) if actual != expected => {
                     errors.push(ValidationError::ChainIdMismatch {
                         chain: chain_name.clone(),
@@ -163,7 +158,15 @@ async fn check_movement_quotes(workflow: &Workflow) -> Vec<ValidationError> {
                 from_chain,
                 to_chain,
                 ..
-            } => (id, movement_type, provider, from_token, to_token, from_chain, to_chain),
+            } => (
+                id,
+                movement_type,
+                provider,
+                from_token,
+                to_token,
+                from_chain,
+                to_chain,
+            ),
             _ => continue,
         };
 
@@ -260,7 +263,9 @@ async fn check_movement_quotes(workflow: &Workflow) -> Vec<ValidationError> {
             slippage=0.03"
         );
 
-        println!("  LiFi quote check: {id} ({from_token}@{from_chain_id} → {to_token}@{to_chain_id})");
+        println!(
+            "  LiFi quote check: {id} ({from_token}@{from_chain_id} → {to_token}@{to_chain_id})"
+        );
 
         match tokio::time::timeout(Duration::from_secs(15), client.get(&url).send()).await {
             Ok(Ok(resp)) => {
@@ -337,14 +342,12 @@ fn infer_contract_roles(workflow: &Workflow) -> HashMap<(String, String), Contra
                 ..
             } => {
                 // Resolve the token address for this asset on this chain
-                let token_addr = token_manifest
-                    .get(asset.as_str())
-                    .and_then(|chains| {
-                        chains
-                            .iter()
-                            .find(|(c, _)| c.eq_ignore_ascii_case(&chain.name))
-                            .and_then(|(_, addr)| addr.parse::<Address>().ok())
-                    });
+                let token_addr = token_manifest.get(asset.as_str()).and_then(|chains| {
+                    chains
+                        .iter()
+                        .find(|(c, _)| c.eq_ignore_ascii_case(&chain.name))
+                        .and_then(|(_, addr)| addr.parse::<Address>().ok())
+                });
 
                 roles.insert(
                     (pool_address.clone(), chain.name.to_lowercase()),
@@ -382,19 +385,15 @@ fn infer_contract_roles(workflow: &Workflow) -> HashMap<(String, String), Contra
 
                 // Pool tokens — validate as ERC20 on the LP chain
                 for token_sym in pool.split('/') {
-                    if let Some(addr_str) = token_manifest
-                        .get(token_sym.trim())
-                        .and_then(|chains| {
+                    if let Some(addr_str) =
+                        token_manifest.get(token_sym.trim()).and_then(|chains| {
                             chains
                                 .iter()
                                 .find(|(c, _)| c.eq_ignore_ascii_case(&chain_name))
                                 .map(|(_, addr)| addr.clone())
                         })
                     {
-                        roles.insert(
-                            (addr_str, chain_name.clone()),
-                            ContractRole::Token,
-                        );
+                        roles.insert((addr_str, chain_name.clone()), ContractRole::Token);
                     }
                 }
             }
@@ -464,17 +463,14 @@ fn group_addresses(
 
 // ── RPC check ────────────────────────────────────────────────────────
 
-async fn check_rpc(
-    chain: &Chain,
-    rpc_url: &str,
-) -> Result<impl Provider, ValidationError> {
-    let provider = ProviderBuilder::new().connect_http(
-        rpc_url.parse().map_err(|e| ValidationError::RpcUnreachable {
+async fn check_rpc(chain: &Chain, rpc_url: &str) -> Result<impl Provider, ValidationError> {
+    let provider = ProviderBuilder::new().connect_http(rpc_url.parse().map_err(|e| {
+        ValidationError::RpcUnreachable {
             chain: chain.name.clone(),
             url: rpc_url.to_string(),
             reason: format!("{e}"),
-        })?,
-    );
+        }
+    })?);
 
     match tokio::time::timeout(Duration::from_secs(10), provider.get_block_number()).await {
         Ok(Ok(_)) => Ok(provider),
@@ -607,12 +603,7 @@ async fn probe_interface(
             // Aave V3 pool must respond to getReserveData(token)
             if let Some(token) = token_address {
                 let contract = IAavePoolProbe::new(address, provider);
-                match tokio::time::timeout(
-                    timeout,
-                    contract.getReserveData(*token).call(),
-                )
-                .await
-                {
+                match tokio::time::timeout(timeout, contract.getReserveData(*token).call()).await {
                     Ok(Ok(_)) => None,
                     _ => Some(ValidationError::WrongInterface {
                         contract: check.label.clone(),
@@ -645,11 +636,15 @@ async fn check_hyperliquid_universe(workflow: &Workflow) -> Vec<ValidationError>
 
     for node in &workflow.nodes {
         match node {
-            Node::Perp { id, venue, pair, .. } if matches!(venue, PerpVenue::Hyperliquid) => {
+            Node::Perp {
+                id, venue, pair, ..
+            } if matches!(venue, PerpVenue::Hyperliquid) => {
                 let coin = pair.split('/').next().unwrap_or(pair).to_string();
                 perp_coins.push((id.clone(), coin));
             }
-            Node::Spot { id, venue, pair, .. } if matches!(venue, SpotVenue::Hyperliquid) => {
+            Node::Spot {
+                id, venue, pair, ..
+            } if matches!(venue, SpotVenue::Hyperliquid) => {
                 // Only check the base token (e.g. "ETH" from "ETH/USDC")
                 // Quote token (USDC) is always valid on HL
                 let base = pair.split('/').next().unwrap_or(pair).trim().to_string();

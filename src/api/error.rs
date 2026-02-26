@@ -13,18 +13,9 @@ pub enum ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, body) = match self {
-            ApiError::NotFound(msg) => (
-                StatusCode::NOT_FOUND,
-                json!({ "error": msg }),
-            ),
-            ApiError::BadRequest(msg) => (
-                StatusCode::BAD_REQUEST,
-                json!({ "error": msg }),
-            ),
-            ApiError::Internal(msg) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": msg }),
-            ),
+            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, json!({ "error": msg })),
+            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, json!({ "error": msg })),
+            ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": msg })),
             ApiError::Validation(errors) => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 json!({ "valid": false, "errors": errors }),

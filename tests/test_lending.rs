@@ -59,12 +59,20 @@ async fn test_lending_supply_withdraw() {
     let whale: alloy::primitives::Address = USDC_WHALE.parse().unwrap();
     let amount_units = U256::from(1_000_000_000u64); // 1000 USDC (6 decimals)
 
-    fund_eth(&ctx.rpc_url, ctx.wallet_address, U256::from(10u128 * 10u128.pow(18))).await;
+    fund_eth(
+        &ctx.rpc_url,
+        ctx.wallet_address,
+        U256::from(10u128 * 10u128.pow(18)),
+    )
+    .await;
     fund_erc20(&ctx.rpc_url, usdc, whale, ctx.wallet_address, amount_units).await;
 
     // Verify funding
     let balance = balance_of(&ctx.rpc_url, usdc, ctx.wallet_address).await;
-    assert!(balance >= amount_units, "USDC funding failed: balance={balance}");
+    assert!(
+        balance >= amount_units,
+        "USDC funding failed: balance={balance}"
+    );
     println!("  Funded {balance} USDC to test wallet");
 
     // 3. Create venue
@@ -126,7 +134,12 @@ async fn test_lending_borrow_repay() {
     let whale: alloy::primitives::Address = USDC_WHALE.parse().unwrap();
     let amount_units = U256::from(10_000_000_000u64); // 10000 USDC
 
-    fund_eth(&ctx.rpc_url, ctx.wallet_address, U256::from(10u128 * 10u128.pow(18))).await;
+    fund_eth(
+        &ctx.rpc_url,
+        ctx.wallet_address,
+        U256::from(10u128 * 10u128.pow(18)),
+    )
+    .await;
     fund_erc20(&ctx.rpc_url, usdc, whale, ctx.wallet_address, amount_units).await;
 
     // 3. Create venue
@@ -219,7 +232,11 @@ async fn test_lending_dryrun_correct_pool() {
     let node = make_lending_node(&chain, LendingAction::Supply);
 
     let result = lending.execute(&node, 100.0).await;
-    assert!(result.is_ok(), "Preflight should pass for correct pool: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Preflight should pass for correct pool: {:?}",
+        result.err()
+    );
     match result.unwrap() {
         ExecutionResult::PositionUpdate { consumed, .. } => {
             assert_eq!(consumed, 100.0);

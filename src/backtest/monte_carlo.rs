@@ -153,11 +153,13 @@ pub fn run(
     // Extract shared GBM parameters for price correlation
     let shared_price_drift = perp_params.map(|p| p.price_drift).unwrap_or(0.0);
     let shared_price_vol = perp_params.map(|p| p.price_vol).unwrap_or(0.01);
-    let shared_n_periods = perp_params
-        .map(|p| p.n_periods)
-        .unwrap_or_else(|| {
-            file_params.iter().map(|(_, _, p)| p.n_periods()).max().unwrap_or(100)
-        });
+    let shared_n_periods = perp_params.map(|p| p.n_periods).unwrap_or_else(|| {
+        file_params
+            .iter()
+            .map(|(_, _, p)| p.n_periods())
+            .max()
+            .unwrap_or(100)
+    });
 
     // Build a timestamp→GBM_index map from the perp's timestamps.
     // This ensures spot and perp use the same GBM factor at the same calendar time.
@@ -187,8 +189,7 @@ pub fn run(
             let mut rng = StdRng::seed_from_u64(sim_seed);
 
             // Create temp directory
-            let temp_dir =
-                std::env::temp_dir().join(format!("defi-flow-mc-{}-{}", config.seed, i));
+            let temp_dir = std::env::temp_dir().join(format!("defi-flow-mc-{}-{}", config.seed, i));
             if std::fs::create_dir_all(&temp_dir).is_err() {
                 pb.inc(1);
                 return None;
@@ -314,10 +315,7 @@ pub fn print_results(mc: &MonteCarloResult) {
     println!();
     let var95 = percentile(&pnls, 5.0);
     let var99 = percentile(&pnls, 1.0);
-    println!(
-        "  VaR(95%): ${:+.0}   VaR(99%): ${:+.0}",
-        var95, var99,
-    );
+    println!("  VaR(95%): ${:+.0}   VaR(99%): ${:+.0}", var95, var99,);
 
     // Liquidation breakdown
     let liq_sims: Vec<&super::result::BacktestResult> =
@@ -397,8 +395,8 @@ fn estimate_params(path: &Path, kind: &str) -> Result<CsvParams> {
 }
 
 fn estimate_perp_params(path: &Path) -> Result<PerpParams> {
-    let mut reader = csv::Reader::from_path(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+    let mut reader =
+        csv::Reader::from_path(path).with_context(|| format!("opening {}", path.display()))?;
     let rows: Vec<crate::venues::perps::data::PerpCsvRow> = reader
         .deserialize()
         .collect::<Result<_, _>>()
@@ -468,8 +466,8 @@ fn estimate_perp_params(path: &Path) -> Result<PerpParams> {
 }
 
 fn estimate_price_params(path: &Path) -> Result<PriceParams> {
-    let mut reader = csv::Reader::from_path(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+    let mut reader =
+        csv::Reader::from_path(path).with_context(|| format!("opening {}", path.display()))?;
     let rows: Vec<crate::venues::perps::data::PriceCsvRow> = reader
         .deserialize()
         .collect::<Result<_, _>>()
@@ -494,8 +492,8 @@ fn estimate_price_params(path: &Path) -> Result<PriceParams> {
 }
 
 fn estimate_lending_params(path: &Path) -> Result<LendingParams> {
-    let mut reader = csv::Reader::from_path(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+    let mut reader =
+        csv::Reader::from_path(path).with_context(|| format!("opening {}", path.display()))?;
     let rows: Vec<crate::venues::lending::data::LendingCsvRow> = reader
         .deserialize()
         .collect::<Result<_, _>>()
@@ -524,8 +522,8 @@ fn estimate_lending_params(path: &Path) -> Result<LendingParams> {
 }
 
 fn estimate_vault_params(path: &Path) -> Result<VaultParams> {
-    let mut reader = csv::Reader::from_path(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+    let mut reader =
+        csv::Reader::from_path(path).with_context(|| format!("opening {}", path.display()))?;
     let rows: Vec<crate::venues::vault::data::VaultCsvRow> = reader
         .deserialize()
         .collect::<Result<_, _>>()
@@ -554,12 +552,7 @@ fn estimate_vault_params(path: &Path) -> Result<VaultParams> {
 /// Generate a GBM price path: S_t = S_0 * exp(sum(drift + vol*Z_i))
 /// Returns (price_multipliers, z_innovations) so the Z's can be reused
 /// for correlated funding generation.
-fn generate_gbm_prices(
-    n: usize,
-    drift: f64,
-    vol: f64,
-    rng: &mut impl Rng,
-) -> (Vec<f64>, Vec<f64>) {
+fn generate_gbm_prices(n: usize, drift: f64, vol: f64, rng: &mut impl Rng) -> (Vec<f64>, Vec<f64>) {
     let mut prices = Vec::with_capacity(n);
     let mut zs = Vec::with_capacity(n);
     let mut log_cum = 0.0;
@@ -575,13 +568,7 @@ fn generate_gbm_prices(
 
 /// Generate an OU (mean-reverting) path for funding rates.
 /// dx = theta * (mu - x) * dt + sigma * dW
-fn generate_ou_path(
-    n: usize,
-    mu: f64,
-    theta: f64,
-    sigma: f64,
-    rng: &mut impl Rng,
-) -> Vec<f64> {
+fn generate_ou_path(n: usize, mu: f64, theta: f64, sigma: f64, rng: &mut impl Rng) -> Vec<f64> {
     let mut path = Vec::with_capacity(n);
     let mut x = mu;
 
@@ -619,13 +606,7 @@ fn generate_correlated_ou_path(
 }
 
 /// Generate an AR(1) path around a mean: x_t = mean + phi*(x_{t-1} - mean) + sigma*Z
-fn generate_ar1_path(
-    n: usize,
-    mu: f64,
-    sigma: f64,
-    phi: f64,
-    rng: &mut impl Rng,
-) -> Vec<f64> {
+fn generate_ar1_path(n: usize, mu: f64, sigma: f64, phi: f64, rng: &mut impl Rng) -> Vec<f64> {
     let mut path = Vec::with_capacity(n);
     let mut x = mu;
 
@@ -652,7 +633,9 @@ fn generate_synthetic_csv(
 ) -> Result<()> {
     match params {
         CsvParams::Perp(p) => generate_perp_csv(output_path, p, shared_gbm, gbm_zs, rng),
-        CsvParams::Price(p) => generate_price_csv(output_path, p, shared_gbm, ts_to_gbm_idx, perp_start_price),
+        CsvParams::Price(p) => {
+            generate_price_csv(output_path, p, shared_gbm, ts_to_gbm_idx, perp_start_price)
+        }
         CsvParams::Lending(p) => generate_lending_csv(output_path, p, rng),
         CsvParams::Vault(p) => generate_vault_csv(output_path, p, rng),
         CsvParams::Lp(p) => generate_lp_csv(output_path, p, shared_gbm, rng),
@@ -705,7 +688,11 @@ fn generate_perp_csv(
     ])?;
 
     for i in 0..n {
-        let gbm_factor = if i < shared_gbm.len() { shared_gbm[i] } else { 1.0 };
+        let gbm_factor = if i < shared_gbm.len() {
+            shared_gbm[i]
+        } else {
+            1.0
+        };
         let price = params.start_price * gbm_factor;
         let half_spread = price * params.spread_frac * 0.5;
         let bid = price - half_spread;
@@ -766,7 +753,11 @@ fn generate_price_csv(
 
         // Use timestamp-aligned GBM index so spot tracks the same price as perp
         let gbm_idx = ts_to_gbm_idx.get(&ts).copied().unwrap_or(i);
-        let gbm_factor = if gbm_idx < shared_gbm.len() { shared_gbm[gbm_idx] } else { 1.0 };
+        let gbm_factor = if gbm_idx < shared_gbm.len() {
+            shared_gbm[gbm_idx]
+        } else {
+            1.0
+        };
         let price = base_price * gbm_factor;
         let half_spread = price * params.spread_frac * 0.5;
 
@@ -805,7 +796,13 @@ fn generate_lending_csv(
     let mut writer = csv::Writer::from_path(output_path)
         .with_context(|| format!("writing {}", output_path.display()))?;
 
-    writer.write_record(["timestamp", "supply_apy", "borrow_apy", "utilization", "reward_apy"])?;
+    writer.write_record([
+        "timestamp",
+        "supply_apy",
+        "borrow_apy",
+        "utilization",
+        "reward_apy",
+    ])?;
 
     for i in 0..params.n_periods {
         let ts = if i < params.timestamps.len() {
@@ -833,11 +830,7 @@ fn generate_lending_csv(
     Ok(())
 }
 
-fn generate_vault_csv(
-    output_path: &Path,
-    params: &VaultParams,
-    rng: &mut impl Rng,
-) -> Result<()> {
+fn generate_vault_csv(output_path: &Path, params: &VaultParams, rng: &mut impl Rng) -> Result<()> {
     let apy_path = generate_ar1_path(
         params.n_periods,
         params.apy_mean,
@@ -877,8 +870,8 @@ fn generate_vault_csv(
 }
 
 fn estimate_lp_params(path: &Path) -> Result<LpParams> {
-    let mut reader = csv::Reader::from_path(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+    let mut reader =
+        csv::Reader::from_path(path).with_context(|| format!("opening {}", path.display()))?;
     let rows: Vec<crate::venues::lp::data::LpCsvRow> = reader
         .deserialize()
         .collect::<Result<_, _>>()
@@ -915,7 +908,12 @@ fn estimate_lp_params(path: &Path) -> Result<LpParams> {
         reward_rate_mean: mean(&reward_rates),
         reward_rate_std: std_dev(&reward_rates),
         reward_ar1,
-        reward_token_price: mean(&rows.iter().map(|r| r.reward_token_price).collect::<Vec<_>>()),
+        reward_token_price: mean(
+            &rows
+                .iter()
+                .map(|r| r.reward_token_price)
+                .collect::<Vec<_>>(),
+        ),
         timestamps,
     })
 }
@@ -965,7 +963,11 @@ fn generate_lp_csv(
 
     for i in 0..n {
         // price_a (e.g. WETH) follows shared GBM for correlation with spot/perp
-        let gbm_factor = if i < shared_gbm.len() { shared_gbm[i] } else { 1.0 };
+        let gbm_factor = if i < shared_gbm.len() {
+            shared_gbm[i]
+        } else {
+            1.0
+        };
         let price_a = params.start_price_a * gbm_factor;
 
         let ts = if i < params.timestamps.len() {
@@ -992,12 +994,16 @@ fn generate_lp_csv(
 // ── Statistical helpers ──────────────────────────────────────────────
 
 fn mean(xs: &[f64]) -> f64 {
-    if xs.is_empty() { return 0.0; }
+    if xs.is_empty() {
+        return 0.0;
+    }
     xs.iter().sum::<f64>() / xs.len() as f64
 }
 
 fn std_dev(xs: &[f64]) -> f64 {
-    if xs.len() < 2 { return 0.0; }
+    if xs.len() < 2 {
+        return 0.0;
+    }
     let m = mean(xs);
     let var = xs.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (xs.len() - 1) as f64;
     var.sqrt()
@@ -1005,7 +1011,9 @@ fn std_dev(xs: &[f64]) -> f64 {
 
 /// Estimate AR(1) coefficient: phi = corr(x_t, x_{t-1})
 fn estimate_ar1(xs: &[f64]) -> f64 {
-    if xs.len() < 3 { return 0.5; }
+    if xs.len() < 3 {
+        return 0.5;
+    }
     let m = mean(xs);
     let mut num = 0.0;
     let mut den = 0.0;
@@ -1013,7 +1021,9 @@ fn estimate_ar1(xs: &[f64]) -> f64 {
         num += (xs[i] - m) * (xs[i - 1] - m);
         den += (xs[i - 1] - m).powi(2);
     }
-    if den < 1e-12 { return 0.5; }
+    if den < 1e-12 {
+        return 0.5;
+    }
     (num / den).clamp(0.0, 0.99)
 }
 
@@ -1074,7 +1084,11 @@ fn pearson_corr(xs: &[f64], ys: &[f64]) -> f64 {
         dy2 += dy * dy;
     }
     let den = (dx2 * dy2).sqrt();
-    if den < 1e-20 { 0.0 } else { (num / den).clamp(-1.0, 1.0) }
+    if den < 1e-20 {
+        0.0
+    } else {
+        (num / den).clamp(-1.0, 1.0)
+    }
 }
 
 /// Box-Muller transform to generate N(0,1) samples.

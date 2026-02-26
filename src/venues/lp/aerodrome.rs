@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, Signed, Uint, U256};
+use alloy::primitives::{Address, Signed, U256, Uint};
 use alloy::providers::ProviderBuilder;
 use alloy::sol;
 use anyhow::{Context, Result};
@@ -116,10 +116,20 @@ impl AerodromeLp {
         if parts.len() != 2 {
             anyhow::bail!("Invalid pool format '{}', expected 'TOKEN0/TOKEN1'", pool);
         }
-        let token0 = evm::resolve_token(&self.tokens, &self.chain, parts[0])
-            .with_context(|| format!("Token '{}' on {} not in tokens manifest", parts[0], self.chain))?;
-        let token1 = evm::resolve_token(&self.tokens, &self.chain, parts[1])
-            .with_context(|| format!("Token '{}' on {} not in tokens manifest", parts[1], self.chain))?;
+        let token0 =
+            evm::resolve_token(&self.tokens, &self.chain, parts[0]).with_context(|| {
+                format!(
+                    "Token '{}' on {} not in tokens manifest",
+                    parts[0], self.chain
+                )
+            })?;
+        let token1 =
+            evm::resolve_token(&self.tokens, &self.chain, parts[1]).with_context(|| {
+                format!(
+                    "Token '{}' on {} not in tokens manifest",
+                    parts[1], self.chain
+                )
+            })?;
         Ok((token0, token1))
     }
 
@@ -137,12 +147,11 @@ impl AerodromeLp {
         let max_tick = (887272 / spacing) * spacing;
         let lower = tick_lower.unwrap_or(-max_tick);
         let upper = tick_upper.unwrap_or(max_tick);
-        let position_manager = evm::resolve_contract(
-            &self.contracts,
-            "aerodrome_position_manager",
-            &self.chain,
-        )
-        .context("aerodrome_position_manager not in contracts manifest and no hardcoded default")?;
+        let position_manager =
+            evm::resolve_contract(&self.contracts, "aerodrome_position_manager", &self.chain)
+                .context(
+                    "aerodrome_position_manager not in contracts manifest and no hardcoded default",
+                )?;
 
         let parts: Vec<&str> = pool.split('/').collect();
         let decimals0 = token_decimals_for(parts.get(0).unwrap_or(&"ETH"));
@@ -165,21 +174,35 @@ impl AerodromeLp {
 
         if self.dry_run {
             // ── Preflight reads: verify both tokens are valid ERC20s ──
-            let rpc = self.chain.rpc_url()
+            let rpc = self
+                .chain
+                .rpc_url()
                 .context("LP chain requires RPC URL for preflight")?;
             let rp = evm::read_provider(rpc)?;
             let erc20_0 = IERC20::new(token0, &rp);
             let erc20_1 = IERC20::new(token1, &rp);
-            erc20_0.balanceOf(self.wallet_address).call().await
-                .with_context(|| format!(
-                    "Token {} at {} is not a valid ERC20",
-                    parts[0], evm::short_addr(&token0),
-                ))?;
-            erc20_1.balanceOf(self.wallet_address).call().await
-                .with_context(|| format!(
-                    "Token {} at {} is not a valid ERC20",
-                    parts[1], evm::short_addr(&token1),
-                ))?;
+            erc20_0
+                .balanceOf(self.wallet_address)
+                .call()
+                .await
+                .with_context(|| {
+                    format!(
+                        "Token {} at {} is not a valid ERC20",
+                        parts[0],
+                        evm::short_addr(&token0),
+                    )
+                })?;
+            erc20_1
+                .balanceOf(self.wallet_address)
+                .call()
+                .await
+                .with_context(|| {
+                    format!(
+                        "Token {} at {} is not a valid ERC20",
+                        parts[1],
+                        evm::short_addr(&token1),
+                    )
+                })?;
             println!("  AERO: preflight OK — both tokens are valid ERC20s");
             println!("  AERO: [DRY RUN] would approve tokens + mint position");
             self.deposited_value += input_amount;
@@ -189,8 +212,7 @@ impl AerodromeLp {
             });
         }
 
-        let rpc_url = self.chain.rpc_url()
-            .context("LP chain requires RPC URL")?;
+        let rpc_url = self.chain.rpc_url().context("LP chain requires RPC URL")?;
         let signer: alloy::signers::local::PrivateKeySigner = self
             .private_key
             .parse()
@@ -225,9 +247,12 @@ impl AerodromeLp {
         let params = INonfungiblePositionManager::MintParams {
             token0,
             token1,
-            tickSpacing: Signed::<24, 1>::try_from(spacing).unwrap_or(Signed::<24, 1>::try_from(100).unwrap()),
-            tickLower: Signed::<24, 1>::try_from(lower).unwrap_or(Signed::<24, 1>::try_from(-887220).unwrap()),
-            tickUpper: Signed::<24, 1>::try_from(upper).unwrap_or(Signed::<24, 1>::try_from(887220).unwrap()),
+            tickSpacing: Signed::<24, 1>::try_from(spacing)
+                .unwrap_or(Signed::<24, 1>::try_from(100).unwrap()),
+            tickLower: Signed::<24, 1>::try_from(lower)
+                .unwrap_or(Signed::<24, 1>::try_from(-887220).unwrap()),
+            tickUpper: Signed::<24, 1>::try_from(upper)
+                .unwrap_or(Signed::<24, 1>::try_from(887220).unwrap()),
             amount0Desired: amount0,
             amount1Desired: amount1,
             amount0Min: U256::ZERO,
@@ -237,7 +262,12 @@ impl AerodromeLp {
             sqrtPriceX96: Uint::<160, 3>::ZERO,
         };
 
-        let result = pm.mint(params).gas(1_000_000).send().await.context("mint LP position")?;
+        let result = pm
+            .mint(params)
+            .gas(1_000_000)
+            .send()
+            .await
+            .context("mint LP position")?;
         let receipt = result.get_receipt().await.context("mint receipt")?;
         require_success(&receipt, "mint-lp")?;
         println!("  AERO: mint tx: {:?}", receipt.transaction_hash);
@@ -292,8 +322,7 @@ impl AerodromeLp {
         }
 
         if let Some(gauge) = self.gauge_address {
-            let rpc_url = self.chain.rpc_url()
-                .context("LP chain requires RPC URL")?;
+            let rpc_url = self.chain.rpc_url().context("LP chain requires RPC URL")?;
             let signer: alloy::signers::local::PrivateKeySigner = self
                 .private_key
                 .parse()
@@ -357,16 +386,23 @@ impl Venue for AerodromeLp {
             } => {
                 self.cached_pool = Some(pool.clone());
                 match action {
-                LpAction::AddLiquidity => {
-                    self.execute_add_liquidity(pool, *tick_lower, *tick_upper, *tick_spacing, input_amount)
+                    LpAction::AddLiquidity => {
+                        self.execute_add_liquidity(
+                            pool,
+                            *tick_lower,
+                            *tick_upper,
+                            *tick_spacing,
+                            input_amount,
+                        )
                         .await
+                    }
+                    LpAction::RemoveLiquidity => self.execute_remove_liquidity(pool).await,
+                    LpAction::ClaimRewards => self.execute_claim_rewards(pool).await,
+                    LpAction::StakeGauge => self.execute_stake_gauge(pool).await,
+                    LpAction::UnstakeGauge => self.execute_unstake_gauge(pool).await,
+                    LpAction::Compound => self.execute_compound(pool).await,
                 }
-                LpAction::RemoveLiquidity => self.execute_remove_liquidity(pool).await,
-                LpAction::ClaimRewards => self.execute_claim_rewards(pool).await,
-                LpAction::StakeGauge => self.execute_stake_gauge(pool).await,
-                LpAction::UnstakeGauge => self.execute_unstake_gauge(pool).await,
-                LpAction::Compound => self.execute_compound(pool).await,
-            }},
+            }
             _ => {
                 println!("  AERO: unsupported node type '{}'", node.type_name());
                 Ok(ExecutionResult::Noop)
@@ -380,10 +416,7 @@ impl Venue for AerodromeLp {
 
     async fn tick(&mut self, _now: u64, _dt_secs: f64) -> Result<()> {
         if self.deposited_value > 0.0 {
-            println!(
-                "  AERO TICK: deposited=${:.2}",
-                self.deposited_value,
-            );
+            println!("  AERO TICK: deposited=${:.2}", self.deposited_value,);
         }
         Ok(())
     }
@@ -399,14 +432,19 @@ impl Venue for AerodromeLp {
         println!("  AERO: UNWIND {:.1}% (${:.2})", f * 100.0, freed);
 
         if self.dry_run {
-            println!("  AERO: [DRY RUN] would decreaseLiquidity by {:.1}% + collect", f * 100.0);
+            println!(
+                "  AERO: [DRY RUN] would decreaseLiquidity by {:.1}% + collect",
+                f * 100.0
+            );
             self.deposited_value = (self.deposited_value * (1.0 - f)).max(0.0);
             return Ok(freed);
         }
 
         // Live: decreaseLiquidity for the fraction, then collect
         if let Some(token_id) = self.position_token_id {
-            let rpc_url = self.chain.rpc_url()
+            let rpc_url = self
+                .chain
+                .rpc_url()
                 .context("LP chain requires RPC URL for unwind")?;
             let signer: alloy::signers::local::PrivateKeySigner = self
                 .private_key
@@ -417,12 +455,9 @@ impl Venue for AerodromeLp {
                 .wallet(wallet)
                 .connect_http(rpc_url.parse()?);
 
-            let position_manager = evm::resolve_contract(
-                &self.contracts,
-                "aerodrome_position_manager",
-                &self.chain,
-            )
-            .context("aerodrome_position_manager not in contracts manifest")?;
+            let position_manager =
+                evm::resolve_contract(&self.contracts, "aerodrome_position_manager", &self.chain)
+                    .context("aerodrome_position_manager not in contracts manifest")?;
 
             let pm = INonfungiblePositionManager::new(position_manager, &provider);
 
@@ -441,11 +476,18 @@ impl Venue for AerodromeLp {
                 deadline,
             };
 
-            let result = pm.decreaseLiquidity(params).gas(500_000).send().await
+            let result = pm
+                .decreaseLiquidity(params)
+                .gas(500_000)
+                .send()
+                .await
                 .context("decreaseLiquidity for unwind")?;
             let receipt = result.get_receipt().await?;
             require_success(&receipt, "unwind-decreaseLiquidity")?;
-            println!("  AERO: decreaseLiquidity tx: {:?}", receipt.transaction_hash);
+            println!(
+                "  AERO: decreaseLiquidity tx: {:?}",
+                receipt.transaction_hash
+            );
 
             // Collect the freed tokens
             let collect_params = INonfungiblePositionManager::CollectParams {
@@ -454,7 +496,11 @@ impl Venue for AerodromeLp {
                 amount0Max: u128::MAX,
                 amount1Max: u128::MAX,
             };
-            let result = pm.collect(collect_params).gas(300_000).send().await
+            let result = pm
+                .collect(collect_params)
+                .gas(300_000)
+                .send()
+                .await
                 .context("collect after unwind")?;
             let receipt = result.get_receipt().await?;
             require_success(&receipt, "unwind-collect")?;
@@ -473,7 +519,10 @@ impl Venue for AerodromeLp {
     }
 }
 
-fn require_success(receipt: &alloy::rpc::types::TransactionReceipt, label: &str) -> anyhow::Result<()> {
+fn require_success(
+    receipt: &alloy::rpc::types::TransactionReceipt,
+    label: &str,
+) -> anyhow::Result<()> {
     if !receipt.status() {
         anyhow::bail!(
             "{} tx reverted (hash: {:?}, gas_used: {:?})",

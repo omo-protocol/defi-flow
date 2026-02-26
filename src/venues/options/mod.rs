@@ -32,9 +32,7 @@ impl VenueCategory for OptionsCategory {
         match node {
             Node::Options { .. } => match mode {
                 BuildMode::Backtest {
-                    manifest,
-                    data_dir,
-                    ..
+                    manifest, data_dir, ..
                 } => {
                     let id = node.id();
                     let rows = if let Some(entry) = manifest.get(id) {

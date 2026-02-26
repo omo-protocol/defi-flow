@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 
 use super::data::VaultCsvRow;
@@ -44,11 +44,7 @@ impl VaultSimulator {
 
 #[async_trait]
 impl Venue for VaultSimulator {
-    async fn execute(
-        &mut self,
-        node: &Node,
-        input_amount: f64,
-    ) -> Result<ExecutionResult> {
+    async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult> {
         let (action, asset) = match node {
             Node::Vault { action, asset, .. } => (action, asset.clone()),
             _ => bail!("VaultSimulator called on non-vault node"),

@@ -33,9 +33,7 @@ impl VenueCategory for LpCategory {
         match node {
             Node::Lp { .. } => match mode {
                 BuildMode::Backtest {
-                    manifest,
-                    data_dir,
-                    ..
+                    manifest, data_dir, ..
                 } => {
                     let id = node.id();
                     let rows = if let Some(entry) = manifest.get(id) {
@@ -45,9 +43,15 @@ impl VenueCategory for LpCategory {
                     };
                     Ok(Some(Box::new(simulator::LpSimulator::new(rows))))
                 }
-                BuildMode::Live { config, tokens, contracts } => {
+                BuildMode::Live {
+                    config,
+                    tokens,
+                    contracts,
+                } => {
                     let chain = node.chain().unwrap_or_else(Chain::base);
-                    Ok(Some(Box::new(aerodrome::AerodromeLp::new(config, tokens, contracts, chain)?)))
+                    Ok(Some(Box::new(aerodrome::AerodromeLp::new(
+                        config, tokens, contracts, chain,
+                    )?)))
                 }
             },
             _ => Ok(None),

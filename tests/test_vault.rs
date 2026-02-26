@@ -27,11 +27,7 @@ fn vault_manifests() -> (
     defi_flow::venues::evm::ContractManifest,
 ) {
     let tokens = token_manifest(&[("USDC", "ethereum", USDC_ETHEREUM)]);
-    let contracts = contract_manifest(&[(
-        "steakhouse_usdc",
-        "ethereum",
-        STEAKHOUSE_USDC_VAULT,
-    )]);
+    let contracts = contract_manifest(&[("steakhouse_usdc", "ethereum", STEAKHOUSE_USDC_VAULT)]);
     (tokens, contracts)
 }
 
@@ -62,12 +58,20 @@ async fn test_vault_deposit_withdraw() {
     let whale: alloy::primitives::Address = USDC_WHALE.parse().unwrap();
     let amount_units = U256::from(10_000_000_000u64); // 10,000 USDC (6 decimals)
 
-    fund_eth(&ctx.rpc_url, ctx.wallet_address, U256::from(10u128 * 10u128.pow(18))).await;
+    fund_eth(
+        &ctx.rpc_url,
+        ctx.wallet_address,
+        U256::from(10u128 * 10u128.pow(18)),
+    )
+    .await;
     fund_erc20(&ctx.rpc_url, usdc, whale, ctx.wallet_address, amount_units).await;
 
     // Verify funding
     let balance = balance_of(&ctx.rpc_url, usdc, ctx.wallet_address).await;
-    assert!(balance >= amount_units, "USDC funding failed: balance={balance}");
+    assert!(
+        balance >= amount_units,
+        "USDC funding failed: balance={balance}"
+    );
     println!("  Funded {balance} USDC to test wallet");
 
     // 3. Create venue
@@ -98,7 +102,10 @@ async fn test_vault_deposit_withdraw() {
     // 6. Check vault share balance > 0
     let vault_addr: alloy::primitives::Address = STEAKHOUSE_USDC_VAULT.parse().unwrap();
     let shares = balance_of(&ctx.rpc_url, vault_addr, ctx.wallet_address).await;
-    assert!(shares > U256::ZERO, "Should have vault shares after deposit");
+    assert!(
+        shares > U256::ZERO,
+        "Should have vault shares after deposit"
+    );
     println!("  Vault shares: {shares}");
 
     // 7. Withdraw 1000 USDC
@@ -151,7 +158,10 @@ async fn test_vault_dryrun_wrong_address() {
     };
 
     let result = vault.execute(&node, 1000.0).await;
-    assert!(result.is_err(), "Preflight should catch wrong vault address");
+    assert!(
+        result.is_err(),
+        "Preflight should catch wrong vault address"
+    );
     let err = result.unwrap_err().to_string();
     assert!(
         err.contains("asset()") || err.contains("asset mismatch"),
@@ -175,7 +185,11 @@ async fn test_vault_dryrun_correct_address() {
     let node = make_vault_node(&chain, VaultAction::Deposit);
 
     let result = vault.execute(&node, 1000.0).await;
-    assert!(result.is_ok(), "Preflight should pass for correct vault: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Preflight should pass for correct vault: {:?}",
+        result.err()
+    );
     match result.unwrap() {
         ExecutionResult::PositionUpdate { consumed, .. } => {
             assert_eq!(consumed, 1000.0);

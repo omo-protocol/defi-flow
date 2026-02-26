@@ -124,7 +124,10 @@ impl PendleYield {
         if self.dry_run {
             println!("  PENDLE: [DRY RUN] would approve SY + mintPyFromSy()");
             let pt_amount = input_amount * 0.98;
-            *self.pt_holdings.entry(market_name.to_string()).or_insert(0.0) += pt_amount;
+            *self
+                .pt_holdings
+                .entry(market_name.to_string())
+                .or_insert(0.0) += pt_amount;
             return Ok(ExecutionResult::PositionUpdate {
                 consumed: input_amount,
                 output: None,
@@ -134,7 +137,8 @@ impl PendleYield {
         let Some(ch) = chain else {
             anyhow::bail!(
                 "Pendle market '{}' not in contracts manifest (key: {})",
-                market_name, market_key,
+                market_name,
+                market_key,
             );
         };
 
@@ -143,7 +147,9 @@ impl PendleYield {
         let yt_addr = evm::resolve_contract(&self.contracts, &yt_key, &ch)
             .with_context(|| format!("'{}' not in contracts manifest for chain {}", yt_key, ch))?;
         let router_addr = evm::resolve_contract(&self.contracts, "pendle_router", &ch)
-            .with_context(|| format!("'pendle_router' not in contracts manifest for chain {}", ch))?;
+            .with_context(|| {
+                format!("'pendle_router' not in contracts manifest for chain {}", ch)
+            })?;
 
         let signer: alloy::signers::local::PrivateKeySigner = self
             .private_key
@@ -184,10 +190,7 @@ impl PendleYield {
         })
     }
 
-    async fn execute_redeem_pt(
-        &mut self,
-        market_name: &str,
-    ) -> Result<ExecutionResult> {
+    async fn execute_redeem_pt(&mut self, market_name: &str) -> Result<ExecutionResult> {
         let holdings = self.pt_holdings.get(market_name).copied().unwrap_or(0.0);
 
         println!(
@@ -213,10 +216,7 @@ impl PendleYield {
         })
     }
 
-    async fn execute_claim_rewards(
-        &mut self,
-        market_name: &str,
-    ) -> Result<ExecutionResult> {
+    async fn execute_claim_rewards(&mut self, market_name: &str) -> Result<ExecutionResult> {
         println!("  PENDLE CLAIM_REWARDS: {}", market_name);
 
         if self.dry_run {
@@ -232,9 +232,7 @@ impl PendleYield {
 impl Venue for PendleYield {
     async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult> {
         match node {
-            Node::Pendle {
-                market, action, ..
-            } => match action {
+            Node::Pendle { market, action, .. } => match action {
                 PendleAction::MintPt => self.execute_mint_pt(market, input_amount).await,
                 PendleAction::RedeemPt => self.execute_redeem_pt(market).await,
                 PendleAction::MintYt => {
@@ -242,10 +240,7 @@ impl Venue for PendleYield {
                     if self.dry_run {
                         println!("  PENDLE: [DRY RUN] would mint YT");
                     }
-                    *self
-                        .yt_holdings
-                        .entry(market.to_string())
-                        .or_insert(0.0) += input_amount;
+                    *self.yt_holdings.entry(market.to_string()).or_insert(0.0) += input_amount;
                     Ok(ExecutionResult::PositionUpdate {
                         consumed: input_amount,
                         output: None,
@@ -289,7 +284,10 @@ impl Venue for PendleYield {
         println!("  PENDLE: UNWIND {:.1}% (${:.2})", f * 100.0, freed);
 
         if self.dry_run {
-            println!("  PENDLE: [DRY RUN] would redeemPyToSy for {:.1}% of holdings", f * 100.0);
+            println!(
+                "  PENDLE: [DRY RUN] would redeemPyToSy for {:.1}% of holdings",
+                f * 100.0
+            );
             for val in self.pt_holdings.values_mut() {
                 *val *= 1.0 - f;
             }
@@ -314,7 +312,10 @@ impl Venue for PendleYield {
             let chain = match pendle_chain(&self.contracts, market_name) {
                 Some(ch) => ch,
                 None => {
-                    eprintln!("  PENDLE: unwind skipping {} — chain not found", market_name);
+                    eprintln!(
+                        "  PENDLE: unwind skipping {} — chain not found",
+                        market_name
+                    );
                     continue;
                 }
             };
@@ -329,14 +330,21 @@ impl Venue for PendleYield {
             let yt_addr = match evm::resolve_contract(&self.contracts, &yt_key, &chain) {
                 Some(addr) => addr,
                 None => {
-                    eprintln!("  PENDLE: unwind skipping {} — YT address not found", market_name);
+                    eprintln!(
+                        "  PENDLE: unwind skipping {} — YT address not found",
+                        market_name
+                    );
                     continue;
                 }
             };
-            let router_addr = match evm::resolve_contract(&self.contracts, "pendle_router", &chain) {
+            let router_addr = match evm::resolve_contract(&self.contracts, "pendle_router", &chain)
+            {
                 Some(addr) => addr,
                 None => {
-                    eprintln!("  PENDLE: unwind skipping {} — router not found", market_name);
+                    eprintln!(
+                        "  PENDLE: unwind skipping {} — router not found",
+                        market_name
+                    );
                     continue;
                 }
             };
@@ -385,10 +393,7 @@ impl Venue for PendleYield {
         let pt_total: f64 = self.pt_holdings.values().sum();
         let yt_total: f64 = self.yt_holdings.values().sum();
         if pt_total > 0.0 || yt_total > 0.0 {
-            println!(
-                "  PENDLE TICK: PT=${:.2}, YT=${:.2}",
-                pt_total, yt_total,
-            );
+            println!("  PENDLE TICK: PT=${:.2}, YT=${:.2}", pt_total, yt_total,);
         }
         Ok(())
     }

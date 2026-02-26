@@ -5,7 +5,7 @@ pub mod simulator;
 
 use std::future::Future;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::data as crate_data;
 use crate::fetch_data::types::{FetchConfig, FetchJob, FetchResult};
@@ -15,7 +15,9 @@ use crate::venues::perps::data::PriceCsvRow;
 use super::{BuildMode, Venue, VenueCategory};
 
 /// Stablecoins that don't need a price feed (assumed pegged ~$1).
-const STABLECOINS: &[&str] = &["USDC", "USDT", "DAI", "FRAX", "LUSD", "USDX", "GHO", "crvUSD", "PYUSD"];
+const STABLECOINS: &[&str] = &[
+    "USDC", "USDT", "DAI", "FRAX", "LUSD", "USDX", "GHO", "crvUSD", "PYUSD",
+];
 
 pub struct LendingCategory;
 
@@ -36,15 +38,14 @@ impl VenueCategory for LendingCategory {
         match node {
             Node::Lending { asset, .. } => match mode {
                 BuildMode::Backtest {
-                    manifest,
-                    data_dir,
-                    ..
+                    manifest, data_dir, ..
                 } => {
                     let id = node.id();
                     let rows = match manifest.get(id) {
-                        Some(entry) => {
-                            crate_data::load_csv::<self::data::LendingCsvRow>(data_dir, &entry.file)?
-                        }
+                        Some(entry) => crate_data::load_csv::<self::data::LendingCsvRow>(
+                            data_dir,
+                            &entry.file,
+                        )?,
                         None => bail!(
                             "Node '{}' has no manifest entry. Run `defi-flow fetch-data` \
                              or add it to manifest.json (kind: \"lending\")",
@@ -71,9 +72,13 @@ impl VenueCategory for LendingCategory {
 
                     Ok(Some(Box::new(sim)))
                 }
-                BuildMode::Live { config, tokens, contracts } => {
-                    Ok(Some(Box::new(aave::AaveLending::new(config, tokens, contracts)?)))
-                }
+                BuildMode::Live {
+                    config,
+                    tokens,
+                    contracts,
+                } => Ok(Some(Box::new(aave::AaveLending::new(
+                    config, tokens, contracts,
+                )?))),
             },
             _ => Ok(None),
         }

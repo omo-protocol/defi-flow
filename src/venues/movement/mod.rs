@@ -52,9 +52,8 @@ impl VenueCategory for MovementCategory {
 
                         // If output token is non-stablecoin, try to find a price feed
                         // from a perp node so the swap can track spot value.
-                        let is_stable = STABLECOINS
-                            .iter()
-                            .any(|s| s.eq_ignore_ascii_case(to_token));
+                        let is_stable =
+                            STABLECOINS.iter().any(|s| s.eq_ignore_ascii_case(to_token));
 
                         if !is_stable {
                             if let Some(price_data) =
@@ -76,11 +75,9 @@ impl VenueCategory for MovementCategory {
                         MovementProvider::LiFi => {
                             Ok(Some(Box::new(lifi::LiFiMovement::new(config, tokens)?)))
                         }
-                        MovementProvider::HyperliquidNative => {
-                            Ok(Some(Box::new(
-                                hyperliquid_native::HyperliquidNativeMovement::new(config)?,
-                            )))
-                        }
+                        MovementProvider::HyperliquidNative => Ok(Some(Box::new(
+                            hyperliquid_native::HyperliquidNativeMovement::new(config)?,
+                        ))),
                     }
                 }
             },

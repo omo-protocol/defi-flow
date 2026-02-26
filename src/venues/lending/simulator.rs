@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 
 use super::data::LendingCsvRow;
@@ -89,11 +89,7 @@ impl LendingSimulator {
 
 #[async_trait]
 impl Venue for LendingSimulator {
-    async fn execute(
-        &mut self,
-        node: &Node,
-        input_amount: f64,
-    ) -> Result<ExecutionResult> {
+    async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult> {
         let (action, asset) = match node {
             Node::Lending { action, asset, .. } => (action, asset.clone()),
             _ => bail!("LendingSimulator called on non-lending node"),
@@ -159,10 +155,12 @@ impl Venue for LendingSimulator {
 
     async fn total_value(&self) -> Result<f64> {
         let price = self.current_price();
-        Ok((self.supplied + self.accrued_supply_interest + self.accrued_rewards
-            - self.borrowed
-            - self.accrued_borrow_interest)
-            * price)
+        Ok(
+            (self.supplied + self.accrued_supply_interest + self.accrued_rewards
+                - self.borrowed
+                - self.accrued_borrow_interest)
+                * price,
+        )
     }
 
     async fn tick(&mut self, now: u64, dt_secs: f64) -> Result<()> {

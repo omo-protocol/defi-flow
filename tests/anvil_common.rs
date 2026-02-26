@@ -63,8 +63,7 @@ pub fn spawn_fork(fork_url: &str, chain_id: u64) -> ForkContext {
 
 /// Fund native ETH via anvil_setBalance.
 pub async fn fund_eth(rpc_url: &str, addr: Address, amount: U256) {
-    let provider = ProviderBuilder::new()
-        .connect_http(rpc_url.parse().unwrap());
+    let provider = ProviderBuilder::new().connect_http(rpc_url.parse().unwrap());
     let _: () = provider
         .raw_request("anvil_setBalance".into(), (addr, amount))
         .await
@@ -79,8 +78,7 @@ pub async fn fund_erc20(
     recipient: Address,
     amount: U256,
 ) {
-    let provider = ProviderBuilder::new()
-        .connect_http(rpc_url.parse().unwrap());
+    let provider = ProviderBuilder::new().connect_http(rpc_url.parse().unwrap());
 
     // Impersonate whale
     let _: () = provider
@@ -137,8 +135,7 @@ pub async fn wrap_eth(rpc_url: &str, private_key: &str, weth_addr: Address, amou
 
 /// Query ERC20 balance.
 pub async fn balance_of(rpc_url: &str, token: Address, account: Address) -> U256 {
-    let provider = ProviderBuilder::new()
-        .connect_http(rpc_url.parse().unwrap());
+    let provider = ProviderBuilder::new().connect_http(rpc_url.parse().unwrap());
     let erc20 = IERC20Test::new(token, &provider);
     erc20
         .balanceOf(account)

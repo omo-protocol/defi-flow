@@ -27,10 +27,7 @@ fn lp_manifests() -> (
     defi_flow::venues::evm::TokenManifest,
     defi_flow::venues::evm::ContractManifest,
 ) {
-    let tokens = token_manifest(&[
-        ("WETH", "base", WETH_BASE),
-        ("USDC", "base", USDC_BASE),
-    ]);
+    let tokens = token_manifest(&[("WETH", "base", WETH_BASE), ("USDC", "base", USDC_BASE)]);
     let contracts = contract_manifest(&[(
         "aerodrome_position_manager",
         "base",
@@ -72,7 +69,14 @@ async fn test_lp_add_liquidity() {
 
     // Fund 10,000 USDC from whale
     let usdc_amount = U256::from(10_000_000_000u64); // 10,000 USDC (6 decimals)
-    fund_erc20(&ctx.rpc_url, usdc, usdc_whale, ctx.wallet_address, usdc_amount).await;
+    fund_erc20(
+        &ctx.rpc_url,
+        usdc,
+        usdc_whale,
+        ctx.wallet_address,
+        usdc_amount,
+    )
+    .await;
 
     // Verify funding
     let weth_balance = balance_of(&ctx.rpc_url, weth, ctx.wallet_address).await;

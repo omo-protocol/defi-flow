@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 
 use alloy::primitives::Address;
@@ -42,14 +42,8 @@ impl HyperliquidPerp {
             .map_err(|e| anyhow::anyhow!("Invalid private key: {e}"))?;
 
         let (exchange, info) = match config.network {
-            Network::Mainnet => (
-                ExchangeProvider::mainnet(signer),
-                InfoProvider::mainnet(),
-            ),
-            Network::Testnet => (
-                ExchangeProvider::testnet(signer),
-                InfoProvider::testnet(),
-            ),
+            Network::Mainnet => (ExchangeProvider::mainnet(signer), InfoProvider::mainnet()),
+            Network::Testnet => (ExchangeProvider::testnet(signer), InfoProvider::testnet()),
         };
 
         Ok(HyperliquidPerp {
@@ -73,16 +67,12 @@ impl HyperliquidPerp {
             .map_err(|e| anyhow::anyhow!("Failed to fetch meta: {e}"))?;
 
         for (index, asset) in meta.universe.iter().enumerate() {
-            self.asset_indices
-                .insert(asset.name.clone(), index as u32);
+            self.asset_indices.insert(asset.name.clone(), index as u32);
             self.sz_decimals
                 .insert(asset.name.clone(), asset.sz_decimals);
         }
 
-        println!(
-            "  HL: loaded {} asset indices",
-            self.asset_indices.len()
-        );
+        println!("  HL: loaded {} asset indices", self.asset_indices.len());
         Ok(())
     }
 
@@ -205,10 +195,8 @@ impl HyperliquidPerp {
                     for status in &data.statuses {
                         match status {
                             ExchangeDataStatus::Filled(fill) => {
-                                let fill_size: f64 =
-                                    fill.total_sz.parse().unwrap_or(0.0);
-                                let fill_price: f64 =
-                                    fill.avg_px.parse().unwrap_or(mid_price);
+                                let fill_size: f64 = fill.total_sz.parse().unwrap_or(0.0);
+                                let fill_price: f64 = fill.avg_px.parse().unwrap_or(mid_price);
                                 println!(
                                     "  HL: FILLED {} {} @ {} (oid: {})",
                                     fill_size, coin, fill_price, fill.oid
@@ -217,11 +205,7 @@ impl HyperliquidPerp {
                                     coin.to_string(),
                                     PositionState {
                                         coin: coin.to_string(),
-                                        size: if is_buy {
-                                            fill_size
-                                        } else {
-                                            -fill_size
-                                        },
+                                        size: if is_buy { fill_size } else { -fill_size },
                                         entry_price: fill_price,
                                         leverage,
                                     },
@@ -318,10 +302,8 @@ impl HyperliquidPerp {
                     for status in &data.statuses {
                         match status {
                             ExchangeDataStatus::Filled(fill) => {
-                                let fill_price: f64 =
-                                    fill.avg_px.parse().unwrap_or(mid_price);
-                                realized_pnl =
-                                    (fill_price - position.entry_price) * position.size;
+                                let fill_price: f64 = fill.avg_px.parse().unwrap_or(mid_price);
+                                realized_pnl = (fill_price - position.entry_price) * position.size;
                                 println!(
                                     "  HL: CLOSED {} @ {} (PnL: ${:.2})",
                                     coin, fill_price, realized_pnl
@@ -334,8 +316,7 @@ impl HyperliquidPerp {
                         }
                     }
                 }
-                let margin_returned =
-                    position.entry_price * close_size / position.leverage;
+                let margin_returned = position.entry_price * close_size / position.leverage;
                 let output_value = (margin_returned + realized_pnl).max(0.0);
                 self.positions.remove(coin);
                 Ok(ExecutionResult::PositionUpdate {
@@ -349,11 +330,7 @@ impl HyperliquidPerp {
         }
     }
 
-    async fn execute_collect_funding(
-        &self,
-        coin: &str,
-        _margin: &str,
-    ) -> Result<ExecutionResult> {
+    async fn execute_collect_funding(&self, coin: &str, _margin: &str) -> Result<ExecutionResult> {
         println!(
             "  HL: funding for {} is auto-credited to margin (no action needed)",
             coin
@@ -364,11 +341,7 @@ impl HyperliquidPerp {
 
 #[async_trait]
 impl Venue for HyperliquidPerp {
-    async fn execute(
-        &mut self,
-        node: &Node,
-        input_amount: f64,
-    ) -> Result<ExecutionResult> {
+    async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult> {
         if self.asset_indices.is_empty() {
             self.init_metadata().await?;
         }
@@ -386,21 +359,16 @@ impl Venue for HyperliquidPerp {
                 let coin = Self::coin_from_pair(pair);
                 match action {
                     PerpAction::Open => {
-                        let dir = direction.with_context(|| {
-                            "Perp open requires direction"
-                        })?;
+                        let dir = direction.with_context(|| "Perp open requires direction")?;
                         let lev = leverage.unwrap_or(1.0);
-                        self.execute_perp_open(coin, dir, lev, input_amount)
-                            .await
+                        self.execute_perp_open(coin, dir, lev, input_amount).await
                     }
                     PerpAction::Close => self.execute_perp_close(coin, margin).await,
                     PerpAction::Adjust => {
                         println!("  HL: ADJUST leverage for {} (not yet implemented)", coin);
                         Ok(ExecutionResult::Noop)
                     }
-                    PerpAction::CollectFunding => {
-                        self.execute_collect_funding(coin, margin).await
-                    }
+                    PerpAction::CollectFunding => self.execute_collect_funding(coin, margin).await,
                 }
             }
             Node::Spot { pair, side, .. } => {
@@ -475,11 +443,7 @@ impl Venue for HyperliquidPerp {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to fetch user state: {e}"))?;
 
-        let account_value: f64 = state
-            .margin_summary
-            .account_value
-            .parse()
-            .unwrap_or(0.0);
+        let account_value: f64 = state.margin_summary.account_value.parse().unwrap_or(0.0);
 
         Ok(account_value)
     }
@@ -545,7 +509,10 @@ impl Venue for HyperliquidPerp {
 
             println!(
                 "  HL: UNWIND {:.1}% {} {} @ {} (reduce_only)",
-                f * 100.0, formatted_size, coin, formatted_price,
+                f * 100.0,
+                formatted_size,
+                coin,
+                formatted_price,
             );
 
             if self.dry_run {
@@ -580,8 +547,7 @@ impl Venue for HyperliquidPerp {
                         for status in &data.statuses {
                             match status {
                                 ExchangeDataStatus::Filled(fill) => {
-                                    let fill_size: f64 =
-                                        fill.total_sz.parse().unwrap_or(0.0);
+                                    let fill_size: f64 = fill.total_sz.parse().unwrap_or(0.0);
                                     println!(
                                         "  HL: UNWIND FILLED {} {} (oid: {})",
                                         fill_size, coin, fill.oid

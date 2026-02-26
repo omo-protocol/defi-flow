@@ -88,10 +88,7 @@ pub fn run(workflow_path: &Path, output_dir: &Path, days: u32, interval: &str) -
                             job.kind.clone(),
                         ));
                     }
-                    println!(
-                        "  OK  {} → {} ({} rows)",
-                        job.key, job.filename, row_count
-                    );
+                    println!("  OK  {} → {} ({} rows)", job.key, job.filename, row_count);
                     success_count += 1;
                 }
                 Err(e) => {

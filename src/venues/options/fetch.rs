@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use crate::data::csv_types::{OptionsCsvRow, PriceCsvRow};
-use crate::fetch_data::types::{sanitize, DataSource, FetchConfig, FetchJob, FetchResult};
+use crate::fetch_data::types::{DataSource, FetchConfig, FetchJob, FetchResult, sanitize};
 use crate::model::node::Node;
 
 const RYSK_API_URL: &str = "https://v12.rysk.finance/api/inventory";
@@ -130,10 +130,7 @@ async fn fetch_options(
     }
 
     // Get spot price from inventory
-    let spot_price = entries
-        .iter()
-        .find_map(|(_, e)| e.index)
-        .unwrap_or(1.0);
+    let spot_price = entries.iter().find_map(|(_, e)| e.index).unwrap_or(1.0);
 
     let now_s = config.end_time_ms / 1000;
     let start_s = config.start_time_ms / 1000;
@@ -176,8 +173,8 @@ async fn fetch_options(
             };
 
             // Scale premium with spot price movement and time decay
-            let mid_iv = ((entry.bid_iv.unwrap_or(50.0) + entry.ask_iv.unwrap_or(50.0)) / 2.0)
-                / 100.0;
+            let mid_iv =
+                ((entry.bid_iv.unwrap_or(50.0) + entry.ask_iv.unwrap_or(50.0)) / 2.0) / 100.0;
             let time_factor = (days_to_expiry / 365.0).sqrt();
             let premium = sim_spot * mid_iv * time_factor * 0.4;
 

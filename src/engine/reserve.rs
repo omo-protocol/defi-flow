@@ -70,11 +70,11 @@ pub async fn read_vault_state(
 
     let vault_addr = evm::resolve_contract(contracts, &config.vault_address, &config.vault_chain)
         .with_context(|| {
-            format!(
-                "Vault '{}' on {} not in contracts manifest",
-                config.vault_address, config.vault_chain,
-            )
-        })?;
+        format!(
+            "Vault '{}' on {} not in contracts manifest",
+            config.vault_address, config.vault_chain,
+        )
+    })?;
 
     let rp = evm::read_provider(rpc_url)?;
 
@@ -179,8 +179,9 @@ pub async fn check_and_manage(
     };
 
     if total_freed > 0.0 {
-        let vault_addr = evm::resolve_contract(contracts, &config.vault_address, &config.vault_chain)
-            .unwrap_or_default();
+        let vault_addr =
+            evm::resolve_contract(contracts, &config.vault_address, &config.vault_chain)
+                .unwrap_or_default();
 
         if dry_run {
             eprintln!(
@@ -269,10 +270,7 @@ async fn transfer_to_vault(
         );
     }
 
-    eprintln!(
-        "[reserve] transfer tx: {:?}",
-        receipt.transaction_hash,
-    );
+    eprintln!("[reserve] transfer tx: {:?}", receipt.transaction_hash,);
 
     Ok(())
 }

@@ -134,8 +134,8 @@ impl RyskOptions {
                 continue;
             }
 
-            let mid_iv = ((entry.bid_iv.unwrap_or(50.0) + entry.ask_iv.unwrap_or(50.0)) / 2.0)
-                / 100.0;
+            let mid_iv =
+                ((entry.bid_iv.unwrap_or(50.0) + entry.ask_iv.unwrap_or(50.0)) / 2.0) / 100.0;
             let time_factor = (dte / 365.0).sqrt();
             let premium = spot * mid_iv * time_factor * 0.4;
 
@@ -152,7 +152,9 @@ impl RyskOptions {
                 }
             }
 
-            let is_better = best.as_ref().map_or(true, |(_, _, best_apy)| apy > *best_apy);
+            let is_better = best
+                .as_ref()
+                .map_or(true, |(_, _, best_apy)| apy > *best_apy);
             if is_better {
                 best = Some((key.clone(), entry, apy));
             }
@@ -198,8 +200,8 @@ impl RyskOptions {
                 let strike = entry.strike.unwrap_or(0.0);
                 let expiry = entry.expiration_timestamp.unwrap_or(0);
                 let spot = entry.index.unwrap_or(0.0);
-                let mid_iv = ((entry.bid_iv.unwrap_or(50.0) + entry.ask_iv.unwrap_or(50.0)) / 2.0)
-                    / 100.0;
+                let mid_iv =
+                    ((entry.bid_iv.unwrap_or(50.0) + entry.ask_iv.unwrap_or(50.0)) / 2.0) / 100.0;
                 let dte = (expiry as f64 - chrono::Utc::now().timestamp() as f64) / 86400.0;
                 let time_factor = (dte / 365.0).sqrt();
                 let premium_per_unit = spot * mid_iv * time_factor * 0.4;
@@ -214,7 +216,12 @@ impl RyskOptions {
 
                 println!(
                     "  RYSK SELECTED: {} strike={:.0} expiry={} DTE={:.0} IV={:.1}% APY={:.1}%",
-                    key, strike, expiry, dte, mid_iv * 100.0, apy * 100.0,
+                    key,
+                    strike,
+                    expiry,
+                    dte,
+                    mid_iv * 100.0,
+                    apy * 100.0,
                 );
                 println!(
                     "  RYSK: size={:.4} premium=${:.2} collateral=${:.2}",
@@ -324,12 +331,21 @@ impl RyskOptions {
         let now = chrono::Utc::now().timestamp() as u64;
         let roll_threshold = roll_days_before.unwrap_or(3) as u64 * 86400;
 
-        println!("  RYSK ROLL: {} (roll {}d before expiry)", asset_key, roll_days_before.unwrap_or(3));
+        println!(
+            "  RYSK ROLL: {} (roll {}d before expiry)",
+            asset_key,
+            roll_days_before.unwrap_or(3)
+        );
 
         let near_expiry: Vec<OptionPosition> = self
             .positions
             .iter()
-            .filter(|p| p.asset == asset_key && p.is_short && p.expiry > 0 && p.expiry - now <= roll_threshold)
+            .filter(|p| {
+                p.asset == asset_key
+                    && p.is_short
+                    && p.expiry > 0
+                    && p.expiry - now <= roll_threshold
+            })
             .cloned()
             .collect();
 
@@ -376,7 +392,10 @@ impl RyskOptions {
         self.positions.retain(|p| {
             if p.asset == asset_key && p.is_short {
                 returned += p.collateral;
-                println!("  RYSK: closed {} (returning ${:.2} collateral)", p.key, p.collateral);
+                println!(
+                    "  RYSK: closed {} (returning ${:.2} collateral)",
+                    p.key, p.collateral
+                );
                 false
             } else {
                 true
@@ -412,12 +431,26 @@ impl Venue for RyskOptions {
                 ..
             } => match action {
                 OptionsAction::SellCoveredCall => {
-                    self.execute_sell(asset, false, *delta_target, *days_to_expiry, *min_apy, input_amount)
-                        .await
+                    self.execute_sell(
+                        asset,
+                        false,
+                        *delta_target,
+                        *days_to_expiry,
+                        *min_apy,
+                        input_amount,
+                    )
+                    .await
                 }
                 OptionsAction::SellCashSecuredPut => {
-                    self.execute_sell(asset, true, *delta_target, *days_to_expiry, *min_apy, input_amount)
-                        .await
+                    self.execute_sell(
+                        asset,
+                        true,
+                        *delta_target,
+                        *days_to_expiry,
+                        *min_apy,
+                        input_amount,
+                    )
+                    .await
                 }
                 OptionsAction::BuyCall | OptionsAction::BuyPut => {
                     let is_put = matches!(action, OptionsAction::BuyPut);
@@ -437,8 +470,14 @@ impl Venue for RyskOptions {
                 }
                 OptionsAction::CollectPremium => self.execute_collect_premium(asset).await,
                 OptionsAction::Roll => {
-                    self.execute_roll(asset, *delta_target, *days_to_expiry, *min_apy, *roll_days_before)
-                        .await
+                    self.execute_roll(
+                        asset,
+                        *delta_target,
+                        *days_to_expiry,
+                        *min_apy,
+                        *roll_days_before,
+                    )
+                    .await
                 }
                 OptionsAction::Close => self.execute_close(asset).await,
             },

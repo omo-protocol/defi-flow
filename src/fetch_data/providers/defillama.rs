@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 const POOLS_URL: &str = "https://yields.llama.fi/pools";
@@ -90,8 +90,7 @@ pub async fn find_pool(
             let proj = p.project.to_lowercase();
             let proj_match = proj == project_lower || proj.starts_with(&project_lower);
             let sym = p.symbol.to_uppercase();
-            let symbol_match =
-                sym.contains(&asset_upper) || sym.contains(&stripped_asset);
+            let symbol_match = sym.contains(&asset_upper) || sym.contains(&stripped_asset);
             let chain_match = chain
                 .map(|c| {
                     p.chain

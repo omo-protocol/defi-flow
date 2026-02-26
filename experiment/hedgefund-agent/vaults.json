@@ -1,0 +1,43 @@
+{
+  "description": "Whitelisted Morpho v2 vaults on HyperEVM. Each strategy deploys into its own vault.",
+  "base_token": {
+    "symbol": "USDT0",
+    "address": "0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb",
+    "chain": "hyperevm",
+    "decimals": 6
+  },
+  "chain": {
+    "name": "hyperevm",
+    "chain_id": 999,
+    "rpc_url": "https://rpc.hyperliquid.xyz/evm"
+  },
+  "vaults": [
+    {
+      "name": "Lending Vault",
+      "strategy": "lending",
+      "address": "0x_REPLACE_LENDING_VAULT",
+      "reserve": {
+        "target_ratio": 0.20,
+        "trigger_threshold": 0.05
+      }
+    },
+    {
+      "name": "Delta-Neutral Vault",
+      "strategy": "delta_neutral_basic",
+      "address": "0x_REPLACE_DN_VAULT",
+      "reserve": {
+        "target_ratio": 0.20,
+        "trigger_threshold": 0.05
+      }
+    },
+    {
+      "name": "PT Yield Vault",
+      "strategy": "pt_yield",
+      "address": "0x_REPLACE_PT_VAULT",
+      "reserve": {
+        "target_ratio": 0.20,
+        "trigger_threshold": 0.05
+      }
+    }
+  ]
+}

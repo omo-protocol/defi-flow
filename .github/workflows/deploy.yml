@@ -1,0 +1,258 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'ferrofluid/**'
+      - 'Cargo.*'
+      - 'experiment/**'
+  workflow_dispatch:
+    inputs:
+      services:
+        description: 'Services to deploy (space-separated, empty = auto-detect)'
+        required: false
+        default: ''
+      force_all:
+        description: 'Force rebuild all services'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io/omo-protocol/defi-flow
+
+jobs:
+
+  # ─── Detect what changed ──────────────────────────────────
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      quant: ${{ steps.filter.outputs.quant }}
+      hedgefund: ${{ steps.filter.outputs.hedgefund }}
+      strategies: ${{ steps.filter.outputs.strategies }}
+      compose: ${{ steps.filter.outputs.compose }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'src/**'
+              - 'ferrofluid/**'
+              - 'Cargo.*'
+            quant:
+              - 'experiment/quant-agent/**'
+            hedgefund:
+              - 'experiment/hedgefund-agent/**'
+            strategies:
+              - 'experiment/vault-strategies/**'
+            compose:
+              - 'experiment/docker-compose.yml'
+
+  # ─── Compute what to build ────────────────────────────────
+  compute-services:
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.compute.outputs.services }}
+      matrix: ${{ steps.compute.outputs.matrix }}
+    steps:
+      - name: Compute services
+        id: compute
+        env:
+          INPUT_SERVICES: ${{ github.event.inputs.services }}
+          INPUT_FORCE: ${{ github.event.inputs.force_all }}
+          RUST: ${{ needs.detect-changes.outputs.rust }}
+          QUANT: ${{ needs.detect-changes.outputs.quant }}
+          HEDGEFUND: ${{ needs.detect-changes.outputs.hedgefund }}
+          STRATEGIES: ${{ needs.detect-changes.outputs.strategies }}
+          COMPOSE: ${{ needs.detect-changes.outputs.compose }}
+        run: |
+          if [ -n "$INPUT_SERVICES" ]; then
+            SERVICES="$INPUT_SERVICES"
+          elif [ "$INPUT_FORCE" == "true" ] || [ "$COMPOSE" == "true" ]; then
+            SERVICES="quant-agent hedgefund-agent strategy-lending strategy-delta-neutral strategy-pt-yield"
+          else
+            SERVICES=""
+            if [ "$RUST" == "true" ]; then
+              SERVICES="quant-agent strategy-lending strategy-delta-neutral strategy-pt-yield"
+            fi
+            [ "$QUANT" == "true" ] && SERVICES="$SERVICES quant-agent"
+            [ "$HEDGEFUND" == "true" ] && SERVICES="$SERVICES hedgefund-agent"
+            [ "$STRATEGIES" == "true" ] && SERVICES="$SERVICES strategy-lending strategy-delta-neutral strategy-pt-yield"
+            SERVICES=$(echo "$SERVICES" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)
+          fi
+
+          echo "services=$SERVICES" >> $GITHUB_OUTPUT
+          echo "Deploying: ${SERVICES:-nothing}"
+
+          # Build JSON matrix for parallel builds
+          if [ -n "$SERVICES" ]; then
+            MATRIX=$(echo "$SERVICES" | tr ' ' '\n' | jq -R . | jq -sc '{service: .}')
+          else
+            MATRIX='{"service":[]}'
+          fi
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+  # ─── Build & Push images to GHCR ─────────────────────────
+  build:
+    needs: compute-services
+    if: needs.compute-services.outputs.services != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix: ${{ fromJson(needs.compute-services.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: tibdex/github-app-token@v2
+        with:
+          app_id: ${{ secrets.GH_APP_ID }}
+          private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve Dockerfile and build args
+        id: resolve
+        run: |
+          SERVICE="${{ matrix.service }}"
+          case "$SERVICE" in
+            quant-agent)
+              echo "dockerfile=experiment/quant-agent/Dockerfile" >> $GITHUB_OUTPUT
+              echo "build_args=" >> $GITHUB_OUTPUT
+              ;;
+            hedgefund-agent)
+              echo "dockerfile=experiment/hedgefund-agent/Dockerfile" >> $GITHUB_OUTPUT
+              echo "build_args=" >> $GITHUB_OUTPUT
+              ;;
+            strategy-lending)
+              echo "dockerfile=experiment/vault-strategies/Dockerfile" >> $GITHUB_OUTPUT
+              echo "build_args=STRATEGY=lending.json" >> $GITHUB_OUTPUT
+              ;;
+            strategy-delta-neutral)
+              echo "dockerfile=experiment/vault-strategies/Dockerfile" >> $GITHUB_OUTPUT
+              echo "build_args=STRATEGY=delta_neutral_basic.json" >> $GITHUB_OUTPUT
+              ;;
+            strategy-pt-yield)
+              echo "dockerfile=experiment/vault-strategies/Dockerfile" >> $GITHUB_OUTPUT
+              echo "build_args=STRATEGY=pt_yield.json" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.resolve.outputs.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ matrix.service }}:latest
+            ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
+          build-args: ${{ steps.resolve.outputs.build_args }}
+          secrets: |
+            gh_token=${{ steps.app-token.outputs.token }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  # ─── Deploy to VPS ────────────────────────────────────────
+  deploy:
+    needs: [compute-services, build]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: experiment/docker-compose.yml
+          sparse-checkout-cone-mode: false
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          SERVICES: ${{ needs.compute-services.outputs.services }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GATEWAY_AUTH_TOKEN: ${{ secrets.GATEWAY_AUTH_TOKEN }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          PK_QUANT_AGENT: ${{ secrets.PK_QUANT_AGENT }}
+          PK_HEDGEFUND_AGENT: ${{ secrets.PK_HEDGEFUND_AGENT }}
+          PK_STRATEGY_LENDING: ${{ secrets.PK_STRATEGY_LENDING }}
+          PK_STRATEGY_DN: ${{ secrets.PK_STRATEGY_DN }}
+          PK_STRATEGY_PT: ${{ secrets.PK_STRATEGY_PT }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: SERVICES,ANTHROPIC_API_KEY,GATEWAY_AUTH_TOKEN,MONGODB_URI,GHCR_TOKEN,PK_QUANT_AGENT,PK_HEDGEFUND_AGENT,PK_STRATEGY_LENDING,PK_STRATEGY_DN,PK_STRATEGY_PT
+          command_timeout: 10m
+          script: |
+            set -e
+
+            echo "═══════════════════════════════════════════════"
+            echo " Deploying: $SERVICES"
+            echo "═══════════════════════════════════════════════"
+
+            # ── Auth with GHCR ──
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u omo-protocol --password-stdin
+
+            # ── Ensure compose file is up to date ──
+            mkdir -p /opt/defi-flow/experiment
+            cd /opt/defi-flow
+
+            # ── Pull latest docker-compose.yml ──
+            # (We only need the compose file on the VPS, not the full repo)
+            curl -sH "Authorization: token $GHCR_TOKEN" \
+              -H "Accept: application/vnd.github.raw+json" \
+              "https://api.github.com/repos/omo-protocol/defi-flow/contents/experiment/docker-compose.yml?ref=main" \
+              -o experiment/docker-compose.yml
+
+            # ── Export secrets as env vars for docker compose ──
+            export ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
+            export GATEWAY_AUTH_TOKEN="$GATEWAY_AUTH_TOKEN"
+            export MONGODB_URI="$MONGODB_URI"
+            export PK_QUANT_AGENT="$PK_QUANT_AGENT"
+            export PK_HEDGEFUND_AGENT="$PK_HEDGEFUND_AGENT"
+            export PK_STRATEGY_LENDING="$PK_STRATEGY_LENDING"
+            export PK_STRATEGY_DN="$PK_STRATEGY_DN"
+            export PK_STRATEGY_PT="$PK_STRATEGY_PT"
+
+            # ── Pull only changed service images ──
+            cd experiment
+            for SVC in $SERVICES; do
+              echo ">>> Pulling $SVC..."
+              docker compose pull $SVC
+            done
+
+            # ── Restart only changed services ──
+            # --no-deps: don't touch services not in the list
+            # Volumes are NEVER deleted — state, registry, memory all persist
+            echo ">>> Restarting: $SERVICES"
+            docker compose up -d --no-deps --force-recreate $SERVICES
+
+            # ── Cleanup ──
+            docker image prune -f
+
+            # ── Status ──
+            echo ""
+            echo "═══════════════════════════════════════════════"
+            echo " Deploy complete"
+            echo "═══════════════════════════════════════════════"
+            docker compose ps

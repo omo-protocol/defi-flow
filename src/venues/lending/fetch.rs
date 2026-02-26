@@ -2,14 +2,19 @@ use anyhow::{Context, Result};
 
 use crate::data::csv_types::LendingCsvRow;
 use crate::fetch_data::providers::defillama;
-use crate::fetch_data::types::{sanitize, DataSource, FetchConfig, FetchJob, FetchResult};
+use crate::fetch_data::types::{DataSource, FetchConfig, FetchJob, FetchResult, sanitize};
 use crate::model::node::Node;
 
 // ── Plan ────────────────────────────────────────────────────────────
 
 pub fn fetch_plan(node: &Node) -> Option<FetchJob> {
     match node {
-        Node::Lending { id, defillama_slug, asset, .. } => {
+        Node::Lending {
+            id,
+            defillama_slug,
+            asset,
+            ..
+        } => {
             let slug = defillama_slug.as_deref()?;
             let key = format!("{slug}:{asset}");
             let source = DataSource::DefiLlamaYield;
@@ -37,11 +42,12 @@ pub async fn fetch(
         return None;
     }
 
-    let (venue, asset) = job
-        .key
-        .split_once(':')
-        .unwrap_or(("unknown", &job.key));
-    Some(fetch_lending(client, venue, asset, config).await.map(FetchResult::Lending))
+    let (venue, asset) = job.key.split_once(':').unwrap_or(("unknown", &job.key));
+    Some(
+        fetch_lending(client, venue, asset, config)
+            .await
+            .map(FetchResult::Lending),
+    )
 }
 
 // ── Internal ────────────────────────────────────────────────────────
@@ -74,9 +80,10 @@ async fn fetch_lending(
             Some(LendingCsvRow {
                 timestamp: ts,
                 supply_apy: p.apy_base.unwrap_or(0.0) / 100.0,
-                borrow_apy: p.apy_base_borrow.unwrap_or_else(|| {
-                    p.apy_base.unwrap_or(0.0) * 1.3
-                }) / 100.0,
+                borrow_apy: p
+                    .apy_base_borrow
+                    .unwrap_or_else(|| p.apy_base.unwrap_or(0.0) * 1.3)
+                    / 100.0,
                 utilization: 0.0,
                 reward_apy: p.apy_reward.unwrap_or(0.0) / 100.0,
             })

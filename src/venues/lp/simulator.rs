@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 
 use super::data::LpCsvRow;
@@ -152,11 +152,7 @@ impl LpSimulator {
 
 #[async_trait]
 impl Venue for LpSimulator {
-    async fn execute(
-        &mut self,
-        node: &Node,
-        input_amount: f64,
-    ) -> Result<ExecutionResult> {
+    async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult> {
         let (action, tick_lower, tick_upper) = match node {
             Node::Lp {
                 action,

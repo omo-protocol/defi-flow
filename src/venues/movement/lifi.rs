@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use serde::Deserialize;
 
@@ -272,20 +272,25 @@ impl Venue for LiFiMovement {
                 use crate::model::node::MovementType;
                 match movement_type {
                     MovementType::Swap => {
-                        let swap_chain = from_chain.as_ref().cloned().unwrap_or_else(Chain::hyperevm);
+                        let swap_chain =
+                            from_chain.as_ref().cloned().unwrap_or_else(Chain::hyperevm);
                         self.execute_swap(&swap_chain, from_token, to_token, input_amount)
                             .await
                     }
                     MovementType::Bridge => {
-                        let fc = from_chain.as_ref().ok_or_else(|| anyhow::anyhow!("bridge requires from_chain"))?;
-                        let tc = to_chain.as_ref().ok_or_else(|| anyhow::anyhow!("bridge requires to_chain"))?;
-                        self.execute_bridge(fc, tc, from_token, input_amount)
-                            .await
+                        let fc = from_chain
+                            .as_ref()
+                            .ok_or_else(|| anyhow::anyhow!("bridge requires from_chain"))?;
+                        let tc = to_chain
+                            .as_ref()
+                            .ok_or_else(|| anyhow::anyhow!("bridge requires to_chain"))?;
+                        self.execute_bridge(fc, tc, from_token, input_amount).await
                     }
                     MovementType::SwapBridge => {
                         // For now, LiFi handles swap+bridge atomically — same as swap
                         // TODO: use LiFi's cross-chain swap endpoint
-                        let swap_chain = from_chain.as_ref().cloned().unwrap_or_else(Chain::hyperevm);
+                        let swap_chain =
+                            from_chain.as_ref().cloned().unwrap_or_else(Chain::hyperevm);
                         self.execute_swap(&swap_chain, from_token, to_token, input_amount)
                             .await
                     }

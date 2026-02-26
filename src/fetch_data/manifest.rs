@@ -59,4 +59,3 @@ fn write_csv<T: Serialize>(path: &Path, rows: &[T]) -> Result<()> {
     wtr.flush()?;
     Ok(())
 }
-

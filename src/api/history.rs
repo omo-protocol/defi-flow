@@ -47,8 +47,8 @@ impl HistoryStore {
         });
 
         let path = dir.join(format!("{id}.json"));
-        let file = std::fs::File::create(&path)
-            .with_context(|| format!("creating {}", path.display()))?;
+        let file =
+            std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?;
         serde_json::to_writer_pretty(file, &record).context("writing backtest record")?;
         Ok(())
     }
@@ -68,10 +68,7 @@ impl HistoryStore {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&contents) {
                         results.push(BacktestSummary {
                             id: val["id"].as_str().unwrap_or("").to_string(),
-                            label: val["result"]["label"]
-                                .as_str()
-                                .unwrap_or("")
-                                .to_string(),
+                            label: val["result"]["label"].as_str().unwrap_or("").to_string(),
                             twrr_pct: val["result"]["twrr_pct"].as_f64().unwrap_or(0.0),
                             sharpe: val["result"]["sharpe"].as_f64().unwrap_or(0.0),
                             max_drawdown_pct: val["result"]["max_drawdown_pct"]
@@ -90,8 +87,8 @@ impl HistoryStore {
 
     pub fn get_backtest(&self, id: &str) -> Result<BacktestRecord> {
         let path = self.backtests_dir().join(format!("{id}.json"));
-        let contents =
-            std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        let contents = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
         let val: serde_json::Value = serde_json::from_str(&contents)?;
 
         Ok(BacktestRecord {

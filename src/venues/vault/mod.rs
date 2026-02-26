@@ -32,9 +32,7 @@ impl VenueCategory for VaultCategory {
         match node {
             Node::Vault { .. } => match mode {
                 BuildMode::Backtest {
-                    manifest,
-                    data_dir,
-                    ..
+                    manifest, data_dir, ..
                 } => {
                     let id = node.id();
                     let rows = if let Some(entry) = manifest.get(id) {
@@ -44,9 +42,13 @@ impl VenueCategory for VaultCategory {
                     };
                     Ok(Some(Box::new(simulator::VaultSimulator::new(rows))))
                 }
-                BuildMode::Live { config, tokens, contracts } => {
-                    Ok(Some(Box::new(morpho::MorphoVault::new(config, tokens, contracts)?)))
-                }
+                BuildMode::Live {
+                    config,
+                    tokens,
+                    contracts,
+                } => Ok(Some(Box::new(morpho::MorphoVault::new(
+                    config, tokens, contracts,
+                )?))),
             },
             _ => Ok(None),
         }

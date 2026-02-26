@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 
 use super::data::PendleCsvRow;
@@ -50,11 +50,7 @@ impl YieldSimulator {
 
 #[async_trait]
 impl Venue for YieldSimulator {
-    async fn execute(
-        &mut self,
-        node: &Node,
-        input_amount: f64,
-    ) -> Result<ExecutionResult> {
+    async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult> {
         let action = match node {
             Node::Pendle { action, .. } => action,
             _ => bail!("YieldSimulator called on non-pendle node"),

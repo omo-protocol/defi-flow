@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::model::node::{Node, NodeId, VenueAllocation};
 use crate::venues::RiskParams;
@@ -67,9 +67,7 @@ pub fn compute_kelly_allocations(
     };
 
     if allocations.is_empty() {
-        return Ok(AllocationResult {
-            groups: vec![],
-        });
+        return Ok(AllocationResult { groups: vec![] });
     }
 
     // Resolve stats and risk for each allocation
@@ -118,7 +116,10 @@ pub fn compute_kelly_allocations(
 
     // Clamp to max_allocation
     let max_alloc = max_allocation.unwrap_or(1.0);
-    let clamped: Vec<f64> = raw_kellys.iter().map(|&k| k.min(max_alloc).max(0.0)).collect();
+    let clamped: Vec<f64> = raw_kellys
+        .iter()
+        .map(|&k| k.min(max_alloc).max(0.0))
+        .collect();
 
     // Normalize so they sum to at most 1.0
     let total: f64 = clamped.iter().sum();
@@ -187,7 +188,9 @@ fn resolve_stats(
 
     // Allow partial override: if only one param is specified, use it
     let expected_return = alloc.expected_return.unwrap_or(total_return);
-    let volatility = alloc.volatility.unwrap_or_else(|| total_var.sqrt().max(1e-6));
+    let volatility = alloc
+        .volatility
+        .unwrap_or_else(|| total_var.sqrt().max(1e-6));
 
     ResolvedStats {
         expected_return,
@@ -337,4 +340,3 @@ fn smooth_kelly(
     // Scale by kelly_fraction (half-Kelly, quarter-Kelly, etc.)
     (optimal_f * kelly_fraction).max(0.0)
 }
-

@@ -50,10 +50,7 @@ impl NodeBalances {
 
     /// Total undeployed value across all node balances (sum of everything).
     pub fn total_value(&self) -> f64 {
-        self.inner
-            .values()
-            .flat_map(|m| m.values())
-            .sum()
+        self.inner.values().flat_map(|m| m.values()).sum()
     }
 }
 

@@ -1,8 +1,8 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::data::csv_types::LpCsvRow;
-use crate::fetch_data::types::{sanitize, DataSource, FetchConfig, FetchJob, FetchResult};
+use crate::fetch_data::types::{DataSource, FetchConfig, FetchJob, FetchResult, sanitize};
 use crate::model::node::Node;
 
 /// Aerodrome Slipstream subgraph via The Graph playground.
@@ -102,9 +102,11 @@ pub async fn fetch(
     config: &FetchConfig,
 ) -> Option<Result<FetchResult>> {
     match &job.source {
-        DataSource::AerodromeSubgraph => {
-            Some(fetch_lp(client, &job.key, config).await.map(FetchResult::Lp))
-        }
+        DataSource::AerodromeSubgraph => Some(
+            fetch_lp(client, &job.key, config)
+                .await
+                .map(FetchResult::Lp),
+        ),
         _ => None,
     }
 }
@@ -136,11 +138,7 @@ async fn fetch_lp(
         .map(|s| {
             let fees_usd: f64 = s.fees_usd.parse().unwrap_or(0.0);
             let tvl_usd: f64 = s.tvl_usd.parse().unwrap_or(1.0);
-            let current_tick: i32 = s
-                .tick
-                .as_ref()
-                .and_then(|t| t.parse().ok())
-                .unwrap_or(0);
+            let current_tick: i32 = s.tick.as_ref().and_then(|t| t.parse().ok()).unwrap_or(0);
 
             let fee_apy = if tvl_usd > 0.0 {
                 (fees_usd / tvl_usd) * 365.0
@@ -244,10 +242,8 @@ async fn find_pool(client: &reqwest::Client, pool_name: &str) -> Result<String> 
                 .map(|t| t.symbol.to_uppercase())
                 .unwrap_or_default();
 
-            let match_forward =
-                t0.contains(&sym_a) && (sym_b.is_empty() || t1.contains(&sym_b));
-            let match_reverse =
-                t1.contains(&sym_a) && (sym_b.is_empty() || t0.contains(&sym_b));
+            let match_forward = t0.contains(&sym_a) && (sym_b.is_empty() || t1.contains(&sym_b));
+            let match_reverse = t1.contains(&sym_a) && (sym_b.is_empty() || t0.contains(&sym_b));
 
             if match_forward || match_reverse {
                 println!(

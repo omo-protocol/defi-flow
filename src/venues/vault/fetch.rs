@@ -2,14 +2,19 @@ use anyhow::{Context, Result};
 
 use crate::data::csv_types::VaultCsvRow;
 use crate::fetch_data::providers::defillama;
-use crate::fetch_data::types::{sanitize, DataSource, FetchConfig, FetchJob, FetchResult};
+use crate::fetch_data::types::{DataSource, FetchConfig, FetchJob, FetchResult, sanitize};
 use crate::model::node::Node;
 
 // ── Plan ────────────────────────────────────────────────────────────
 
 pub fn fetch_plan(node: &Node) -> Option<FetchJob> {
     match node {
-        Node::Vault { id, defillama_slug, asset, .. } => {
+        Node::Vault {
+            id,
+            defillama_slug,
+            asset,
+            ..
+        } => {
             let slug = defillama_slug.as_deref()?;
             let key = format!("{slug}:{asset}");
             let source = DataSource::DefiLlamaYield;
@@ -37,11 +42,12 @@ pub async fn fetch(
         return None;
     }
 
-    let (venue, asset) = job
-        .key
-        .split_once(':')
-        .unwrap_or(("unknown", &job.key));
-    Some(fetch_vault(client, venue, asset, config).await.map(FetchResult::Vault))
+    let (venue, asset) = job.key.split_once(':').unwrap_or(("unknown", &job.key));
+    Some(
+        fetch_vault(client, venue, asset, config)
+            .await
+            .map(FetchResult::Vault),
+    )
 }
 
 // ── Internal ────────────────────────────────────────────────────────

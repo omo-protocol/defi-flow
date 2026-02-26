@@ -1,6 +1,6 @@
-use wasm_bindgen::prelude::*;
 use crate::model::Workflow;
 use crate::validate;
+use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub fn validate_workflow_json(json: &str) -> String {
@@ -10,7 +10,8 @@ pub fn validate_workflow_json(json: &str) -> String {
             return serde_json::json!({
                 "valid": false,
                 "errors": [format!("JSON parse error: {}", e)]
-            }).to_string();
+            })
+            .to_string();
         }
     };
     match validate::validate(&workflow) {
@@ -20,7 +21,8 @@ pub fn validate_workflow_json(json: &str) -> String {
             serde_json::json!({
                 "valid": false,
                 "errors": error_strings
-            }).to_string()
+            })
+            .to_string()
         }
     }
 }
@@ -32,13 +34,15 @@ pub fn parse_workflow_json(json: &str) -> String {
         Err(e) => {
             return serde_json::json!({
                 "error": format!("JSON parse error: {}", e)
-            }).to_string();
+            })
+            .to_string();
         }
     };
     serde_json::to_string_pretty(&workflow).unwrap_or_else(|e| {
         serde_json::json!({
             "error": format!("Serialization error: {}", e)
-        }).to_string()
+        })
+        .to_string()
     })
 }
 

@@ -1,5 +1,5 @@
-use axum::extract::State;
 use axum::Json;
+use axum::extract::State;
 
 use crate::api::error::ApiError;
 use crate::api::state::AppState;
@@ -25,7 +25,11 @@ pub async fn validate_workflow(
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let onchain_errors = validate::onchain::validate_onchain(&req.workflow).await;
         for e in onchain_errors {
-            if matches!(e, validate::ValidationError::RpcUnreachable { .. } | validate::ValidationError::MovementNoRoute { .. }) {
+            if matches!(
+                e,
+                validate::ValidationError::RpcUnreachable { .. }
+                    | validate::ValidationError::MovementNoRoute { .. }
+            ) {
                 warnings.push(e.to_string());
             } else {
                 errors.push(e.to_string());

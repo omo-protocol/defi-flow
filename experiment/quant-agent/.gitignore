@@ -1,0 +1,29 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Data (fetched, not versioned)
+data/
+strategies/
+
+# Memory (runtime state, not versioned)
+workspace/memory/
+memory/
+
+# Docker
+docker-compose.override.yml
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (openclaw deps)
+node_modules/
+
+# Rust build artifacts (if building locally)
+target/

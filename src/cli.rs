@@ -107,6 +107,14 @@ pub enum Command {
         /// Slippage tolerance in basis points for market orders
         #[arg(long, default_value = "50")]
         slippage_bps: f64,
+
+        /// Log file path (daemon output tee'd here for `defi-flow logs`)
+        #[arg(long)]
+        log_file: Option<PathBuf>,
+
+        /// Custom registry directory (default: ~/.defi-flow)
+        #[arg(long)]
+        registry_dir: Option<PathBuf>,
     },
 
     /// Start the HTTP API server
@@ -122,6 +130,48 @@ pub enum Command {
         /// Data directory for uploads, history, etc.
         #[arg(long, default_value = "~/.defi-flow")]
         data_dir: PathBuf,
+    },
+
+    /// List running strategy daemons
+    Ps {
+        /// Custom registry directory (default: ~/.defi-flow)
+        #[arg(long)]
+        registry_dir: Option<PathBuf>,
+    },
+
+    /// Stop a running strategy daemon
+    Stop {
+        /// Strategy name (workflow name from registry)
+        name: String,
+
+        /// Custom registry directory (default: ~/.defi-flow)
+        #[arg(long)]
+        registry_dir: Option<PathBuf>,
+    },
+
+    /// View logs for a running strategy daemon
+    Logs {
+        /// Strategy name (workflow name from registry)
+        name: String,
+
+        /// Number of lines to show (default: 50)
+        #[arg(long, short = 'n', default_value = "50")]
+        lines: usize,
+
+        /// Follow log output (like tail -f)
+        #[arg(long, short = 'f')]
+        follow: bool,
+
+        /// Custom registry directory (default: ~/.defi-flow)
+        #[arg(long)]
+        registry_dir: Option<PathBuf>,
+    },
+
+    /// Resume all previously-running strategy daemons (after container restart)
+    ResumeAll {
+        /// Custom registry directory (default: ~/.defi-flow)
+        #[arg(long)]
+        registry_dir: Option<PathBuf>,
     },
 
     /// Fetch historical data from venue APIs for backtesting

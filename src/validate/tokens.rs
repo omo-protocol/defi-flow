@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::model::Workflow;
 use crate::model::amount::Amount;
 use crate::model::chain::Chain;
 use crate::model::node::{MovementProvider, MovementType, Node, PerpAction, TokenFlow};
-use crate::model::Workflow;
 
 use super::ValidationError;
 
@@ -51,10 +51,7 @@ fn check_wallet_nodes(workflow: &Workflow) -> Vec<ValidationError> {
 
     for node in &workflow.nodes {
         if let Node::Wallet {
-            id,
-            chain,
-            address,
-            ..
+            id, chain, address, ..
         } = node
         {
             if address.is_empty() {
@@ -80,9 +77,7 @@ fn check_wallet_nodes(workflow: &Workflow) -> Vec<ValidationError> {
 
 /// Check if a string is a valid EVM address: 0x-prefixed, 42 chars total, hex digits.
 fn is_valid_evm_address(addr: &str) -> bool {
-    addr.len() == 42
-        && addr.starts_with("0x")
-        && addr[2..].chars().all(|c| c.is_ascii_hexdigit())
+    addr.len() == 42 && addr.starts_with("0x") && addr[2..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
 // ── Orphan node validation ──────────────────────────────────────────
@@ -92,11 +87,8 @@ fn is_valid_evm_address(addr: &str) -> bool {
 fn check_orphan_nodes(workflow: &Workflow) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
-    let nodes_with_incoming: HashSet<&str> = workflow
-        .edges
-        .iter()
-        .map(|e| e.to_node.as_str())
-        .collect();
+    let nodes_with_incoming: HashSet<&str> =
+        workflow.edges.iter().map(|e| e.to_node.as_str()).collect();
 
     for node in &workflow.nodes {
         // Wallet is the DAG entry point — it doesn't need incoming edges
@@ -214,7 +206,9 @@ fn check_edge_distribution(workflow: &Workflow) -> Vec<ValidationError> {
         }
 
         let has_all = amounts.iter().any(|a| matches!(a, Amount::All));
-        let has_pct = amounts.iter().any(|a| matches!(a, Amount::Percentage { .. }));
+        let has_pct = amounts
+            .iter()
+            .any(|a| matches!(a, Amount::Percentage { .. }));
         let has_fixed = amounts.iter().any(|a| matches!(a, Amount::Fixed { .. }));
 
         // Mixing all + percentage is ambiguous
@@ -326,12 +320,8 @@ fn check_edge_flows(workflow: &Workflow) -> Vec<ValidationError> {
         // The optimizer has no chain, but the tokens actually came from hyperevm.
         if source.chain.is_none() {
             let mut visited = HashSet::new();
-            source.chain = trace_origin_chain(
-                edge.from_node.as_str(),
-                &node_map,
-                &incoming,
-                &mut visited,
-            );
+            source.chain =
+                trace_origin_chain(edge.from_node.as_str(), &node_map, &incoming, &mut visited);
         }
 
         // Chain compatibility (skip if either side is truly unknown)
@@ -348,7 +338,16 @@ fn check_edge_flows(workflow: &Workflow) -> Vec<ValidationError> {
             continue;
         }
 
-        let message = build_flow_suggestion(from_node, to_node, &edge.token, &source, &dest, chain_ok, token_ok, edge_vs_source);
+        let message = build_flow_suggestion(
+            from_node,
+            to_node,
+            &edge.token,
+            &source,
+            &dest,
+            chain_ok,
+            token_ok,
+            edge_vs_source,
+        );
 
         errors.push(ValidationError::FlowMismatch {
             from_node: edge.from_node.clone(),
@@ -378,11 +377,7 @@ fn build_flow_suggestion(
         .as_ref()
         .map(|c| c.name.as_str())
         .unwrap_or("?");
-    let dc = dest
-        .chain
-        .as_ref()
-        .map(|c| c.name.as_str())
-        .unwrap_or("?");
+    let dc = dest.chain.as_ref().map(|c| c.name.as_str()).unwrap_or("?");
 
     // Special case: edge token doesn't match source output (but dest may be fine)
     if !edge_vs_source && chain_ok {
@@ -408,8 +403,7 @@ fn build_flow_suggestion(
             format!(
                 "token mismatch: '{}' outputs {} but '{}' expects {} (both on {}). \
                  Insert a Movement(swap, from_token: {}, to_token: {})",
-                from_id, source.token, to_id, dest.token, chain_name,
-                source.token, dest.token,
+                from_id, source.token, to_id, dest.token, chain_name, source.token, dest.token,
             )
         }
         (false, false) => {
@@ -417,7 +411,9 @@ fn build_flow_suggestion(
             let bridge_tok = "USDC";
 
             // If only token differs, can use a single swap_bridge Movement
-            if source.token.eq_ignore_ascii_case(bridge_tok) || dest.token.eq_ignore_ascii_case(bridge_tok) {
+            if source.token.eq_ignore_ascii_case(bridge_tok)
+                || dest.token.eq_ignore_ascii_case(bridge_tok)
+            {
                 // One side is already USDC — suggest swap_bridge or bridge+swap
                 let mut steps = Vec::new();
 
@@ -449,7 +445,12 @@ fn build_flow_suggestion(
                 format!(
                     "chain+token mismatch: '{}' outputs {} on {}, but '{}' expects {} on {}. \
                      Insert: {}",
-                    from_id, source.token, sc, to_id, dest.token, dc,
+                    from_id,
+                    source.token,
+                    sc,
+                    to_id,
+                    dest.token,
+                    dc,
                     numbered.join(", then "),
                 )
             } else {
@@ -457,8 +458,16 @@ fn build_flow_suggestion(
                 format!(
                     "chain+token mismatch: '{}' outputs {} on {}, but '{}' expects {} on {}. \
                      Insert a Movement(swap_bridge, from_token: {}, to_token: {}, from_chain: {}, to_chain: {})",
-                    from_id, source.token, sc, to_id, dest.token, dc,
-                    source.token, dest.token, sc, dc,
+                    from_id,
+                    source.token,
+                    sc,
+                    to_id,
+                    dest.token,
+                    dc,
+                    source.token,
+                    dest.token,
+                    sc,
+                    dc,
                 )
             }
         }
@@ -571,9 +580,7 @@ fn check_token_manifest(workflow: &Workflow) -> Vec<ValidationError> {
                 // Skip chains without RPC (no on-chain contracts)
                 let lp_chain = chain.as_ref();
                 if lp_chain.map(|c| c.rpc_url.is_some()).unwrap_or(true) {
-                    let chain_name = lp_chain
-                        .map(|c| c.name.as_str())
-                        .unwrap_or("base");
+                    let chain_name = lp_chain.map(|c| c.name.as_str()).unwrap_or("base");
                     for token in pool.split('/') {
                         check(token.trim(), chain_name);
                     }

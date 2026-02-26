@@ -61,11 +61,7 @@ fn parse_scope(scope: &str) -> anyhow::Result<(String, String)> {
 }
 
 /// Extract the subgraph containing all nodes on any path from `from_id` to `to_id`.
-fn scope_workflow(
-    workflow: &Workflow,
-    from_id: &str,
-    to_id: &str,
-) -> anyhow::Result<Workflow> {
+fn scope_workflow(workflow: &Workflow, from_id: &str, to_id: &str) -> anyhow::Result<Workflow> {
     let node_ids: HashSet<&str> = workflow.nodes.iter().map(|n| n.id()).collect();
     if !node_ids.contains(from_id) {
         anyhow::bail!("Scope start node '{from_id}' not found in workflow");
@@ -110,9 +106,7 @@ fn scope_workflow(
     let edges: Vec<Edge> = workflow
         .edges
         .iter()
-        .filter(|e| {
-            on_path.contains(e.from_node.as_str()) && on_path.contains(e.to_node.as_str())
-        })
+        .filter(|e| on_path.contains(e.from_node.as_str()) && on_path.contains(e.to_node.as_str()))
         .cloned()
         .collect();
 
@@ -216,9 +210,7 @@ fn node_detail(node: &Node) -> String {
             leverage,
             ..
         } => {
-            let lev = leverage
-                .map(|l| format!(", {l:.1}x"))
-                .unwrap_or_default();
+            let lev = leverage.map(|l| format!(", {l:.1}x")).unwrap_or_default();
             format!("{venue:?} {action:?} {pair}{lev}")
         }
         Node::Options {
@@ -244,23 +236,27 @@ fn node_detail(node: &Node) -> String {
             from_chain,
             to_chain,
             ..
-        } => {
-            match movement_type {
-                crate::model::node::MovementType::Swap => {
-                    format!("{provider:?} {from_token} -> {to_token}")
-                }
-                crate::model::node::MovementType::Bridge => {
-                    let fc = from_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
-                    let tc = to_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
-                    format!("{provider:?} {from_token} {fc} -> {tc}")
-                }
-                crate::model::node::MovementType::SwapBridge => {
-                    let fc = from_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
-                    let tc = to_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
-                    format!("{provider:?} {from_token}->{to_token} {fc}->{tc}")
-                }
+        } => match movement_type {
+            crate::model::node::MovementType::Swap => {
+                format!("{provider:?} {from_token} -> {to_token}")
             }
-        }
+            crate::model::node::MovementType::Bridge => {
+                let fc = from_chain
+                    .as_ref()
+                    .map(|c| c.to_string())
+                    .unwrap_or_default();
+                let tc = to_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
+                format!("{provider:?} {from_token} {fc} -> {tc}")
+            }
+            crate::model::node::MovementType::SwapBridge => {
+                let fc = from_chain
+                    .as_ref()
+                    .map(|c| c.to_string())
+                    .unwrap_or_default();
+                let tc = to_chain.as_ref().map(|c| c.to_string()).unwrap_or_default();
+                format!("{provider:?} {from_token}->{to_token} {fc}->{tc}")
+            }
+        },
         Node::Lending {
             archetype,
             chain,
@@ -275,9 +271,7 @@ fn node_detail(node: &Node) -> String {
             action,
             ..
         } => format!("{archetype:?} {action:?} {asset} on {chain}"),
-        Node::Pendle {
-            market, action, ..
-        } => format!("{action:?} {market}"),
+        Node::Pendle { market, action, .. } => format!("{action:?} {market}"),
         Node::Lp {
             venue,
             pool,
@@ -415,9 +409,7 @@ fn render_ascii(workflow: &Workflow) {
         node_ids.iter().map(|&id| (id, vec![])).collect();
 
     for edge in &workflow.edges {
-        if node_set.contains(edge.from_node.as_str())
-            && node_set.contains(edge.to_node.as_str())
-        {
+        if node_set.contains(edge.from_node.as_str()) && node_set.contains(edge.to_node.as_str()) {
             *in_degree.get_mut(edge.to_node.as_str()).unwrap() += 1;
             successors
                 .get_mut(edge.from_node.as_str())
@@ -482,7 +474,9 @@ fn render_ascii(workflow: &Workflow) {
             for &node_id in layer {
                 if let Some(preds) = predecessors.get(node_id) {
                     for &(from, token) in preds {
-                        println!("      {from} \u{2500}\u{2500}({token})\u{2500}\u{2500}\u{25b6} {node_id}");
+                        println!(
+                            "      {from} \u{2500}\u{2500}({token})\u{2500}\u{2500}\u{25b6} {node_id}"
+                        );
                     }
                 }
             }

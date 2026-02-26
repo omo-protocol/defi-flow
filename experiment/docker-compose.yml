@@ -1,0 +1,122 @@
+services:
+
+  # ═══════════════════════════════════════════════════════
+  # Agents
+  # ═══════════════════════════════════════════════════════
+
+  quant-agent:
+    image: ghcr.io/omo-protocol/defi-flow/quant-agent:latest
+    build:
+      context: ..
+      dockerfile: experiment/quant-agent/Dockerfile
+      secrets:
+        - gh_token
+    container_name: quant-agent
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "18789:18789"
+    volumes:
+      - quant-strategies:/app/strategies
+      - quant-data:/app/data
+      - quant-memory:/app/workspace/memory
+      - quant-registry:/app/.defi-flow
+    environment:
+      - NODE_ENV=production
+      - MONGODB_DB=quant-agent
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
+      - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_AGENT}
+      - MONGODB_URI=${MONGODB_URI}
+
+  hedgefund-agent:
+    image: ghcr.io/omo-protocol/defi-flow/hedgefund-agent:latest
+    build:
+      context: ..
+      dockerfile: experiment/hedgefund-agent/Dockerfile
+      secrets:
+        - gh_token
+    container_name: hedgefund-agent
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "18790:18790"
+    volumes:
+      - hedgefund-memory:/app/workspace/memory
+    environment:
+      - NODE_ENV=production
+      - MONGODB_DB=hedgefund-agent
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
+      - PRIVATE_KEY=${PK_HEDGEFUND_AGENT}
+      - MONGODB_URI=${MONGODB_URI}
+
+  # ═══════════════════════════════════════════════════════
+  # Vault Strategies — each has its own wallet
+  # ═══════════════════════════════════════════════════════
+
+  strategy-lending:
+    image: ghcr.io/omo-protocol/defi-flow/strategy-lending:latest
+    build:
+      context: ..
+      dockerfile: experiment/vault-strategies/Dockerfile
+      args:
+        STRATEGY: lending.json
+    container_name: strategy-lending
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - lending-data:/app/data
+      - lending-logs:/app/logs
+    environment:
+      - DEFI_FLOW_PRIVATE_KEY=${PK_STRATEGY_LENDING}
+
+  strategy-delta-neutral:
+    image: ghcr.io/omo-protocol/defi-flow/strategy-delta-neutral:latest
+    build:
+      context: ..
+      dockerfile: experiment/vault-strategies/Dockerfile
+      args:
+        STRATEGY: delta_neutral_basic.json
+    container_name: strategy-delta-neutral
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - dn-data:/app/data
+      - dn-logs:/app/logs
+    environment:
+      - DEFI_FLOW_PRIVATE_KEY=${PK_STRATEGY_DN}
+
+  strategy-pt-yield:
+    image: ghcr.io/omo-protocol/defi-flow/strategy-pt-yield:latest
+    build:
+      context: ..
+      dockerfile: experiment/vault-strategies/Dockerfile
+      args:
+        STRATEGY: pt_yield.json
+    container_name: strategy-pt-yield
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - pt-data:/app/data
+      - pt-logs:/app/logs
+    environment:
+      - DEFI_FLOW_PRIVATE_KEY=${PK_STRATEGY_PT}
+
+# Only needed for local builds (CI uses --mount=type=secret)
+secrets:
+  gh_token:
+    file: ../.gh_token
+
+volumes:
+  quant-strategies:
+  quant-data:
+  quant-memory:
+  quant-registry:
+  hedgefund-memory:
+  lending-data:
+  lending-logs:
+  dn-data:
+  dn-logs:
+  pt-data:
+  pt-logs:

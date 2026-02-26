@@ -1,0 +1,53 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/app/workspace",
+      "model": "anthropic/claude-sonnet-4-5-20250929",
+      "sandbox": {
+        "mode": "off",
+        "scope": "agent"
+      },
+      "heartbeat": {
+        "every": "30m",
+        "target": ["main"]
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "default": true,
+        "name": "QuantAgent",
+        "workspace": "/app/workspace"
+      }
+    ]
+  },
+  "cron": {
+    "enabled": true,
+    "maxConcurrentRuns": 1,
+    "sessionRetention": "48h",
+    "runLog": {
+      "maxBytes": "5mb",
+      "keepLines": 5000
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "0.0.0.0",
+    "auth": {
+      "mode": "token",
+      "token": "${GATEWAY_AUTH_TOKEN}"
+    }
+  },
+  "tools": {
+    "web": {
+      "search": { "enabled": true },
+      "fetch": { "enabled": true }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": false
+    }
+  }
+}

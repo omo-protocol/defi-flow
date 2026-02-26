@@ -20,8 +20,8 @@ pub fn load_manifest(data_dir: &Path) -> Result<HashMap<NodeId, ManifestEntry>> 
     let manifest_path = data_dir.join("manifest.json");
     let contents = std::fs::read_to_string(&manifest_path)
         .with_context(|| format!("reading manifest at {}", manifest_path.display()))?;
-    let manifest: HashMap<NodeId, ManifestEntry> = serde_json::from_str(&contents)
-        .with_context(|| "parsing manifest.json")?;
+    let manifest: HashMap<NodeId, ManifestEntry> =
+        serde_json::from_str(&contents).with_context(|| "parsing manifest.json")?;
     Ok(manifest)
 }
 
@@ -117,9 +117,7 @@ pub fn collect_timestamps(
 
     if global_start >= global_end {
         // No overlap — fall back to full union of all timestamps
-        eprintln!(
-            "  warning: data sources do not overlap, using union of all timestamps"
-        );
+        eprintln!("  warning: data sources do not overlap, using union of all timestamps");
         let mut all: Vec<u64> = per_source.into_iter().flat_map(|(_, ts)| ts).collect();
         all.sort();
         all.dedup();
