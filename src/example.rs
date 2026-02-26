@@ -11,6 +11,7 @@ pub fn run() -> anyhow::Result<()> {
         name: "Kelly-Optimized Multi-Venue with Auto-Compound".to_string(),
         tokens: None,
         reserve: None,
+        valuer: None,
         contracts: Some({
             let mut c = std::collections::HashMap::new();
             // Lending contracts

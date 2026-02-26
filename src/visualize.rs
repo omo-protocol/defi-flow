@@ -116,6 +116,7 @@ fn scope_workflow(workflow: &Workflow, from_id: &str, to_id: &str) -> anyhow::Re
         tokens: workflow.tokens.clone(),
         contracts: workflow.contracts.clone(),
         reserve: workflow.reserve.clone(),
+        valuer: workflow.valuer.clone(),
         nodes,
         edges,
     })

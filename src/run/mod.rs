@@ -2,6 +2,7 @@ pub mod config;
 pub mod registry;
 pub mod scheduler;
 pub mod state;
+pub mod valuer;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -111,7 +112,13 @@ pub fn run(workflow_path: &Path, cli_config: &RunConfig) -> Result<()> {
     .ok();
 
     let rt = tokio::runtime::Runtime::new().context("creating tokio runtime")?;
-    let result = rt.block_on(run_async(workflow, config, workflow_path, shutdown));
+    let result = rt.block_on(run_async(
+        workflow,
+        config,
+        workflow_path,
+        shutdown,
+        registry_dir.clone(),
+    ));
 
     // Deregister only on normal exit (--once mode, no errors).
     // Signal-based shutdown leaves registry intact for resume-all.
@@ -132,6 +139,7 @@ async fn run_async(
     config: RuntimeConfig,
     workflow_path: &Path,
     shutdown: Arc<AtomicBool>,
+    registry_dir: Option<PathBuf>,
 ) -> Result<()> {
     // Install rustls crypto provider (required by ferrofluid's TLS)
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -161,6 +169,10 @@ async fn run_async(
         }
     }
 
+    let strategy_name = engine.workflow.name.clone();
+    let reg_dir_ref = registry_dir.as_deref();
+    let mut valuer_state = valuer::ValuerState::default();
+
     // Deploy phase: execute non-triggered nodes in topological order
     if !state.deploy_completed {
         println!("── Deploy phase ──");
@@ -168,9 +180,27 @@ async fn run_async(
         engine.deploy().await.context("deploy phase")?;
         state.deploy_completed = true;
         sync_balances(&engine, &mut state);
+
+        // Record initial capital for performance tracking
+        state.initial_capital = state.balances.values().sum();
+        state.peak_tvl = state.initial_capital;
+
         state.save(&config.state_file)?;
-        println!("Deploy complete. State saved.\n");
+        println!("Deploy complete. Capital: ${:.2}. State saved.\n", state.initial_capital);
+
+        // Update registry with deployed capital
+        if let Ok(mut reg) = Registry::load(reg_dir_ref) {
+            if let Some(entry) = reg.daemons.get_mut(&strategy_name) {
+                entry.capital = state.initial_capital;
+            }
+            let _ = reg.save(reg_dir_ref);
+        }
     } else {
+        // Backfill initial_capital for old state files (pre-perf-tracking)
+        if state.initial_capital == 0.0 {
+            state.initial_capital = state.balances.values().sum();
+            state.peak_tvl = state.initial_capital;
+        }
         println!("Deploy already completed (loaded from state). Skipping.\n");
     }
 
@@ -217,10 +247,31 @@ async fn run_async(
             }
         }
 
-        state.save(&config.state_file)?;
-
+        // Update performance metrics
         let tvl = engine.total_tvl().await;
+        if tvl > state.peak_tvl {
+            state.peak_tvl = tvl;
+        }
+        let metrics = engine.collect_metrics();
+        state.cumulative_funding = metrics.funding_pnl;
+        state.cumulative_interest = metrics.lending_interest;
+        state.cumulative_rewards = metrics.rewards_pnl;
+        state.cumulative_costs = metrics.swap_costs;
+
+        state.save(&config.state_file)?;
         println!("\nTVL: ${:.2}", tvl);
+
+        // Push TVL to onchain valuer (if configured)
+        if let Some(ref vc) = engine.workflow.valuer {
+            match valuer::maybe_push_value(
+                vc, &contracts, &config.private_key, tvl,
+                &mut valuer_state, config.dry_run,
+            ).await {
+                Ok(true) | Ok(false) => {}
+                Err(e) => eprintln!("[valuer] ERROR: {:#}", e),
+            }
+        }
+
         println!("State saved. Exiting.");
     } else {
         println!("── Daemon mode (hot reload enabled) ──");
@@ -295,10 +346,30 @@ async fn run_async(
                         }
                     }
 
-                    state.save(&config.state_file)?;
-
+                    // Update performance metrics
                     let tvl = engine.total_tvl().await;
+                    if tvl > state.peak_tvl {
+                        state.peak_tvl = tvl;
+                    }
+                    let metrics = engine.collect_metrics();
+                    state.cumulative_funding = metrics.funding_pnl;
+                    state.cumulative_interest = metrics.lending_interest;
+                    state.cumulative_rewards = metrics.rewards_pnl;
+                    state.cumulative_costs = metrics.swap_costs;
+
+                    state.save(&config.state_file)?;
                     println!("[{}] TVL: ${:.2}\n", now.format("%H:%M:%S"), tvl);
+
+                    // Push TVL to onchain valuer (if configured)
+                    if let Some(ref vc) = engine.workflow.valuer {
+                        match valuer::maybe_push_value(
+                            vc, &contracts, &config.private_key, tvl,
+                            &mut valuer_state, config.dry_run,
+                        ).await {
+                            Ok(true) | Ok(false) => {}
+                            Err(e) => eprintln!("[valuer] ERROR: {:#}", e),
+                        }
+                    }
                 }
                 Some(changed_path) = file_rx.recv() => {
                     // Only reload if the changed file matches our workflow file

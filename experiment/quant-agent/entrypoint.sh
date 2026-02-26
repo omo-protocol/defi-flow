@@ -85,6 +85,11 @@ if [ -n "$MONGODB_URI" ]; then
     node /app/scripts/ship-logs.mjs 2>&1 | while read -r line; do echo "[log-shipper] $line"; done
   done &
   echo "Log shipper PID: $!"
+
+  # Background stats shipper — watches registry + state files, ships perf metrics
+  echo "Starting strategy stats shipper..."
+  node /app/scripts/ship-stats.mjs 2>&1 | while read -r line; do echo "$line"; done &
+  echo "Stats shipper PID: $!"
 fi
 
 echo "=== Quant Agent running (gateway PID: $GATEWAY_PID) ==="

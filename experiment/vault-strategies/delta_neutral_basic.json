@@ -15,7 +15,26 @@
     },
     "hyperlend_rewards": {
       "hyperevm": "0x2aF0d6754A58723c50b5e73E45D964bFDD99fE2F"
+    },
+    "morpho_usdc_vault": {
+      "hyperevm": "0x_REPLACE_VAULT"
+    },
+    "valuer_contract": {
+      "hyperevm": "0x_REPLACE_VALUER"
     }
+  },
+  "reserve": {
+    "vault_address": "morpho_usdc_vault",
+    "vault_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+    "vault_token": "USDC"
+  },
+  "valuer": {
+    "contract": "valuer_contract",
+    "strategy_id": "delta_neutral_basic",
+    "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+    "confidence": 90,
+    "underlying_decimals": 6,
+    "push_interval": 3600
   },
   "nodes": [
     {
@@ -23,7 +42,7 @@
       "id": "wallet",
       "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
       "token": "USDC",
-      "address": "0x7BB51c8a55D8F0431f4E9CaA5cC502d7a381aC6b"
+      "address": "0x_REPLACE_WALLET"
     },
     {
       "type": "optimizer",

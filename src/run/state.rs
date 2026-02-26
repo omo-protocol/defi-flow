@@ -18,6 +18,26 @@ pub struct RunState {
     /// Audit trail of reserve management actions.
     #[serde(default)]
     pub reserve_actions: Vec<ReserveActionRecord>,
+
+    // ── Performance tracking ──
+    /// Capital deployed at the end of the deploy phase (sum of all node balances).
+    #[serde(default)]
+    pub initial_capital: f64,
+    /// Highest TVL observed since deploy.
+    #[serde(default)]
+    pub peak_tvl: f64,
+    /// Cumulative funding income from perp venues (USD).
+    #[serde(default)]
+    pub cumulative_funding: f64,
+    /// Cumulative lending interest income (USD).
+    #[serde(default)]
+    pub cumulative_interest: f64,
+    /// Cumulative rewards income — gauge, airdrop, etc. (USD).
+    #[serde(default)]
+    pub cumulative_rewards: f64,
+    /// Cumulative swap/transaction costs (USD).
+    #[serde(default)]
+    pub cumulative_costs: f64,
 }
 
 impl RunState {

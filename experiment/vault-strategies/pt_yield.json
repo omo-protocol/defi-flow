@@ -18,7 +18,26 @@
     },
     "pendle_pt_khype_yt": {
       "hyperevm": "0x8e8df024cf6d3e916be0821ff3177db6981fcad2"
+    },
+    "morpho_usdc_vault": {
+      "hyperevm": "0x_REPLACE_VAULT"
+    },
+    "valuer_contract": {
+      "hyperevm": "0x_REPLACE_VALUER"
     }
+  },
+  "reserve": {
+    "vault_address": "morpho_usdc_vault",
+    "vault_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+    "vault_token": "USDC"
+  },
+  "valuer": {
+    "contract": "valuer_contract",
+    "strategy_id": "pt_yield",
+    "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+    "confidence": 90,
+    "underlying_decimals": 6,
+    "push_interval": 3600
   },
   "nodes": [
     {
@@ -26,7 +45,7 @@
       "id": "wallet",
       "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
       "token": "USDC",
-      "address": "0x7BB51c8a55D8F0431f4E9CaA5cC502d7a381aC6b"
+      "address": "0x_REPLACE_WALLET"
     },
     {
       "type": "pendle",

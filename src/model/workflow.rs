@@ -8,6 +8,7 @@ use super::chain::Chain;
 use super::edge::Edge;
 use super::node::Node;
 use super::reserve::ReserveConfig;
+use super::valuer::ValuerConfig;
 
 /// A named workflow: a directed acyclic graph of DeFi operation nodes
 /// connected by token-flow edges.
@@ -35,6 +36,11 @@ pub struct Workflow {
     /// unwinds venue positions to replenish it when depleted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reserve: Option<ReserveConfig>,
+    /// Optional onchain valuer configuration.
+    /// When present, the daemon pushes TVL to a Morpho v2 valuer contract
+    /// after each tick, subject to `push_interval` throttling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuer: Option<ValuerConfig>,
     /// The nodes (operations) in this workflow.
     pub nodes: Vec<Node>,
     /// The edges (token flows) connecting nodes.
