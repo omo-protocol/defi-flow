@@ -459,7 +459,7 @@ function MovementConfig({ node, defi, onUpdate }: ConfigProps<MovementNode>) {
         onChange={(v) => onUpdate("provider", v)}
         options={[
           { value: "LiFi", label: "LiFi" },
-          { value: "Stargate", label: "Stargate" },
+          { value: "HyperliquidNative", label: "Hyperliquid Native" },
         ]}
       />
       <TextField

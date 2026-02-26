@@ -1,3 +1,4 @@
+pub mod hyperliquid_native;
 pub mod lifi;
 pub mod simulator;
 
@@ -35,6 +36,7 @@ impl VenueCategory for MovementCategory {
         match node {
             Node::Movement {
                 movement_type,
+                provider,
                 to_token,
                 ..
             } => match mode {
@@ -69,7 +71,17 @@ impl VenueCategory for MovementCategory {
                     }
                 },
                 BuildMode::Live { config, tokens, .. } => {
-                    Ok(Some(Box::new(lifi::LiFiMovement::new(config, tokens)?)))
+                    use crate::model::node::MovementProvider;
+                    match provider {
+                        MovementProvider::LiFi => {
+                            Ok(Some(Box::new(lifi::LiFiMovement::new(config, tokens)?)))
+                        }
+                        MovementProvider::HyperliquidNative => {
+                            Ok(Some(Box::new(
+                                hyperliquid_native::HyperliquidNativeMovement::new(config)?,
+                            )))
+                        }
+                    }
                 }
             },
             _ => Ok(None),

@@ -88,11 +88,14 @@ ${chainList}
 5. **Amount**: Use \`{"type": "all"}\` for most edges. Optimizer edges also use \`{"type": "all"}\` — the optimizer handles splitting internally.
 6. **Optimizer**: When using Kelly optimizer, every allocation target_node (or target_nodes group) must have an outgoing edge from the optimizer. Set kelly_fraction to 0.5 (half-Kelly) and drift_threshold to 0.05 by default.
 7. **Delta-neutral groups**: For spot+perp hedges, use \`target_nodes: ["buy_eth", "short_eth"]\` in the allocation (not separate allocations). Set correlation to 0.0.
-8. **Token manifests**: Only needed for EVM chains (chains with chain_id). Namespace-only chains like "hyperliquid" don't need token addresses. Map token symbol → chain name → contract address.
+8. **Token manifests**: Map token symbol → chain name → contract address. Only needed for chains where you interact with ERC20 contracts (e.g. hyperevm, base). Hyperliquid L1 (chain 1337) uses its own perp/spot API, so tokens there don't need manifest entries.
 9. **Contract manifests**: For lending/vault nodes, map the pool_address label → chain → contract address.
-10. **Hyperliquid**: Perps and spot on Hyperliquid use namespace-only chain (no chain_id, no rpc_url). Don't include "hyperliquid" entries in token manifests.
+10. **Hyperliquid**: Hyperliquid L1 is chain_id 1337. HyperEVM is chain_id 999. They are separate chains. Perps/spot live on Hyperliquid L1 (1337). Lending/DeFi contracts live on HyperEVM (999). Use movement(bridge) nodes to move tokens between them.
 11. **Lending**: Use archetype "aave_v3" for any Aave V3 fork (like HyperLend). Include pool_address, rewards_controller, and defillama_slug.
-12. **Movement**: Bridges need from_chain and to_chain. Swaps need from_token and to_token.
+12. **Movement providers**: Two providers available:
+    - \`LiFi\`: For cross-EVM-chain bridges/swaps (e.g. Base↔Arbitrum, Base↔HyperEVM). Supports swap, bridge, swap_bridge.
+    - \`HyperliquidNative\`: For HyperCore (hyperliquid) ↔ HyperEVM native spot transfers only. Bridge only, no swaps. Uses Hyperliquid's native spotSend.
+    - To move tokens from e.g. Base to Hyperliquid: Base→HyperEVM (LiFi bridge) → HyperEVM→Hyperliquid (HyperliquidNative bridge). Two movement nodes.
 13. **Wallet**: Always start the DAG with a wallet node as the entry point. Include a real-looking address or leave as "0x..." placeholder.
 
 ## JSON Schema

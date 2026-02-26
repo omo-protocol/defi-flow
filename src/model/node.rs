@@ -44,10 +44,10 @@ pub enum MovementType {
 /// Movement provider — which aggregator/protocol to use.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum MovementProvider {
-    /// LiFi — supports swap, bridge, and swap+bridge atomically.
+    /// LiFi — supports swap, bridge, and swap+bridge atomically across EVM chains.
     LiFi,
-    /// Stargate — bridge only.
-    Stargate,
+    /// Native HyperCore ↔ HyperEVM spot transfers via `spotSend` / ERC20 system address.
+    HyperliquidNative,
 }
 
 /// Vault protocol interface archetypes.

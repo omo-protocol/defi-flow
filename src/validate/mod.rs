@@ -40,6 +40,16 @@ pub enum ValidationError {
     #[error("Bridge node `{node_id}` has identical from_chain and to_chain")]
     BridgeSameChain { node_id: String },
 
+    #[error("Movement `{node_id}`: HyperliquidNative only supports bridge transfers (HyperCore ↔ HyperEVM). For swaps, add a HyperliquidNative bridge to HyperEVM, a LiFi swap node there, then bridge back.")]
+    HyperliquidNativeSwapNotSupported { node_id: String },
+
+    #[error("Movement `{node_id}`: HyperliquidNative bridges only work between hyperliquid (HyperCore) and hyperevm. Got {from_chain} → {to_chain}.")]
+    HyperliquidNativeWrongChains {
+        node_id: String,
+        from_chain: String,
+        to_chain: String,
+    },
+
     #[error("Optimizer `{node_id}` has no allocations (needs at least 1 venue)")]
     OptimizerNoAllocations { node_id: String },
 
@@ -141,6 +151,15 @@ pub enum ValidationError {
         address: String,
         expected: String,
     },
+
+    // ── Movement quote validation errors ──────────────────────────────
+
+    #[error("Movement `{node_id}`: no route found via {provider} ({reason})")]
+    MovementNoRoute {
+        node_id: String,
+        provider: String,
+        reason: String,
+    },
 }
 
 #[cfg(feature = "full")]
@@ -200,7 +219,7 @@ pub fn run(path: &std::path::Path) -> anyhow::Result<()> {
 
     let (warnings, hard): (Vec<_>, Vec<_>) = errors
         .into_iter()
-        .partition(|e| matches!(e, ValidationError::RpcUnreachable { .. }));
+        .partition(|e| matches!(e, ValidationError::RpcUnreachable { .. } | ValidationError::MovementNoRoute { .. }));
 
     for w in &warnings {
         eprintln!("  warning: {}", w);

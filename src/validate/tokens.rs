@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::model::chain::Chain;
-use crate::model::node::{MovementType, Node, PerpAction, TokenFlow};
+use crate::model::node::{MovementProvider, MovementType, Node, PerpAction, TokenFlow};
 use crate::model::Workflow;
 
 use super::ValidationError;
@@ -303,18 +303,20 @@ fn check_token_manifest(workflow: &Workflow) -> Vec<ValidationError> {
         None => return Vec::new(),
     };
 
-    // Collect namespace-only chains (no chain_id → no contract addresses).
+    // Collect namespace-only chains (no rpc_url → no on-chain contracts).
     // Tokens on these chains are identified by name, not address.
+    // e.g. Hyperliquid L1 has chain_id 1337 (for LiFi routing) but no RPC —
+    // perps/spot use the Hyperliquid API, not EVM contracts.
     let namespace_chains: HashSet<String> = {
         let mut set = HashSet::new();
         for node in &workflow.nodes {
             if let Some(chain) = node.chain() {
-                if chain.chain_id.is_none() {
+                if chain.rpc_url.is_none() {
                     set.insert(chain.name.to_lowercase());
                 }
             }
             if let Some(chain) = node.input_chain() {
-                if chain.chain_id.is_none() {
+                if chain.rpc_url.is_none() {
                     set.insert(chain.name.to_lowercase());
                 }
             }
@@ -350,11 +352,11 @@ fn check_token_manifest(workflow: &Workflow) -> Vec<ValidationError> {
         }
     };
 
-    // Check all node tokens (skip non-EVM chains — no contract addresses)
+    // Check all node tokens (skip chains without RPC — no on-chain contracts)
     for node in &workflow.nodes {
         match node {
             Node::Wallet { token, chain, .. } => {
-                if chain.chain_id.is_some() {
+                if chain.rpc_url.is_some() {
                     check(token, &chain.name);
                 }
             }
@@ -366,36 +368,36 @@ fn check_token_manifest(workflow: &Workflow) -> Vec<ValidationError> {
                 ..
             } => {
                 if let Some(fc) = from_chain {
-                    if fc.chain_id.is_some() {
+                    if fc.rpc_url.is_some() {
                         check(from_token, &fc.name);
                     }
                 }
                 if let Some(tc) = to_chain {
-                    if tc.chain_id.is_some() {
+                    if tc.rpc_url.is_some() {
                         check(to_token, &tc.name);
                     }
                 }
             }
             Node::Lending { asset, chain, .. } => {
-                if chain.chain_id.is_some() {
+                if chain.rpc_url.is_some() {
                     check(asset, &chain.name);
                 }
             }
             Node::Vault { asset, chain, .. } => {
-                if chain.chain_id.is_some() {
+                if chain.rpc_url.is_some() {
                     check(asset, &chain.name);
                 }
             }
             Node::Perp { margin_token, .. } => {
-                // Both Hyperliquid and Hyena margin lives on HyperCore (non-EVM)
-                // — no EVM token manifest address to check.
+                // Both Hyperliquid and Hyena margin lives on HyperCore
+                // — uses HL API, not EVM contracts.
                 let _ = margin_token;
             }
             Node::Lp { pool, chain, .. } => {
                 // Pool is "TOKEN0/TOKEN1" — validate both tokens on the LP chain
-                // Skip namespace-only chains (no addresses needed)
+                // Skip chains without RPC (no on-chain contracts)
                 let lp_chain = chain.as_ref();
-                if lp_chain.map(|c| c.chain_id.is_some()).unwrap_or(true) {
+                if lp_chain.map(|c| c.rpc_url.is_some()).unwrap_or(true) {
                     let chain_name = lp_chain
                         .map(|c| c.name.as_str())
                         .unwrap_or("base");
@@ -409,18 +411,18 @@ fn check_token_manifest(workflow: &Workflow) -> Vec<ValidationError> {
     }
 
     // Check edge tokens against the chain of the source/dest node
-    // (skip non-EVM chains — no contract addresses to verify)
+    // (skip chains without RPC — no contract addresses to verify)
     for edge in &workflow.edges {
         if let Some(from_node) = node_map.get(edge.from_node.as_str()) {
             if let Some(chain) = from_node.chain() {
-                if chain.chain_id.is_some() {
+                if chain.rpc_url.is_some() {
                     check(&edge.token, &chain.name);
                 }
             }
         }
         if let Some(to_node) = node_map.get(edge.to_node.as_str()) {
             if let Some(chain) = to_node.input_chain() {
-                if chain.chain_id.is_some() {
+                if chain.rpc_url.is_some() {
                     check(&edge.token, &chain.name);
                 }
             }
@@ -439,6 +441,7 @@ fn check_movement_nodes(workflow: &Workflow) -> Vec<ValidationError> {
         if let Node::Movement {
             id,
             movement_type,
+            provider,
             from_chain,
             to_chain,
             ..
@@ -457,6 +460,40 @@ fn check_movement_nodes(workflow: &Workflow) -> Vec<ValidationError> {
                     }
                 }
                 MovementType::Swap => {}
+            }
+
+            // HyperliquidNative provider constraints
+            if matches!(provider, MovementProvider::HyperliquidNative) {
+                // Only bridge transfers — no swaps
+                if matches!(movement_type, MovementType::Swap | MovementType::SwapBridge) {
+                    errors.push(ValidationError::HyperliquidNativeSwapNotSupported {
+                        node_id: id.clone(),
+                    });
+                }
+
+                // Must be between hyperliquid and hyperevm (either direction)
+                if matches!(movement_type, MovementType::Bridge) {
+                    let fc = from_chain.as_ref().map(|c| c.name.to_lowercase());
+                    let tc = to_chain.as_ref().map(|c| c.name.to_lowercase());
+                    let valid = matches!(
+                        (fc.as_deref(), tc.as_deref()),
+                        (Some("hyperliquid"), Some("hyperevm"))
+                            | (Some("hyperevm"), Some("hyperliquid"))
+                    );
+                    if !valid {
+                        errors.push(ValidationError::HyperliquidNativeWrongChains {
+                            node_id: id.clone(),
+                            from_chain: from_chain
+                                .as_ref()
+                                .map(|c| c.name.clone())
+                                .unwrap_or_else(|| "?".into()),
+                            to_chain: to_chain
+                                .as_ref()
+                                .map(|c| c.name.clone())
+                                .unwrap_or_else(|| "?".into()),
+                        });
+                    }
+                }
             }
         }
     }

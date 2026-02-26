@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// In JSON, chains are always objects:
 /// - EVM chain: `{"name": "ethereum", "chain_id": 1, "rpc_url": "https://eth.llamarpc.com"}`
-/// - Named non-EVM: `{"name": "hyperliquid"}` (no chain_id/rpc_url)
+/// - Named chain: `{"name": "hyperliquid"}` (chain_id/rpc_url filled from registry)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Chain {
     /// Human-readable chain name (e.g. "ethereum", "base", "hyperliquid").
@@ -84,12 +84,13 @@ impl Chain {
             rpc_url: Some("https://rpc.hyperliquid.xyz/evm".into()),
         }
     }
-    /// HyperCore (Hyperliquid L1) — named "hyperliquid" on LiFi/Stargate.
-    /// No EVM RPC; used for bridging/routing only.
+    /// HyperCore (Hyperliquid L1) — chain 1337 on LiFi.
+    /// Perps/spot use the Hyperliquid API (not EVM RPC), but LiFi
+    /// exposes it as chain 1337 for bridging/routing.
     pub fn hyperliquid() -> Self {
         Chain {
             name: "hyperliquid".into(),
-            chain_id: None,
+            chain_id: Some(1337),
             rpc_url: None,
         }
     }

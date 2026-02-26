@@ -7,7 +7,7 @@ use alloy::sol;
 use ferrofluid::InfoProvider;
 
 use crate::model::chain::Chain;
-use crate::model::node::{Node, PerpVenue, SpotVenue};
+use crate::model::node::{MovementType, Node, PerpVenue, SpotVenue};
 use crate::model::Workflow;
 
 use super::ValidationError;
@@ -126,6 +126,174 @@ pub async fn validate_onchain(workflow: &Workflow) -> Vec<ValidationError> {
 
         // Check code + interface for all addresses on this chain
         errors.extend(check_addresses(&provider, chain_name, checks).await);
+    }
+
+    // Movement node quote checks (LiFi)
+    errors.extend(check_movement_quotes(workflow).await);
+
+    errors
+}
+
+// ── Movement quote validation (LiFi) ────────────────────────────────
+
+/// For each Movement node, hit the LiFi /quote endpoint to verify a route
+/// actually exists for the requested token pair + chains.
+async fn check_movement_quotes(workflow: &Workflow) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+
+    let token_manifest = workflow.tokens.clone().unwrap_or_default();
+
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent("defi-flow/0.1")
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return errors, // can't build client — skip silently
+    };
+
+    for node in &workflow.nodes {
+        let (id, movement_type, provider, from_token, to_token, from_chain, to_chain) = match node {
+            Node::Movement {
+                id,
+                movement_type,
+                provider,
+                from_token,
+                to_token,
+                from_chain,
+                to_chain,
+                ..
+            } => (id, movement_type, provider, from_token, to_token, from_chain, to_chain),
+            _ => continue,
+        };
+
+        // Only quote-check LiFi nodes — HyperliquidNative uses its own native bridge
+        if !matches!(provider, crate::model::node::MovementProvider::LiFi) {
+            continue;
+        }
+
+        // Determine source and destination chains based on movement type
+        let (src_chain, dst_chain) = match movement_type {
+            MovementType::Swap => {
+                let c = from_chain
+                    .as_ref()
+                    .or(to_chain.as_ref())
+                    .cloned()
+                    .unwrap_or_else(Chain::hyperevm);
+                (c.clone(), c)
+            }
+            MovementType::Bridge | MovementType::SwapBridge => {
+                let fc = match from_chain.as_ref() {
+                    Some(c) => c.clone(),
+                    None => continue, // can't validate without from_chain
+                };
+                let tc = match to_chain.as_ref() {
+                    Some(c) => c.clone(),
+                    None => continue, // can't validate without to_chain
+                };
+                (fc, tc)
+            }
+        };
+
+        // Resolve chain_id from registry if missing (e.g. JSON has just {"name": "hyperliquid"})
+        let src_chain = if src_chain.chain_id().is_none() {
+            Chain::from_name(&src_chain.name)
+        } else {
+            src_chain
+        };
+        let dst_chain = if dst_chain.chain_id().is_none() {
+            Chain::from_name(&dst_chain.name)
+        } else {
+            dst_chain
+        };
+
+        // LiFi requires chain_id on both sides
+        let from_chain_id = match src_chain.chain_id() {
+            Some(id) => id,
+            None => continue, // unknown chain with no chain_id — skip
+        };
+        let to_chain_id = match dst_chain.chain_id() {
+            Some(id) => id,
+            None => continue,
+        };
+
+        // Resolve token addresses from manifest, fall back to symbol
+        let from_addr = token_manifest
+            .get(from_token.as_str())
+            .and_then(|chains| {
+                chains
+                    .iter()
+                    .find(|(c, _)| c.eq_ignore_ascii_case(&src_chain.name))
+                    .map(|(_, addr)| addr.clone())
+            })
+            .unwrap_or_else(|| from_token.clone());
+
+        let to_addr = token_manifest
+            .get(to_token.as_str())
+            .and_then(|chains| {
+                chains
+                    .iter()
+                    .find(|(c, _)| c.eq_ignore_ascii_case(&dst_chain.name))
+                    .map(|(_, addr)| addr.clone())
+            })
+            .unwrap_or_else(|| to_token.clone());
+
+        // Use a small test amount (1 USDC = 1_000_000 for 6-decimal tokens,
+        // or 1e18 for 18-decimal tokens)
+        let test_amount = match from_token.to_uppercase().as_str() {
+            "USDC" | "USDT" => "1000000",
+            "WBTC" | "CBBTC" => "100000000",
+            _ => "1000000000000000000", // 1e18
+        };
+
+        // Use a dummy wallet address for the quote
+        let dummy_wallet = "0x0000000000000000000000000000000000000001";
+
+        let url = format!(
+            "https://li.quest/v1/quote?\
+            fromChain={from_chain_id}&\
+            toChain={to_chain_id}&\
+            fromToken={from_addr}&\
+            toToken={to_addr}&\
+            fromAmount={test_amount}&\
+            fromAddress={dummy_wallet}&\
+            slippage=0.03"
+        );
+
+        println!("  LiFi quote check: {id} ({from_token}@{from_chain_id} → {to_token}@{to_chain_id})");
+
+        match tokio::time::timeout(Duration::from_secs(15), client.get(&url).send()).await {
+            Ok(Ok(resp)) => {
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    // Try to extract a useful message from LiFi error JSON
+                    let reason = serde_json::from_str::<serde_json::Value>(&body)
+                        .ok()
+                        .and_then(|v| v.get("message").and_then(|m| m.as_str().map(String::from)))
+                        .unwrap_or_else(|| format!("HTTP {status}"));
+                    errors.push(ValidationError::MovementNoRoute {
+                        node_id: id.clone(),
+                        provider: "LiFi".to_string(),
+                        reason,
+                    });
+                }
+            }
+            Ok(Err(e)) => {
+                errors.push(ValidationError::MovementNoRoute {
+                    node_id: id.clone(),
+                    provider: "LiFi".to_string(),
+                    reason: format!("request failed: {e}"),
+                });
+            }
+            Err(_) => {
+                errors.push(ValidationError::MovementNoRoute {
+                    node_id: id.clone(),
+                    provider: "LiFi".to_string(),
+                    reason: "timeout (15s)".to_string(),
+                });
+            }
+        }
     }
 
     errors

@@ -68,7 +68,7 @@ pub fn run() -> anyhow::Result<()> {
             Node::Movement {
                 id: "bridge_hyper".into(),
                 movement_type: MovementType::Bridge,
-                provider: MovementProvider::Stargate,
+                provider: MovementProvider::LiFi,
                 from_token: "USDe".into(),
                 to_token: "USDe".into(),
                 from_chain: Some(Chain::mantle()),

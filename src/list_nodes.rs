@@ -20,7 +20,7 @@ pub fn run() -> anyhow::Result<()> {
      - leverage:      f64           (e.g. 5.0)           — required for open/adjust
      - margin_token:  String?       (margin/collateral token, default: "USDC" for Hyperliquid, "USDe" for Hyena)
                                      Note: Hyperliquid USDC lives on HyperCore; must be bridged via
-                                     Stargate, not swappable via LiFi.
+                                     Must be bridged to HyperCore first.
      - trigger:       Trigger?      (optional, for periodic actions)
 
 3. options
@@ -51,7 +51,7 @@ pub fn run() -> anyhow::Result<()> {
    Unifies same-chain swaps, cross-chain bridges, and atomic cross-chain swaps.
    Parameters:
      - movement_type: MovementType     (swap | bridge | swap_bridge)
-     - provider:      MovementProvider (LiFi | Stargate)
+     - provider:      MovementProvider (LiFi)
      - from_token:    String           (e.g. "USDe", "AERO")
      - to_token:      String           (e.g. "USDC" — same as from_token for bridge)
      - from_chain:    Chain?           (source chain, optional for same-chain swaps)
@@ -61,7 +61,7 @@ pub fn run() -> anyhow::Result<()> {
      - swap:        Same-chain token conversion (e.g. AERO → USDC on Base).
                     Providers: LiFi.
      - bridge:      Cross-chain same-token transfer (e.g. USDe Mantle → USDe Hyperliquid).
-                    Providers: LiFi, Stargate.
+                    Providers: LiFi.
      - swap_bridge: Atomic cross-chain swap + bridge (e.g. AERO on Base → USDC on HyperEVM).
                     Providers: LiFi.
 

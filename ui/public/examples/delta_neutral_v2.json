@@ -21,7 +21,7 @@
     {
       "type": "wallet",
       "id": "wallet",
-      "chain": { "name": "hyperliquid" },
+      "chain": { "name": "hyperliquid", "chain_id": 1337 },
       "token": "USDC",
       "address": "0x7BB51c8a55D8F0431f4E9CaA5cC502d7a381aC6b"
     },
@@ -67,20 +67,20 @@
       "type": "movement",
       "id": "bridge_usdc",
       "movement_type": "bridge",
-      "provider": "Stargate",
+      "provider": "HyperliquidNative",
       "from_token": "USDC",
       "to_token": "USDC",
-      "from_chain": { "name": "hyperliquid" },
+      "from_chain": { "name": "hyperliquid", "chain_id": 1337 },
       "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
     },
     {
       "type": "movement",
       "id": "bridge_eth",
       "movement_type": "bridge",
-      "provider": "Stargate",
+      "provider": "HyperliquidNative",
       "from_token": "ETH",
       "to_token": "ETH",
-      "from_chain": { "name": "hyperliquid" },
+      "from_chain": { "name": "hyperliquid", "chain_id": 1337 },
       "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
     },
     {

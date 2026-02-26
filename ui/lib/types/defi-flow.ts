@@ -7,7 +7,7 @@ export type Chain = {
 };
 
 export const KNOWN_CHAINS: Chain[] = [
-  { name: "hyperliquid" },
+  { name: "hyperliquid", chain_id: 1337 },
   { name: "hyperevm", chain_id: 999, rpc_url: "https://rpc.hyperliquid.xyz/evm" },
   { name: "ethereum", chain_id: 1, rpc_url: "https://eth.llamarpc.com" },
   { name: "arbitrum", chain_id: 42161, rpc_url: "https://arb1.arbitrum.io/rpc" },
@@ -65,7 +65,7 @@ export type RyskAsset = "ETH" | "BTC" | "HYPE" | "SOL";
 export type PendleAction = "mint_pt" | "redeem_pt" | "mint_yt" | "redeem_yt" | "claim_rewards";
 
 export type MovementType = "swap" | "bridge" | "swap_bridge";
-export type MovementProvider = "LiFi" | "Stargate";
+export type MovementProvider = "LiFi" | "HyperliquidNative";
 
 export type OptimizerStrategy = "kelly";
 
