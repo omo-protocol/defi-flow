@@ -335,7 +335,7 @@ export function AgentPanel() {
           tokensManifestRef.current ?? undefined,
           contractsManifestRef.current ?? undefined,
         );
-        // Try API (offline + on-chain), fall back to WASM (offline only)
+        // Try API (offline + on-chain), only fall back to WASM on network errors
         try {
           const result = await validateApi(workflow, true);
           let output = result.valid ? "Validation passed (offline + on-chain)." : `Validation failed with ${result.errors.length} error(s):\n${result.errors.join("\n")}`;
@@ -343,12 +343,17 @@ export function AgentPanel() {
             output += `\n\nWarnings (${result.warnings.length}):\n${result.warnings.join("\n")}`;
           }
           return output;
-        } catch {
-          // API unavailable — fall back to WASM offline validation
-          const json = JSON.stringify(workflow);
-          const result = await validateWasm(json);
-          if (result.valid) return "Validation passed (offline only — API server not running for on-chain checks).";
-          return `Validation failed with ${(result.errors ?? []).length} error(s):\n${(result.errors ?? []).join("\n")}`;
+        } catch (err) {
+          // Only fall back to WASM if it's a network error (API not running)
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes("fetch") || msg.includes("Failed") || msg.includes("NetworkError") || msg.includes("ECONNREFUSED")) {
+            const json = JSON.stringify(workflow);
+            const result = await validateWasm(json);
+            if (result.valid) return "Validation passed (offline only — API server not running for on-chain checks).";
+            return `Validation failed with ${(result.errors ?? []).length} error(s):\n${(result.errors ?? []).join("\n")}`;
+          }
+          // API returned an error response — surface it, don't swallow
+          return `Validation error: ${msg}`;
         }
       },
 

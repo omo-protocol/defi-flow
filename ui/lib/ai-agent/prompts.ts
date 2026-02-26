@@ -93,7 +93,7 @@ ${chainList}
 - **Node IDs**: snake_case, unique (e.g. "buy_eth", "short_eth", "lend_usdc")
 - **Pairs**: "BASE/QUOTE" (e.g. "ETH/USDC")
 - **Edges**: Every non-wallet node needs an incoming edge. Use \`{"type": "all"}\` for amount.
-- **Wallet**: Always the DAG entry point. Use "0x..." placeholder if no address given.
+- **Wallet**: Always the DAG entry point. Use \`"0x0000000000000000000000000000000000000000"\` as a dummy address if no real address is given. Must be a valid 42-char hex address.
 - **Optimizer**: Kelly criterion. Edges from optimizer to each target. kelly_fraction=0.5, drift_threshold=0.05.
 - **Delta-neutral**: Group spot+perp in one allocation: \`target_nodes: ["buy_eth","short_eth"]\`, correlation=0.0.
 - **Hyperliquid L1** (1337): Perps, spot. **HyperEVM** (999): Lending, DeFi contracts. Separate chains.
