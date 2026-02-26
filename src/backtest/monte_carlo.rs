@@ -40,6 +40,8 @@ struct PerpParams {
     rewards_mean: f64,
     /// Mean bid-ask spread as fraction of price
     spread_frac: f64,
+    /// Pearson correlation between log returns and funding rates
+    price_funding_corr: f64,
     /// Original symbol
     symbol: String,
     /// Original timestamps
@@ -193,7 +195,7 @@ pub fn run(
             }
 
             // Generate ONE shared GBM price path for all correlated files
-            let shared_gbm = generate_gbm_prices(
+            let (shared_gbm, gbm_zs) = generate_gbm_prices(
                 shared_n_periods,
                 shared_price_drift,
                 shared_price_vol,
@@ -208,6 +210,7 @@ pub fn run(
                     kind,
                     params,
                     &shared_gbm,
+                    &gbm_zs,
                     &ts_to_gbm_idx,
                     perp_start_price,
                     &mut rng,
@@ -315,6 +318,45 @@ pub fn print_results(mc: &MonteCarloResult) {
         "  VaR(95%): ${:+.0}   VaR(99%): ${:+.0}",
         var95, var99,
     );
+
+    // Liquidation breakdown
+    let liq_sims: Vec<&super::result::BacktestResult> =
+        sims.iter().filter(|r| r.liquidations > 0).collect();
+    let no_liq_sims: Vec<&super::result::BacktestResult> =
+        sims.iter().filter(|r| r.liquidations == 0).collect();
+
+    if !liq_sims.is_empty() {
+        println!();
+        println!(
+            "  Liquidations: {}/{} sims ({:.1}%)",
+            liq_sims.len(),
+            sims.len(),
+            100.0 * liq_sims.len() as f64 / sims.len() as f64,
+        );
+
+        let mut liq_twrrs: Vec<f64> = liq_sims.iter().map(|r| r.twrr_pct).collect();
+        liq_twrrs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        println!(
+            "    Liquidated:  median {:+.2}%  (5th: {:+.2}%, 95th: {:+.2}%)",
+            percentile(&liq_twrrs, 50.0),
+            percentile(&liq_twrrs, 5.0),
+            percentile(&liq_twrrs, 95.0),
+        );
+
+        let mut noliq_twrrs: Vec<f64> = no_liq_sims.iter().map(|r| r.twrr_pct).collect();
+        noliq_twrrs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        if !noliq_twrrs.is_empty() {
+            println!(
+                "    No-liq:      median {:+.2}%  (5th: {:+.2}%, 95th: {:+.2}%)",
+                percentile(&noliq_twrrs, 50.0),
+                percentile(&noliq_twrrs, 5.0),
+                percentile(&noliq_twrrs, 95.0),
+            );
+        }
+    } else {
+        println!("  No liquidations across all {} simulations.", sims.len());
+    }
+
     println!("{}", "═".repeat(68));
 }
 
@@ -399,6 +441,16 @@ fn estimate_perp_params(path: &Path) -> Result<PerpParams> {
         .collect();
     let spread_frac = mean(&spreads).max(0.0001);
 
+    // Price-funding correlation: Pearson corr between log returns and funding rates
+    // (aligned: log_returns[i] corresponds to funding_rates[i+1])
+    let price_funding_corr = if log_returns.len() >= 3 && funding_rates.len() > 1 {
+        let fr_aligned = &funding_rates[1..log_returns.len().min(funding_rates.len())];
+        let lr_aligned = &log_returns[..fr_aligned.len()];
+        pearson_corr(lr_aligned, fr_aligned)
+    } else {
+        0.0
+    };
+
     Ok(PerpParams {
         n_periods: n,
         start_price: rows[0].mark_price,
@@ -409,6 +461,7 @@ fn estimate_perp_params(path: &Path) -> Result<PerpParams> {
         funding_sigma,
         rewards_mean,
         spread_frac,
+        price_funding_corr,
         symbol: rows[0].symbol.clone(),
         timestamps,
     })
@@ -499,22 +552,25 @@ fn estimate_vault_params(path: &Path) -> Result<VaultParams> {
 // ── Synthetic data generation ─────────────────────────────────────────
 
 /// Generate a GBM price path: S_t = S_0 * exp(sum(drift + vol*Z_i))
-/// Returns price multipliers (relative to start) for each period.
+/// Returns (price_multipliers, z_innovations) so the Z's can be reused
+/// for correlated funding generation.
 fn generate_gbm_prices(
     n: usize,
     drift: f64,
     vol: f64,
     rng: &mut impl Rng,
-) -> Vec<f64> {
+) -> (Vec<f64>, Vec<f64>) {
     let mut prices = Vec::with_capacity(n);
+    let mut zs = Vec::with_capacity(n);
     let mut log_cum = 0.0;
 
     for _ in 0..n {
         let z = standard_normal(rng);
-        log_cum += drift - 0.5 * vol * vol + vol * z;
+        log_cum += drift + vol * z;
         prices.push(log_cum.exp());
+        zs.push(z);
     }
-    prices
+    (prices, zs)
 }
 
 /// Generate an OU (mean-reverting) path for funding rates.
@@ -531,6 +587,31 @@ fn generate_ou_path(
 
     for _ in 0..n {
         let z = standard_normal(rng);
+        x += theta * (mu - x) + sigma * z;
+        path.push(x);
+    }
+    path
+}
+
+/// Generate an OU path with innovations correlated to the GBM price Z's.
+/// z_funding = rho * z_price + sqrt(1-rho^2) * z_independent
+fn generate_correlated_ou_path(
+    n: usize,
+    mu: f64,
+    theta: f64,
+    sigma: f64,
+    rho: f64,
+    price_zs: &[f64],
+    rng: &mut impl Rng,
+) -> Vec<f64> {
+    let mut path = Vec::with_capacity(n);
+    let mut x = mu;
+    let rho_comp = (1.0 - rho * rho).max(0.0).sqrt();
+
+    for i in 0..n {
+        let z_price = if i < price_zs.len() { price_zs[i] } else { 0.0 };
+        let z_indep = standard_normal(rng);
+        let z = rho * z_price + rho_comp * z_indep;
         x += theta * (mu - x) + sigma * z;
         path.push(x);
     }
@@ -564,12 +645,13 @@ fn generate_synthetic_csv(
     _kind: &str,
     params: &CsvParams,
     shared_gbm: &[f64],
+    gbm_zs: &[f64],
     ts_to_gbm_idx: &std::collections::HashMap<u64, usize>,
     perp_start_price: Option<f64>,
     rng: &mut impl Rng,
 ) -> Result<()> {
     match params {
-        CsvParams::Perp(p) => generate_perp_csv(output_path, p, shared_gbm, rng),
+        CsvParams::Perp(p) => generate_perp_csv(output_path, p, shared_gbm, gbm_zs, rng),
         CsvParams::Price(p) => generate_price_csv(output_path, p, shared_gbm, ts_to_gbm_idx, perp_start_price),
         CsvParams::Lending(p) => generate_lending_csv(output_path, p, rng),
         CsvParams::Vault(p) => generate_vault_csv(output_path, p, rng),
@@ -585,16 +667,19 @@ fn generate_perp_csv(
     output_path: &Path,
     params: &PerpParams,
     shared_gbm: &[f64],
+    gbm_zs: &[f64],
     rng: &mut impl Rng,
 ) -> Result<()> {
     let n = params.n_periods;
 
-    // Generate funding rate path (OU process)
-    let funding_path = generate_ou_path(
+    // Generate funding rate path (OU process correlated with price)
+    let funding_path = generate_correlated_ou_path(
         n,
         params.funding_mean,
         params.funding_theta,
         params.funding_sigma,
+        params.price_funding_corr,
+        gbm_zs,
         rng,
     );
 
@@ -968,6 +1053,28 @@ fn estimate_ou(xs: &[f64]) -> (f64, f64) {
     let sigma = std_dev(&residuals).max(1e-10);
 
     (theta, sigma)
+}
+
+/// Pearson correlation coefficient between two equal-length slices.
+fn pearson_corr(xs: &[f64], ys: &[f64]) -> f64 {
+    let n = xs.len().min(ys.len());
+    if n < 3 {
+        return 0.0;
+    }
+    let mx = mean(&xs[..n]);
+    let my = mean(&ys[..n]);
+    let mut num = 0.0;
+    let mut dx2 = 0.0;
+    let mut dy2 = 0.0;
+    for i in 0..n {
+        let dx = xs[i] - mx;
+        let dy = ys[i] - my;
+        num += dx * dy;
+        dx2 += dx * dx;
+        dy2 += dy * dy;
+    }
+    let den = (dx2 * dy2).sqrt();
+    if den < 1e-20 { 0.0 } else { (num / den).clamp(-1.0, 1.0) }
 }
 
 /// Box-Muller transform to generate N(0,1) samples.

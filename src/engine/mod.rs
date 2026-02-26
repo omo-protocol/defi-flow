@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
 
+use crate::model::amount::Amount;
 use crate::model::node::{CronInterval, Node, NodeId, SpotSide, Trigger};
 use crate::model::workflow::Workflow;
 use crate::venues::{ExecutionResult, RiskParams, SimMetrics, Venue};
@@ -33,6 +34,10 @@ pub struct Engine {
 
     // ── Counters for metrics ──
     pub rebalances: u32,
+
+    /// Snapshot of balances before deploy, so percentage edges resolve against
+    /// the original balance (not the depleted one after earlier edges fire).
+    edge_balance_snapshots: HashMap<(NodeId, String), f64>,
 }
 
 impl Engine {
@@ -51,6 +56,7 @@ impl Engine {
             triggered_nodes,
             trigger_last_fired: HashMap::new(),
             rebalances: 0,
+            edge_balance_snapshots: HashMap::new(),
         }
     }
 
@@ -61,13 +67,30 @@ impl Engine {
 
     /// Run the one-time deploy phase: execute non-triggered nodes in topological order.
     pub async fn deploy(&mut self) -> Result<()> {
+        self.snapshot_deploy_balances();
         let order = self.deploy_order.clone();
         for node_id in &order {
             self.execute_node(node_id)
                 .await
                 .with_context(|| format!("deploying node '{node_id}'"))?;
         }
+        self.edge_balance_snapshots.clear();
         Ok(())
+    }
+
+    /// Snapshot balances for all source nodes that have outgoing percentage edges.
+    /// This ensures each percentage edge resolves against the original balance,
+    /// not the depleted one after earlier edges have already deducted.
+    fn snapshot_deploy_balances(&mut self) {
+        self.edge_balance_snapshots.clear();
+        for edge in &self.workflow.edges {
+            if matches!(edge.amount, Amount::Percentage { .. }) {
+                let key = (edge.from_node.clone(), edge.token.clone());
+                self.edge_balance_snapshots
+                    .entry(key)
+                    .or_insert_with(|| self.balances.get(&edge.from_node, &edge.token));
+            }
+        }
     }
 
     /// Advance the simulation by one tick:
@@ -253,8 +276,21 @@ impl Engine {
         let mut primary_token = String::new();
 
         for edge in &edges {
+            // For percentage edges, resolve against the snapshot (pre-depletion)
+            // so that 50%+50% fan-out actually gives 50/50, not 50/25.
+            let resolve_balance = if matches!(edge.amount, Amount::Percentage { .. }) {
+                let key = (edge.from_node.clone(), edge.token.clone());
+                self.edge_balance_snapshots
+                    .get(&key)
+                    .copied()
+                    .unwrap_or_else(|| self.balances.get(&edge.from_node, &edge.token))
+            } else {
+                self.balances.get(&edge.from_node, &edge.token)
+            };
+            let amount = state::resolve(resolve_balance, &edge.amount);
+            // Cap at actually available balance
             let available = self.balances.get(&edge.from_node, &edge.token);
-            let amount = state::resolve(available, &edge.amount);
+            let amount = amount.min(available);
             if amount > 0.0 {
                 self.balances.deduct(&edge.from_node, &edge.token, amount);
                 self.balances.add(node_id, &edge.token, amount);

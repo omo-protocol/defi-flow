@@ -79,7 +79,7 @@ impl PerpSimulator {
 
         let row = self.current_market();
         let unrealized_pnl = pos.position_amt * (row.mark_price - pos.entry_price);
-        let equity = pos.isolated_margin + unrealized_pnl;
+        let equity = pos.isolated_margin + unrealized_pnl + self.balance;
         let notional = pos.position_amt.abs() * row.mark_price;
         let maintenance_margin = notional * MAINT_MARGIN_RATE;
 
