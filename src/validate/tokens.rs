@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::model::amount::Amount;
 use crate::model::chain::Chain;
 use crate::model::node::{MovementProvider, MovementType, Node, PerpAction, TokenFlow};
 use crate::model::Workflow;
@@ -12,6 +13,15 @@ pub fn check_token_compatibility(workflow: &Workflow) -> Vec<ValidationError> {
 
     // Wallet address validation
     errors.extend(check_wallet_nodes(workflow));
+
+    // Orphan nodes (no incoming edges, except wallet)
+    errors.extend(check_orphan_nodes(workflow));
+
+    // Sink nodes with outgoing edges
+    errors.extend(check_sink_nodes(workflow));
+
+    // Edge distribution (percentage sums, no mixing all + percentage)
+    errors.extend(check_edge_distribution(workflow));
 
     // Movement-specific checks (bridge same-chain, etc.)
     errors.extend(check_movement_nodes(workflow));
@@ -73,6 +83,169 @@ fn is_valid_evm_address(addr: &str) -> bool {
     addr.len() == 42
         && addr.starts_with("0x")
         && addr[2..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+// ── Orphan node validation ──────────────────────────────────────────
+
+/// Every non-wallet node must have at least one incoming edge.
+/// A node with no incoming edges is orphaned — it will never receive tokens.
+fn check_orphan_nodes(workflow: &Workflow) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+
+    let nodes_with_incoming: HashSet<&str> = workflow
+        .edges
+        .iter()
+        .map(|e| e.to_node.as_str())
+        .collect();
+
+    for node in &workflow.nodes {
+        // Wallet is the DAG entry point — it doesn't need incoming edges
+        if matches!(node, Node::Wallet { .. }) {
+            continue;
+        }
+
+        if !nodes_with_incoming.contains(node.id()) {
+            let node_type = match node {
+                Node::Perp { .. } => "perp",
+                Node::Spot { .. } => "spot",
+                Node::Lending { .. } => "lending",
+                Node::Vault { .. } => "vault",
+                Node::Lp { .. } => "lp",
+                Node::Options { .. } => "options",
+                Node::Pendle { .. } => "pendle",
+                Node::Movement { .. } => "movement",
+                Node::Optimizer { .. } => "optimizer",
+                Node::Wallet { .. } => unreachable!(),
+            };
+            errors.push(ValidationError::OrphanNode {
+                node_id: node.id().to_string(),
+                node_type: node_type.to_string(),
+            });
+        }
+    }
+
+    errors
+}
+
+// ── Sink node validation ────────────────────────────────────────────
+
+/// Nodes whose `output_token()` is `None` are sinks — tokens go in and are
+/// locked (supply, deposit, open position, add liquidity, etc.).
+/// They must not have outgoing edges because there's nothing to flow out.
+fn check_sink_nodes(workflow: &Workflow) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+
+    // Collect nodes that are sources in any edge
+    let nodes_with_outgoing: HashSet<&str> = workflow
+        .edges
+        .iter()
+        .map(|e| e.from_node.as_str())
+        .collect();
+
+    for node in &workflow.nodes {
+        // Skip nodes that always pass through (wallet, optimizer, movement)
+        if matches!(
+            node,
+            Node::Wallet { .. } | Node::Optimizer { .. } | Node::Movement { .. }
+        ) {
+            continue;
+        }
+
+        if node.output_token().is_none() && nodes_with_outgoing.contains(node.id()) {
+            let (node_type, action) = node_type_action(node);
+            errors.push(ValidationError::SinkHasOutgoingEdge {
+                node_id: node.id().to_string(),
+                node_type,
+                action,
+            });
+        }
+    }
+
+    errors
+}
+
+/// Extract a human-readable (type, action) pair for error messages.
+fn node_type_action(node: &Node) -> (String, String) {
+    match node {
+        Node::Perp { action, .. } => ("perp".into(), format!("{action:?}")),
+        Node::Lending { action, .. } => ("lending".into(), format!("{action:?}")),
+        Node::Vault { action, .. } => ("vault".into(), format!("{action:?}")),
+        Node::Lp { action, .. } => ("lp".into(), format!("{action:?}")),
+        Node::Spot { side, .. } => ("spot".into(), format!("{side:?}")),
+        Node::Options { action, .. } => ("options".into(), format!("{action:?}")),
+        Node::Pendle { action, .. } => ("pendle".into(), format!("{action:?}")),
+        _ => (String::new(), String::new()),
+    }
+}
+
+// ── Edge distribution validation ────────────────────────────────────
+
+/// For nodes with multiple outgoing edges, validate that:
+/// - If edges use `percentage`, they sum to 100%.
+/// - Don't mix `all` with `percentage` (ambiguous).
+/// - `all` on multiple edges = equal split (valid).
+/// - `fixed` amounts are unconstrained.
+fn check_edge_distribution(workflow: &Workflow) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+
+    // Group outgoing edges by source node
+    let mut outgoing: HashMap<&str, Vec<&Amount>> = HashMap::new();
+    for edge in &workflow.edges {
+        outgoing
+            .entry(edge.from_node.as_str())
+            .or_default()
+            .push(&edge.amount);
+    }
+
+    let node_map: HashMap<&str, &Node> = workflow.nodes.iter().map(|n| (n.id(), n)).collect();
+
+    for (node_id, amounts) in &outgoing {
+        if amounts.len() <= 1 {
+            continue; // Single edge — no distribution to validate
+        }
+
+        // Only validate distribution for splitter nodes (wallet, optimizer)
+        let node = match node_map.get(node_id) {
+            Some(n) => n,
+            None => continue,
+        };
+        if !matches!(node, Node::Wallet { .. } | Node::Optimizer { .. }) {
+            continue;
+        }
+
+        let has_all = amounts.iter().any(|a| matches!(a, Amount::All));
+        let has_pct = amounts.iter().any(|a| matches!(a, Amount::Percentage { .. }));
+        let has_fixed = amounts.iter().any(|a| matches!(a, Amount::Fixed { .. }));
+
+        // Mixing all + percentage is ambiguous
+        if has_all && has_pct {
+            errors.push(ValidationError::MixedAmountTypes {
+                node_id: node_id.to_string(),
+                count: amounts.len(),
+            });
+            continue;
+        }
+
+        // If all edges are percentage, they must sum to 100
+        if has_pct && !has_fixed && !has_all {
+            let sum: f64 = amounts
+                .iter()
+                .filter_map(|a| match a {
+                    Amount::Percentage { value } => Some(*value),
+                    _ => None,
+                })
+                .sum();
+
+            if (sum - 100.0).abs() > 0.01 {
+                errors.push(ValidationError::PercentageSumNot100 {
+                    node_id: node_id.to_string(),
+                    sum,
+                });
+            }
+        }
+    }
+
+    errors
 }
 
 // ── Edge flow validation ────────────────────────────────────────────

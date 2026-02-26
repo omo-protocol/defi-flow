@@ -1,6 +1,13 @@
 import { atom } from "jotai";
 import type { DefiFlowWorkflow } from "@/lib/types/defi-flow";
 
+export type ToolActivity = {
+  id: string;
+  name: string;
+  args: string;
+  status: "running" | "done" | "error";
+};
+
 export type Message = {
   role: "user" | "assistant";
   content: string;
@@ -10,6 +17,8 @@ export type Message = {
   workflow?: DefiFlowWorkflow;
   /** Validation errors for this message's workflow (if any) */
   validationErrors?: string[];
+  /** Tool calls made during this assistant turn */
+  toolActivities?: ToolActivity[];
 };
 
 // In-memory only — never persisted to localStorage

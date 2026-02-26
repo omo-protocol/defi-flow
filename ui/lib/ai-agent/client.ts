@@ -305,6 +305,34 @@ export const TOOLS = [
       parameters: { type: "object", properties: {} },
     },
   },
+  {
+    type: "function" as const,
+    function: {
+      name: "auto_layout",
+      description:
+        "Auto-arrange all nodes on the canvas in a clean left-to-right DAG layout. Call this after building a strategy.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "import_workflow",
+      description:
+        "Import a complete DefiFlowWorkflow JSON onto the canvas. This REPLACES the entire canvas with the new strategy. Use this instead of individual add_node/add_edge calls when building a new strategy or making major changes. Much faster than adding nodes one by one.",
+      parameters: {
+        type: "object",
+        properties: {
+          workflow: {
+            type: "object",
+            description:
+              "The full DefiFlowWorkflow JSON object with name, nodes, edges, tokens, and contracts fields.",
+          },
+        },
+        required: ["workflow"],
+      },
+    },
+  },
 ];
 
 // ── Tool handlers (injected by the panel) ────────────────────────────
@@ -333,6 +361,8 @@ export type ToolHandlers = {
   get_run_status: (sessionId: string) => Promise<string>;
   list_data: () => Promise<string>;
   clear_canvas: () => string;
+  auto_layout: () => string;
+  import_workflow: (workflow: unknown) => string;
 };
 
 // ── Agentic loop ─────────────────────────────────────────────────────
@@ -355,7 +385,7 @@ export async function agentLoop(
   const url = `${base}/chat/completions`;
   const conversation = [...messages];
   let fullText = "";
-  const MAX_ITERATIONS = 20;
+  const MAX_ITERATIONS = 200;
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     const res = await fetch(url, {
@@ -521,6 +551,12 @@ export async function agentLoop(
             break;
           case "clear_canvas":
             result = handlers.clear_canvas();
+            break;
+          case "auto_layout":
+            result = handlers.auto_layout();
+            break;
+          case "import_workflow":
+            result = handlers.import_workflow(args.workflow);
             break;
           default:
             result = `Unknown tool: ${name}`;

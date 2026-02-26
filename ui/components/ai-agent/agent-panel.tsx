@@ -4,7 +4,8 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { nanoid } from "nanoid";
 import { toast } from "sonner";
-import { Bot, Send, Square, Wrench, Search, CheckCircle, Play, CircleStop, Database, Trash2, ChevronRight } from "lucide-react";
+import { Bot, Send, Square, Wrench, Search, CheckCircle, Play, CircleStop, Database, Trash2, ChevronRight, LayoutGrid } from "lucide-react";
+import Markdown from "react-markdown";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -14,6 +15,7 @@ import {
   messagesAtom,
   generatingAtom,
   type Message,
+  type ToolActivity,
 } from "@/lib/ai-agent/store";
 import { agentLoop, type ToolHandlers } from "@/lib/ai-agent/client";
 import { buildSystemPrompt } from "@/lib/ai-agent/prompts";
@@ -30,11 +32,13 @@ import {
   getNodeLabel,
   inferEdgeToken,
   type DefiNode,
+  type DefiFlowWorkflow,
 } from "@/lib/types/defi-flow";
-import { convertCanvasToDefiFlow } from "@/lib/converters/canvas-defi-flow";
+import { convertCanvasToDefiFlow, convertDefiFlowToCanvas } from "@/lib/converters/canvas-defi-flow";
 import type { CanvasNode, CanvasEdge } from "@/lib/types/canvas";
-import { validateWorkflow } from "@/lib/wasm";
+import { validateWorkflow as validateWasm } from "@/lib/wasm";
 import {
+  validateWorkflow as validateApi,
   runBacktest,
   fetchData,
   startDaemon,
@@ -78,15 +82,6 @@ function parseThinkContent(raw: string): { thinking: string; content: string } {
   return { thinking: thinking.trim(), content: content.trim() };
 }
 
-// ── Tool activity log for inline display ─────────────────────────────
-
-type ToolActivity = {
-  id: string;
-  name: string;
-  args: string;
-  status: "running" | "done" | "error";
-};
-
 // ── Main Component ───────────────────────────────────────────────────
 
 export function AgentPanel() {
@@ -105,22 +100,93 @@ export function AgentPanel() {
   const triggerAutosave = useSetAtom(autosaveAtom);
 
   const [input, setInput] = useState("");
-  const [toolActivities, setToolActivities] = useState<ToolActivity[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Mutable refs so tool handlers always see the latest state,
+  // even when multiple tools run in the same agent loop iteration
+  // (React state updates are async and won't be visible until re-render)
+  const nodesRef = useRef(nodes);
+  const edgesRef = useRef(edges);
+  const wfNameRef = useRef(wfName);
+  const tokensManifestRef = useRef(tokensManifest);
+  const contractsManifestRef = useRef(contractsManifest);
+  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+  useEffect(() => { edgesRef.current = edges; }, [edges]);
+  useEffect(() => { wfNameRef.current = wfName; }, [wfName]);
+  useEffect(() => { tokensManifestRef.current = tokensManifest; }, [tokensManifest]);
+  useEffect(() => { contractsManifestRef.current = contractsManifest; }, [contractsManifest]);
+
+  // Wrappers that update BOTH React state AND the ref immediately
+  const setNodesNow = useCallback((val: CanvasNode[] | ((prev: CanvasNode[]) => CanvasNode[])) => {
+    if (typeof val === "function") {
+      setNodes((prev) => {
+        const next = val(prev);
+        nodesRef.current = next;
+        return next;
+      });
+    } else {
+      nodesRef.current = val;
+      setNodes(val);
+    }
+  }, [setNodes]);
+
+  const setEdgesNow = useCallback((val: CanvasEdge[] | ((prev: CanvasEdge[]) => CanvasEdge[])) => {
+    if (typeof val === "function") {
+      setEdges((prev) => {
+        const next = val(prev);
+        edgesRef.current = next;
+        return next;
+      });
+    } else {
+      edgesRef.current = val;
+      setEdges(val);
+    }
+  }, [setEdges]);
+
+  const setWfNameNow = useCallback((val: string) => {
+    wfNameRef.current = val;
+    setWfName(val);
+  }, [setWfName]);
+
+  const setTokensManifestNow = useCallback((val: Record<string, Record<string, string>> | ((prev: Record<string, Record<string, string>> | null) => Record<string, Record<string, string>>)) => {
+    if (typeof val === "function") {
+      setTokensManifest((prev) => {
+        const next = val(prev ?? {});
+        tokensManifestRef.current = next;
+        return next;
+      });
+    } else {
+      tokensManifestRef.current = val;
+      setTokensManifest(val);
+    }
+  }, [setTokensManifest]);
+
+  const setContractsManifestNow = useCallback((val: Record<string, Record<string, string>> | ((prev: Record<string, Record<string, string>> | null) => Record<string, Record<string, string>>)) => {
+    if (typeof val === "function") {
+      setContractsManifest((prev) => {
+        const next = val(prev ?? {});
+        contractsManifestRef.current = next;
+        return next;
+      });
+    } else {
+      contractsManifestRef.current = val;
+      setContractsManifest(val);
+    }
+  }, [setContractsManifest]);
+
   // Auto-scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, toolActivities]);
+  }, [messages]);
 
   // ── Tool Handlers ──────────────────────────────────────────────────
 
   const buildHandlers = useCallback((): ToolHandlers => {
-    // Use refs to get latest state inside callbacks
-    const getNodes = () => nodes;
-    const getEdges = () => edges;
+    // Read from refs — always sees latest state even mid-agent-loop
+    const getNodes = () => nodesRef.current;
+    const getEdges = () => edgesRef.current;
 
     return {
       add_node: (nodeData: unknown) => {
@@ -147,7 +213,7 @@ export function AgentPanel() {
           },
         };
 
-        addNode(canvasNode);
+        setNodesNow([...currentNodes, canvasNode]);
         return `Added node "${node.id}" (${node.type})`;
       },
 
@@ -157,8 +223,8 @@ export function AgentPanel() {
         const exists = currentNodes.find((n) => n.id === nodeId);
         if (!exists) return `Error: node "${nodeId}" not found`;
 
-        setNodes(currentNodes.filter((n) => n.id !== nodeId));
-        setEdges(
+        setNodesNow(currentNodes.filter((n) => n.id !== nodeId));
+        setEdgesNow(
           currentEdges.filter(
             (e) => e.source !== nodeId && e.target !== nodeId,
           ),
@@ -182,7 +248,7 @@ export function AgentPanel() {
         };
         const newNodes = [...currentNodes];
         newNodes[idx] = updated;
-        setNodes(newNodes);
+        setNodesNow(newNodes);
         return `Updated node "${nodeId}": ${Object.keys(fields).join(", ")}`;
       },
 
@@ -214,7 +280,7 @@ export function AgentPanel() {
             sourceType: src.data.defiNode.type,
           },
         };
-        setEdges([...currentEdges, newEdge]);
+        setEdgesNow([...currentEdges, newEdge]);
         return `Added edge ${fromNode} → ${toNode} (${edgeToken})`;
       },
 
@@ -225,7 +291,7 @@ export function AgentPanel() {
         );
         if (filtered.length === currentEdges.length)
           return `Error: no edge ${fromNode} → ${toNode} found`;
-        setEdges(filtered);
+        setEdgesNow(filtered);
         return `Removed edge ${fromNode} → ${toNode}`;
       },
 
@@ -236,14 +302,14 @@ export function AgentPanel() {
         address: string,
       ) => {
         if (type === "tokens") {
-          setTokensManifest((prev) => {
+          setTokensManifestNow((prev) => {
             const m = prev ? structuredClone(prev) : {};
             if (!m[key]) m[key] = {};
             m[key][chain] = address;
             return m;
           });
         } else {
-          setContractsManifest((prev) => {
+          setContractsManifestNow((prev) => {
             const m = prev ? structuredClone(prev) : {};
             if (!m[key]) m[key] = {};
             m[key][chain] = address;
@@ -254,7 +320,7 @@ export function AgentPanel() {
       },
 
       set_name: (name: string) => {
-        setWfName(name);
+        setWfNameNow(name);
         return `Strategy name set to "${name}"`;
       },
 
@@ -264,15 +330,26 @@ export function AgentPanel() {
         const workflow = convertCanvasToDefiFlow(
           currentNodes,
           currentEdges,
-          wfName,
+          wfNameRef.current,
           undefined,
-          tokensManifest ?? undefined,
-          contractsManifest ?? undefined,
+          tokensManifestRef.current ?? undefined,
+          contractsManifestRef.current ?? undefined,
         );
-        const json = JSON.stringify(workflow);
-        const result = await validateWorkflow(json);
-        if (result.valid) return "Validation passed. Strategy is valid.";
-        return `Validation failed with ${(result.errors ?? []).length} error(s):\n${(result.errors ?? []).join("\n")}`;
+        // Try API (offline + on-chain), fall back to WASM (offline only)
+        try {
+          const result = await validateApi(workflow, true);
+          let output = result.valid ? "Validation passed (offline + on-chain)." : `Validation failed with ${result.errors.length} error(s):\n${result.errors.join("\n")}`;
+          if (result.warnings.length > 0) {
+            output += `\n\nWarnings (${result.warnings.length}):\n${result.warnings.join("\n")}`;
+          }
+          return output;
+        } catch {
+          // API unavailable — fall back to WASM offline validation
+          const json = JSON.stringify(workflow);
+          const result = await validateWasm(json);
+          if (result.valid) return "Validation passed (offline only — API server not running for on-chain checks).";
+          return `Validation failed with ${(result.errors ?? []).length} error(s):\n${(result.errors ?? []).join("\n")}`;
+        }
       },
 
       backtest: async (capital?: number, monteCarlo?: number) => {
@@ -281,10 +358,10 @@ export function AgentPanel() {
         const workflow = convertCanvasToDefiFlow(
           currentNodes,
           currentEdges,
-          wfName,
+          wfNameRef.current,
           undefined,
-          tokensManifest ?? undefined,
-          contractsManifest ?? undefined,
+          tokensManifestRef.current ?? undefined,
+          contractsManifestRef.current ?? undefined,
         );
         try {
           const res = await runBacktest(workflow, {
@@ -352,10 +429,10 @@ export function AgentPanel() {
         const workflow = convertCanvasToDefiFlow(
           currentNodes,
           currentEdges,
-          wfName,
+          wfNameRef.current,
           undefined,
-          tokensManifest ?? undefined,
-          contractsManifest ?? undefined,
+          tokensManifestRef.current ?? undefined,
+          contractsManifestRef.current ?? undefined,
         );
         return JSON.stringify(workflow, null, 2);
       },
@@ -365,8 +442,8 @@ export function AgentPanel() {
         const currentEdges = getEdges();
         if (currentNodes.length === 0) return "Error: canvas is empty, nothing to fetch data for.";
         const workflow = convertCanvasToDefiFlow(
-          currentNodes, currentEdges, wfName, undefined,
-          tokensManifest ?? undefined, contractsManifest ?? undefined,
+          currentNodes, currentEdges, wfNameRef.current, undefined,
+          tokensManifestRef.current ?? undefined, contractsManifestRef.current ?? undefined,
         );
         try {
           const res = await fetchData(workflow, { days: days ?? 30, interval: interval ?? "1h" });
@@ -381,8 +458,8 @@ export function AgentPanel() {
         const currentEdges = getEdges();
         if (currentNodes.length === 0) return "Error: canvas is empty, nothing to run.";
         const workflow = convertCanvasToDefiFlow(
-          currentNodes, currentEdges, wfName, undefined,
-          tokensManifest ?? undefined, contractsManifest ?? undefined,
+          currentNodes, currentEdges, wfNameRef.current, undefined,
+          tokensManifestRef.current ?? undefined, contractsManifestRef.current ?? undefined,
         );
         try {
           const res = await startDaemon(workflow, {
@@ -443,12 +520,99 @@ export function AgentPanel() {
       },
 
       clear_canvas: () => {
-        setNodes([]);
-        setEdges([]);
+        setNodesNow([]);
+        setEdgesNow([]);
         return "Canvas cleared. All nodes and edges removed.";
       },
+
+      auto_layout: () => {
+        const currentNodes = getNodes();
+        const currentEdges = getEdges();
+        if (currentNodes.length === 0) return "Canvas is empty, nothing to layout.";
+
+        // Build adjacency
+        const children: Record<string, string[]> = {};
+        const parents: Record<string, string[]> = {};
+        for (const n of currentNodes) {
+          children[n.id] = [];
+          parents[n.id] = [];
+        }
+        for (const e of currentEdges) {
+          children[e.source]?.push(e.target);
+          parents[e.target]?.push(e.source);
+        }
+
+        // Topological sort via Kahn's algorithm
+        const inDeg: Record<string, number> = {};
+        for (const n of currentNodes) inDeg[n.id] = parents[n.id].length;
+        const queue = currentNodes.filter((n) => inDeg[n.id] === 0).map((n) => n.id);
+        const sorted: string[] = [];
+        while (queue.length > 0) {
+          const id = queue.shift()!;
+          sorted.push(id);
+          for (const child of children[id] ?? []) {
+            inDeg[child]--;
+            if (inDeg[child] === 0) queue.push(child);
+          }
+        }
+        // Add any remaining (cycles or disconnected)
+        for (const n of currentNodes) {
+          if (!sorted.includes(n.id)) sorted.push(n.id);
+        }
+
+        // Assign layers by longest path from roots
+        const layer: Record<string, number> = {};
+        for (const id of sorted) {
+          const pLayers = parents[id].map((p) => layer[p] ?? 0);
+          layer[id] = pLayers.length > 0 ? Math.max(...pLayers) + 1 : 0;
+        }
+
+        // Group by layer
+        const layers: Record<number, string[]> = {};
+        for (const [id, l] of Object.entries(layer)) {
+          if (!layers[l]) layers[l] = [];
+          layers[l].push(id);
+        }
+
+        const SPACING_X = 320;
+        const SPACING_Y = 160;
+        const START_X = 60;
+        const START_Y = 60;
+
+        const newNodes = currentNodes.map((n) => {
+          const l = layer[n.id] ?? 0;
+          const nodesInLayer = layers[l] ?? [n.id];
+          const idx = nodesInLayer.indexOf(n.id);
+          return {
+            ...n,
+            position: {
+              x: START_X + l * SPACING_X,
+              y: START_Y + idx * SPACING_Y,
+            },
+          };
+        });
+
+        setNodesNow(newNodes);
+        return `Auto-layout complete. Arranged ${newNodes.length} nodes in ${Object.keys(layers).length} columns.`;
+      },
+
+      import_workflow: (workflow: unknown) => {
+        try {
+          const wf = workflow as DefiFlowWorkflow;
+          if (!wf.nodes || !wf.edges) return "Error: workflow must have nodes and edges arrays";
+          const result = convertDefiFlowToCanvas(wf);
+          setNodesNow(result.nodes);
+          setEdgesNow(result.edges);
+          if (wf.name) setWfNameNow(wf.name);
+          if (result.tokens) setTokensManifestNow(result.tokens);
+          if (result.contracts) setContractsManifestNow(result.contracts);
+          return `Imported strategy "${wf.name ?? "Untitled"}": ${result.nodes.length} nodes, ${result.edges.length} edges. Call auto_layout to arrange them.`;
+        } catch (err) {
+          return `Import failed: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
     };
-  }, [nodes, edges, wfName, tokensManifest, contractsManifest, addNode, setNodes, setEdges, setWfName, setTokensManifest, setContractsManifest]);
+  }, [setNodesNow, setEdgesNow, setWfNameNow, setTokensManifestNow, setContractsManifestNow]);
 
   // ── Send message ───────────────────────────────────────────────────
 
@@ -464,7 +628,6 @@ export function AgentPanel() {
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setGenerating(true);
-    setToolActivities([]);
 
     // Build conversation for API
     const systemPrompt = await buildSystemPrompt(
@@ -514,10 +677,16 @@ export function AgentPanel() {
         },
         // onToolCall
         (name, args) => {
-          setToolActivities((prev) => [
-            ...prev,
-            { id: nanoid(6), name, args, status: "done" },
-          ]);
+          setMessages((prev) => {
+            const msgs = [...prev];
+            const last = msgs[msgs.length - 1];
+            if (last?.role === "assistant") {
+              const activities = [...(last.toolActivities ?? [])];
+              activities.push({ id: nanoid(6), name, args, status: "done" });
+              msgs[msgs.length - 1] = { ...last, toolActivities: activities };
+            }
+            return msgs;
+          });
         },
         abort.signal,
         baseUrl,
@@ -641,55 +810,85 @@ export function AgentPanel() {
                 </details>
               )}
               {/* Main content */}
-              <div className="whitespace-pre-wrap">
-                {msg.content || (!msg.thinking && generating && i === messages.length - 1 ? "..." : "")}
-              </div>
+              {msg.role === "assistant" ? (
+                <Markdown
+                  components={{
+                    p: ({ children }) => <p className="mb-1.5 last:mb-0">{children}</p>,
+                    strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                    ul: ({ children }) => <ul className="list-disc pl-4 mb-1.5">{children}</ul>,
+                    ol: ({ children }) => <ol className="list-decimal pl-4 mb-1.5">{children}</ol>,
+                    li: ({ children }) => <li className="mb-0.5">{children}</li>,
+                    code: ({ children, className }) => {
+                      const isBlock = className?.includes("language-");
+                      return isBlock ? (
+                        <pre className="bg-background/50 rounded px-2 py-1.5 my-1.5 overflow-x-auto text-[10px]">
+                          <code>{children}</code>
+                        </pre>
+                      ) : (
+                        <code className="bg-background/50 rounded px-1 py-0.5 text-[10px] font-mono">{children}</code>
+                      );
+                    },
+                    pre: ({ children }) => <>{children}</>,
+                    h1: ({ children }) => <h1 className="font-bold text-sm mb-1">{children}</h1>,
+                    h2: ({ children }) => <h2 className="font-bold text-xs mb-1">{children}</h2>,
+                    h3: ({ children }) => <h3 className="font-semibold text-xs mb-1">{children}</h3>,
+                  }}
+                >
+                  {msg.content || (!msg.thinking && generating && i === messages.length - 1 ? "..." : "")}
+                </Markdown>
+              ) : (
+                <div className="whitespace-pre-wrap">
+                  {msg.content}
+                </div>
+              )}
+
+              {/* Inline tool activities */}
+              {msg.toolActivities && msg.toolActivities.length > 0 && (
+                <div className="mt-1.5 pt-1.5 border-t border-foreground/10 space-y-0.5">
+                  {msg.toolActivities.map((ta) => (
+                    <div key={ta.id} className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                      {ta.name === "web_search" ? (
+                        <Search className="w-3 h-3 shrink-0" />
+                      ) : ta.name === "validate" ? (
+                        <CheckCircle className="w-3 h-3 shrink-0" />
+                      ) : ta.name === "start_daemon" ? (
+                        <Play className="w-3 h-3 shrink-0" />
+                      ) : ta.name === "stop_daemon" ? (
+                        <CircleStop className="w-3 h-3 shrink-0" />
+                      ) : ta.name === "fetch_data" || ta.name === "list_data" ? (
+                        <Database className="w-3 h-3 shrink-0" />
+                      ) : ta.name === "clear_canvas" ? (
+                        <Trash2 className="w-3 h-3 shrink-0" />
+                      ) : ta.name === "auto_layout" ? (
+                        <LayoutGrid className="w-3 h-3 shrink-0" />
+                      ) : (
+                        <Wrench className="w-3 h-3 shrink-0" />
+                      )}
+                      <span className="font-mono">{ta.name}</span>
+                      {ta.name === "add_node" && (
+                        <span className="text-foreground/60">
+                          {(() => {
+                            try { return JSON.parse(ta.args).node?.id; } catch { return ""; }
+                          })()}
+                        </span>
+                      )}
+                      {ta.name === "add_edge" && (
+                        <span className="text-foreground/60">
+                          {(() => {
+                            try {
+                              const a = JSON.parse(ta.args);
+                              return `${a.from_node} → ${a.to_node}`;
+                            } catch { return ""; }
+                          })()}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         ))}
-
-        {/* Tool activity log (shown while generating) */}
-        {toolActivities.length > 0 && (
-          <div className="space-y-1 border-l-2 border-muted pl-2">
-            {toolActivities.map((ta) => (
-              <div key={ta.id} className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                {ta.name === "web_search" ? (
-                  <Search className="w-3 h-3" />
-                ) : ta.name === "validate" ? (
-                  <CheckCircle className="w-3 h-3" />
-                ) : ta.name === "start_daemon" ? (
-                  <Play className="w-3 h-3" />
-                ) : ta.name === "stop_daemon" ? (
-                  <CircleStop className="w-3 h-3" />
-                ) : ta.name === "fetch_data" || ta.name === "list_data" ? (
-                  <Database className="w-3 h-3" />
-                ) : ta.name === "clear_canvas" ? (
-                  <Trash2 className="w-3 h-3" />
-                ) : (
-                  <Wrench className="w-3 h-3" />
-                )}
-                <span className="font-mono">{ta.name}</span>
-                {ta.name === "add_node" && (
-                  <span className="text-foreground/60">
-                    {(() => {
-                      try { return JSON.parse(ta.args).node?.id; } catch { return ""; }
-                    })()}
-                  </span>
-                )}
-                {ta.name === "add_edge" && (
-                  <span className="text-foreground/60">
-                    {(() => {
-                      try {
-                        const a = JSON.parse(ta.args);
-                        return `${a.from_node} → ${a.to_node}`;
-                      } catch { return ""; }
-                    })()}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
 
         <div ref={messagesEndRef} />
       </div>

@@ -65,6 +65,23 @@ pub enum ValidationError {
         target_node: String,
     },
 
+    #[error("Node `{node_id}` ({node_type}) has no incoming edges — it will never receive tokens. Connect it to the DAG or remove it.")]
+    OrphanNode { node_id: String, node_type: String },
+
+
+    #[error("Node `{node_id}` ({node_type} {action}) is a sink — tokens are locked and cannot flow out. Remove outgoing edges or use a separate withdraw/close node downstream.")]
+    SinkHasOutgoingEdge {
+        node_id: String,
+        node_type: String,
+        action: String,
+    },
+
+    #[error("Node `{node_id}` has {count} outgoing edges mixing `all` with `percentage` amounts — use one or the other")]
+    MixedAmountTypes { node_id: String, count: usize },
+
+    #[error("Node `{node_id}` has outgoing percentage edges summing to {sum}% (expected 100%)")]
+    PercentageSumNot100 { node_id: String, sum: f64 },
+
     #[error("Perp node `{node_id}` with action {action} requires `direction` field")]
     PerpMissingDirection { node_id: String, action: String },
 

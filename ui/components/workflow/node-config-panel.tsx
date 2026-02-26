@@ -47,7 +47,8 @@ function EdgeConfig({ edge }: { edge: CanvasEdge }) {
 
   const srcNode = nodes.find((n) => n.id === edge.source);
   const tgtNode = nodes.find((n) => n.id === edge.target);
-  const isFromOptimizer = srcNode?.data.defiNode.type === "optimizer";
+  const srcType = srcNode?.data.defiNode.type;
+  const isSplitter = srcType === "optimizer" || srcType === "wallet";
 
   const token = edge.data?.token ?? "";
   const amount = edge.data?.amount ?? { type: "all" as const };
@@ -77,16 +78,13 @@ function EdgeConfig({ edge }: { edge: CanvasEdge }) {
 
       <div className="space-y-1.5">
         <Label className="text-xs">Token</Label>
-        <Input
-          className="h-8 text-xs"
-          value={token}
-          onChange={(e) => updateEdge({ token: e.target.value })}
-          placeholder="USDC"
-        />
-        <p className="text-[10px] text-muted-foreground">Auto-detected from nodes. Override if needed.</p>
+        <div className="h-8 flex items-center rounded-md border bg-muted/50 px-3 text-xs text-muted-foreground font-mono">
+          {token || "—"}
+        </div>
+        <p className="text-[10px] text-muted-foreground">Auto-inferred from connected nodes.</p>
       </div>
 
-      {isFromOptimizer && (
+      {isSplitter && (
         <>
           <div className="space-y-1.5">
             <Label className="text-xs">Amount Type</Label>
