@@ -99,53 +99,83 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
 
+      - name: Write secrets to .env
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AGENT_API_KEY: ${{ secrets.AGENT_API_KEY }}
+          AGENT_BASE_URL: ${{ secrets.AGENT_BASE_URL }}
+          AGENT_MODEL: ${{ secrets.AGENT_MODEL }}
+          AGENT_MODEL_ID: ${{ secrets.AGENT_MODEL_ID }}
+          AGENT_API_TYPE: ${{ secrets.AGENT_API_TYPE }}
+          GATEWAY_AUTH_TOKEN: ${{ secrets.GATEWAY_AUTH_TOKEN }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+          PK_QUANT_AGENT: ${{ secrets.PK_QUANT_AGENT }}
+          PK_HEDGEFUND_AGENT: ${{ secrets.PK_HEDGEFUND_AGENT }}
+          PK_STRATEGY_LENDING: ${{ secrets.PK_STRATEGY_LENDING }}
+          PK_STRATEGY_DN: ${{ secrets.PK_STRATEGY_DN }}
+          PK_STRATEGY_PT: ${{ secrets.PK_STRATEGY_PT }}
+        run: |
+          # Write .env using shell vars (avoids GH expression engine inline)
+          cat > /tmp/deploy.env <<EOF
+          GHCR_TOKEN=$GHCR_TOKEN
+          ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
+          AGENT_API_KEY=$AGENT_API_KEY
+          AGENT_BASE_URL=$AGENT_BASE_URL
+          AGENT_MODEL=$AGENT_MODEL
+          AGENT_MODEL_ID=$AGENT_MODEL_ID
+          AGENT_API_TYPE=$AGENT_API_TYPE
+          GATEWAY_AUTH_TOKEN=$GATEWAY_AUTH_TOKEN
+          MONGODB_URI=$MONGODB_URI
+          AUTH_SECRET=$AUTH_SECRET
+          PK_QUANT_AGENT=$PK_QUANT_AGENT
+          PK_HEDGEFUND_AGENT=$PK_HEDGEFUND_AGENT
+          PK_STRATEGY_LENDING=$PK_STRATEGY_LENDING
+          PK_STRATEGY_DN=$PK_STRATEGY_DN
+          PK_STRATEGY_PT=$PK_STRATEGY_PT
+          EOF
+
+          # Debug: print PK lengths to verify hex (64 chars after 0x = correct)
+          echo "PK_STRATEGY_LENDING length: ${#PK_STRATEGY_LENDING}"
+          echo "PK_STRATEGY_DN length: ${#PK_STRATEGY_DN}"
+          echo "PK_STRATEGY_PT length: ${#PK_STRATEGY_PT}"
+
+          # SCP to VPS
+          scp -i ~/.ssh/deploy_key /tmp/deploy.env ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/defi-flow/experiment/.env
+          rm /tmp/deploy.env
+
       - name: Deploy via SSH
         run: |
-          ssh -i ~/.ssh/deploy_key ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} "
+          ssh -i ~/.ssh/deploy_key ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} '
             set -e
 
-            echo '═══════════════════════════════════════════════'
-            echo ' Deploying to VPS'
-            echo '═══════════════════════════════════════════════'
+            echo "═══════════════════════════════════════════════"
+            echo " Deploying to VPS"
+            echo "═══════════════════════════════════════════════"
+
+            cd /opt/defi-flow/experiment
+            set -a; source .env; set +a
 
             # ── Auth with GHCR ──
-            echo '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u omo-protocol --password-stdin
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u omo-protocol --password-stdin
 
             # ── Fetch latest compose file ──
-            mkdir -p /opt/defi-flow/experiment
-            cd /opt/defi-flow
-            curl -sL -H 'Authorization: token ${{ secrets.GHCR_TOKEN }}' \
-              'https://raw.githubusercontent.com/omo-protocol/defi-flow/main/experiment/docker-compose.yml' \
-              -o experiment/docker-compose.yml
+            curl -sL -H "Authorization: token $GHCR_TOKEN" \
+              "https://raw.githubusercontent.com/omo-protocol/defi-flow/main/experiment/docker-compose.yml" \
+              -o docker-compose.yml
 
-            cd experiment
             docker compose pull
-
-            # ── Start with all secrets as env vars ──
-            ANTHROPIC_API_KEY='${{ secrets.ANTHROPIC_API_KEY }}' \
-            AGENT_API_KEY='${{ secrets.AGENT_API_KEY }}' \
-            AGENT_BASE_URL='${{ secrets.AGENT_BASE_URL }}' \
-            AGENT_MODEL='${{ secrets.AGENT_MODEL }}' \
-            AGENT_MODEL_ID='${{ secrets.AGENT_MODEL_ID }}' \
-            AGENT_API_TYPE='${{ secrets.AGENT_API_TYPE }}' \
-            GATEWAY_AUTH_TOKEN='${{ secrets.GATEWAY_AUTH_TOKEN }}' \
-            MONGODB_URI='${{ secrets.MONGODB_URI }}' \
-            PK_QUANT_AGENT='${{ secrets.PK_QUANT_AGENT }}' \
-            PK_HEDGEFUND_AGENT='${{ secrets.PK_HEDGEFUND_AGENT }}' \
-            PK_STRATEGY_LENDING='${{ secrets.PK_STRATEGY_LENDING }}' \
-            PK_STRATEGY_DN='${{ secrets.PK_STRATEGY_DN }}' \
-            PK_STRATEGY_PT='${{ secrets.PK_STRATEGY_PT }}' \
-            AUTH_SECRET='${{ secrets.AUTH_SECRET }}' \
             docker compose up -d --force-recreate
 
             docker image prune -f
 
-            echo ''
-            echo '═══════════════════════════════════════════════'
-            echo ' Deploy complete'
-            echo '═══════════════════════════════════════════════'
+            echo ""
+            echo "═══════════════════════════════════════════════"
+            echo " Deploy complete"
+            echo "═══════════════════════════════════════════════"
             docker compose ps
-          "
+          '
 
       - name: Cleanup SSH
         if: always()

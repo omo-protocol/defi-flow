@@ -243,10 +243,12 @@ impl Engine {
                 .await;
         }
 
-        // Normal node: call venue
-        if let Some(venue) = self.venues.get_mut(node_id) {
-            let result = venue.execute(&node, input_amount).await?;
-            self.distribute_result(node_id, &input_token, result)?;
+        // Normal node: call venue (skip if no input — avoids pointless on-chain txns)
+        if input_amount > 0.0 {
+            if let Some(venue) = self.venues.get_mut(node_id) {
+                let result = venue.execute(&node, input_amount).await?;
+                self.distribute_result(node_id, &input_token, result)?;
+            }
         }
 
         // For spot buys with downstream edges, extract held tokens so they can route
