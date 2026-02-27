@@ -215,6 +215,8 @@ pub enum RyskAsset {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum CronInterval {
+    #[serde(rename = "10m")]
+    Every10m,
     Hourly,
     Daily,
     Weekly,

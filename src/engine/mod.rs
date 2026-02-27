@@ -940,6 +940,7 @@ impl Engine {
 
 fn cron_to_seconds(interval: &CronInterval) -> u64 {
     match interval {
+        CronInterval::Every10m => 600,
         CronInterval::Hourly => 3600,
         CronInterval::Daily => 86400,
         CronInterval::Weekly => 604800,

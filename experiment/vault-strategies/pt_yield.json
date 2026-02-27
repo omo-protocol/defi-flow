@@ -65,7 +65,7 @@
       "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
       "trigger": {
         "type": "cron",
-        "interval": "daily"
+        "interval": "hourly"
       }
     },
     {
@@ -75,7 +75,7 @@
       "action": "mint_pt",
       "trigger": {
         "type": "cron",
-        "interval": "daily"
+        "interval": "hourly"
       }
     }
   ],

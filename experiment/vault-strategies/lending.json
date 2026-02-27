@@ -57,7 +57,7 @@
       "defillama_slug": "hyperlend-pooled",
       "trigger": {
         "type": "cron",
-        "interval": "daily"
+        "interval": "hourly"
       }
     }
   ],

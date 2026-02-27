@@ -103,6 +103,7 @@ impl CronScheduler {
 
 fn cron_to_duration(interval: &CronInterval) -> Duration {
     match interval {
+        CronInterval::Every10m => Duration::from_secs(600),
         CronInterval::Hourly => Duration::from_secs(3600),
         CronInterval::Daily => Duration::from_secs(86400),
         CronInterval::Weekly => Duration::from_secs(604800),
