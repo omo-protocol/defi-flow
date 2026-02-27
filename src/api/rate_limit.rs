@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
 
-const MAX_REQUESTS: usize = 10;
+const MAX_REQUESTS: usize = 100;
 const WINDOW: Duration = Duration::from_secs(60);
 
 pub struct RateLimiter {

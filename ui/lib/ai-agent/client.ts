@@ -400,14 +400,18 @@ export async function agentLoop(
     });
 
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      if (res.status === 429) {
-        throw new Error(body?.error ?? "Rate limit exceeded. Please wait a moment.");
+      const text = await res.text().catch(() => "");
+      let errorMsg = `API error ${res.status}: ${res.statusText}`;
+      try {
+        const body = JSON.parse(text);
+        if (body?.error) errorMsg = body.error;
+      } catch {
+        if (text) errorMsg = text;
       }
-      throw new Error(
-        body?.error ??
-          `API error ${res.status}: ${res.statusText}`,
-      );
+      if (res.status === 429) {
+        throw new Error(errorMsg || "Rate limit exceeded. Please wait a moment.");
+      }
+      throw new Error(errorMsg);
     }
 
     const reader = res.body?.getReader();

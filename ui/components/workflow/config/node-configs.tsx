@@ -10,6 +10,7 @@ import type {
 import { getNodeLabel } from "@/lib/types/defi-flow";
 import { useSetAtom, useAtomValue } from "jotai";
 import { updateNodeDataAtom, walletAddressAtom, edgesAtom, nodesAtom } from "@/lib/workflow-store";
+import { walletsAtom } from "@/lib/auth-store";
 import { TextField, NumberField, SelectField, ChainSelect, TriggerConfig } from "./shared";
 
 // Generic updater hook
@@ -36,6 +37,19 @@ type ConfigProps<T extends DefiNode> = {
 
 function WalletConfig({ node, defi, onUpdate }: ConfigProps<WalletNode>) {
   const walletAddr = useAtomValue(walletAddressAtom);
+  const wallets = useAtomValue(walletsAtom);
+
+  const currentAddr = defi.address || walletAddr;
+  const walletOptions = [
+    ...wallets.map((w) => ({
+      value: w.address,
+      label: `${w.label}  ${w.address.slice(0, 6)}...${w.address.slice(-4)}`,
+    })),
+    { value: "__custom__", label: "Custom address" },
+  ];
+
+  const isCustom = wallets.length === 0 || !wallets.some((w) => w.address === currentAddr);
+
   return (
     <div className="space-y-3">
       <ChainSelect
@@ -48,12 +62,24 @@ function WalletConfig({ node, defi, onUpdate }: ConfigProps<WalletNode>) {
         onChange={(v) => onUpdate("token", v)}
         placeholder="USDC"
       />
-      <TextField
-        label="Address"
-        value={defi.address || walletAddr}
-        onChange={(v) => onUpdate("address", v)}
-        placeholder="0x..."
-      />
+      {wallets.length > 0 && (
+        <SelectField
+          label="Wallet"
+          value={isCustom ? "__custom__" : currentAddr}
+          onChange={(v) => {
+            if (v !== "__custom__") onUpdate("address", v);
+          }}
+          options={walletOptions}
+        />
+      )}
+      {(isCustom || wallets.length === 0) && (
+        <TextField
+          label="Address"
+          value={currentAddr}
+          onChange={(v) => onUpdate("address", v)}
+          placeholder="0x..."
+        />
+      )}
     </div>
   );
 }

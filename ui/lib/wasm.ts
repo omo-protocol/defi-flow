@@ -23,9 +23,10 @@ async function ensureInit(): Promise<boolean> {
   if (!initPromise) {
     initPromise = (async () => {
       try {
-        // Variable path prevents bundler from resolving statically
-        const path = "../pkg/defi_flow";
-        const mod = (await import(/* webpackIgnore: true */ path)) as WasmExports;
+        // Load from /public — works on both local dev and Vercel
+        // Variable path prevents TypeScript/bundler from resolving statically
+        const jsPath = "/defi_flow.js";
+        const mod = (await import(/* webpackIgnore: true */ jsPath)) as WasmExports;
         await mod.default({ module_or_path: "/defi_flow_bg.wasm" });
         wasm = mod;
         return true;
