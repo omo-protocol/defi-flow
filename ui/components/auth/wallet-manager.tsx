@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useAtom, useAtomValue } from "jotai";
 import { walletsAtom, isAuthenticatedAtom } from "@/lib/auth-store";
-import { createWallet, deleteWallet } from "@/lib/auth-api";
+import { createWallet, deleteWallet, exportWallet } from "@/lib/auth-api";
 import {
   Sheet,
   SheetContent,
@@ -13,9 +13,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MnemonicDisplay } from "./mnemonic-display";
-import { Plus, Trash2, Copy } from "lucide-react";
+import { Plus, Trash2, Copy, Download } from "lucide-react";
 import { toast } from "sonner";
 
 interface WalletManagerProps {
@@ -29,8 +29,30 @@ export function WalletManager({ open, onOpenChange }: WalletManagerProps) {
   const [showCreate, setShowCreate] = useState(false);
   const [mnemonic, setMnemonic] = useState<string | null>(null);
   const [newAddress, setNewAddress] = useState<string | null>(null);
+  const [exportingId, setExportingId] = useState<string | null>(null);
+  const [exportPassword, setExportPassword] = useState("");
+  const [exportLoading, setExportLoading] = useState(false);
 
   if (!isAuth) return null;
+
+  const handleExport = async (walletId: string) => {
+    if (!exportPassword) {
+      toast.error("Password required");
+      return;
+    }
+    setExportLoading(true);
+    try {
+      const { private_key } = await exportWallet(walletId, exportPassword);
+      await navigator.clipboard.writeText(private_key);
+      toast.success("Private key copied to clipboard");
+      setExportingId(null);
+      setExportPassword("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Export failed");
+    } finally {
+      setExportLoading(false);
+    }
+  };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -54,45 +76,79 @@ export function WalletManager({ open, onOpenChange }: WalletManagerProps) {
           )}
 
           {wallets.map((w) => (
-            <div
-              key={w.id}
-              className="flex items-center justify-between border rounded-md px-3 py-2"
-            >
-              <div className="min-w-0">
-                <p className="text-xs font-medium truncate">{w.label}</p>
-                <p className="text-[10px] text-muted-foreground font-mono truncate">
-                  {w.address}
-                </p>
+            <div key={w.id} className="border rounded-md px-3 py-2 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium truncate">{w.label}</p>
+                  <p className="text-[10px] text-muted-foreground font-mono truncate">
+                    {w.address}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1 ml-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0"
+                    onClick={() => {
+                      navigator.clipboard.writeText(w.address);
+                      toast.success("Address copied");
+                    }}
+                    title="Copy address"
+                  >
+                    <Copy className="w-3 h-3" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0"
+                    onClick={() => {
+                      setExportingId(exportingId === w.id ? null : w.id);
+                      setExportPassword("");
+                    }}
+                    title="Export private key"
+                  >
+                    <Download className="w-3 h-3" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0 text-destructive"
+                    onClick={async () => {
+                      try {
+                        await deleteWallet(w.id);
+                        setWallets(wallets.filter((x) => x.id !== w.id));
+                        toast.success("Wallet deleted");
+                      } catch (err) {
+                        toast.error(err instanceof Error ? err.message : "Failed");
+                      }
+                    }}
+                    title="Delete wallet"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </Button>
+                </div>
               </div>
-              <div className="flex items-center gap-1 ml-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 w-6 p-0"
-                  onClick={() => {
-                    navigator.clipboard.writeText(w.address);
-                    toast.success("Address copied");
-                  }}
-                >
-                  <Copy className="w-3 h-3" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 w-6 p-0 text-destructive"
-                  onClick={async () => {
-                    try {
-                      await deleteWallet(w.id);
-                      setWallets(wallets.filter((x) => x.id !== w.id));
-                      toast.success("Wallet deleted");
-                    } catch (err) {
-                      toast.error(err instanceof Error ? err.message : "Failed");
-                    }
-                  }}
-                >
-                  <Trash2 className="w-3 h-3" />
-                </Button>
-              </div>
+              {exportingId === w.id && (
+                <div className="flex gap-1.5 items-center">
+                  <Input
+                    className="h-7 text-xs flex-1"
+                    type="password"
+                    placeholder="Enter password to export"
+                    value={exportPassword}
+                    onChange={(e) => setExportPassword(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleExport(w.id)}
+                    autoFocus
+                  />
+                  <Button
+                    size="sm"
+                    className="h-7 text-xs px-2"
+                    onClick={() => handleExport(w.id)}
+                    disabled={exportLoading}
+                  >
+                    {exportLoading ? "..." : "Export"}
+                  </Button>
+                </div>
+              )}
             </div>
           ))}
 

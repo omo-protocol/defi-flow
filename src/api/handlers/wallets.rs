@@ -151,6 +151,60 @@ pub struct OkResponse {
     pub ok: bool,
 }
 
+// ── Export (decrypt) private key ─────────────────────────
+
+#[derive(Deserialize)]
+pub struct ExportWalletRequest {
+    pub password: String,
+}
+
+#[derive(Serialize)]
+pub struct ExportWalletResponse {
+    pub private_key: String,
+}
+
+/// Requires the user to re-enter their password to decrypt and export the PK.
+pub async fn export_pk(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<ExportWalletRequest>,
+) -> Result<Json<ExportWalletResponse>, ApiError> {
+    let inner = state.inner.read().await;
+    let db = inner.db.lock().await;
+
+    // Verify password before exporting
+    let (password_hash, key_salt): (String, String) = db
+        .query_row(
+            "SELECT password_hash, key_salt FROM users WHERE id = ?1",
+            [&auth.user_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| ApiError::Unauthorized("User not found".into()))?;
+
+    if !auth::verify_password(&req.password, &password_hash) {
+        return Err(ApiError::Unauthorized("Incorrect password".into()));
+    }
+
+    // Derive key from password (don't rely on cached key for this sensitive op)
+    let derived_key = auth::derive_key(&req.password, &key_salt)
+        .map_err(|e| ApiError::Internal(format!("key derivation: {e:#}")))?;
+
+    // Get the encrypted PK for this wallet (must belong to user)
+    let encrypted_pk: String = db
+        .query_row(
+            "SELECT encrypted_pk FROM wallets WHERE id = ?1 AND user_id = ?2",
+            rusqlite::params![id, auth.user_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| ApiError::NotFound("Wallet not found".into()))?;
+
+    let private_key = auth::decrypt_pk(&encrypted_pk, &derived_key)
+        .map_err(|e| ApiError::Internal(format!("decryption: {e:#}")))?;
+
+    Ok(Json(ExportWalletResponse { private_key }))
+}
+
 pub async fn delete(
     auth: AuthUser,
     State(state): State<AppState>,

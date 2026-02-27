@@ -67,6 +67,7 @@ pub async fn serve(host: &str, port: u16, data_dir: &Path) -> Result<()> {
             get(handlers::wallets::list).post(handlers::wallets::create),
         )
         .route("/api/auth/wallets/{id}", delete(handlers::wallets::delete))
+        .route("/api/auth/wallets/{id}/export", post(handlers::wallets::export_pk))
         // Strategies (JWT required)
         .route(
             "/api/auth/strategies",

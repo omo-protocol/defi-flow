@@ -43,6 +43,12 @@ export const createWallet = (label: string, mode: "generate" | "import", private
 export const deleteWallet = (id: string) =>
   api<{ ok: boolean }>(`/api/auth/wallets/${id}`, { method: "DELETE" });
 
+export const exportWallet = (id: string, password: string) =>
+  api<{ private_key: string }>(`/api/auth/wallets/${id}/export`, {
+    method: "POST",
+    body: JSON.stringify({ password }),
+  });
+
 // Strategies
 export const listStrategies = () => api<StrategyInfo[]>("/api/auth/strategies");
 
