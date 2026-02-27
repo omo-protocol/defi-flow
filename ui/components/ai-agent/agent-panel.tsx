@@ -7,19 +7,14 @@ import { toast } from "sonner";
 import { Bot, Send, Square, Wrench, Search, CheckCircle, Play, CircleStop, Database, Trash2, ChevronRight, LayoutGrid, BarChart3, Loader2, XCircle } from "lucide-react";
 import Markdown from "react-markdown";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
-  openaiKeyAtom,
-  openaiBaseUrlAtom,
-  openaiModelAtom,
   messagesAtom,
   generatingAtom,
   PROMPT_TEMPLATES,
   type Message,
   type ToolActivity,
 } from "@/lib/ai-agent/store";
-import { userConfigAtom } from "@/lib/auth-store";
-import { updateConfig } from "@/lib/auth-api";
+import { isAuthenticatedAtom } from "@/lib/auth-store";
 import { agentLoop, type ToolHandlers } from "@/lib/ai-agent/client";
 import { buildSystemPrompt } from "@/lib/ai-agent/prompts";
 import {
@@ -88,35 +83,9 @@ function parseThinkContent(raw: string): { thinking: string; content: string } {
 // ── Main Component ───────────────────────────────────────────────────
 
 export function AgentPanel() {
-  const [apiKey, setApiKey] = useAtom(openaiKeyAtom);
-  const [baseUrl, setBaseUrl] = useAtom(openaiBaseUrlAtom);
-  const [model, setModel] = useAtom(openaiModelAtom);
   const [messages, setMessages] = useAtom(messagesAtom);
   const [generating, setGenerating] = useAtom(generatingAtom);
-  const config = useAtomValue(userConfigAtom);
-
-  // Hydrate agent settings from persisted config on mount
-  const hydratedRef = useRef(false);
-  useEffect(() => {
-    if (hydratedRef.current) return;
-    if (config.agent_api_key && !apiKey) setApiKey(config.agent_api_key);
-    if (config.agent_base_url) setBaseUrl(config.agent_base_url);
-    if (config.agent_model) setModel(config.agent_model);
-    hydratedRef.current = true;
-  }, [config]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Persist agent settings on change (debounced)
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const persistAgent = useCallback((key: string, value: string) => {
-    clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      updateConfig({ [key]: value || null }).catch(() => {});
-    }, 1000);
-  }, []);
-
-  const handleApiKeyChange = (v: string) => { setApiKey(v); persistAgent("agent_api_key", v); };
-  const handleBaseUrlChange = (v: string) => { setBaseUrl(v); persistAgent("agent_base_url", v); };
-  const handleModelChange = (v: string) => { setModel(v); persistAgent("agent_model", v); };
+  const isAuth = useAtomValue(isAuthenticatedAtom);
 
   const [nodes, setNodes] = useAtom(nodesAtom);
   const [edges, setEdges] = useAtom(edgesAtom);
@@ -653,8 +622,8 @@ export function AgentPanel() {
   const handleSend = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
     if (!text || generating) return;
-    if (!apiKey) {
-      toast.error("Enter your OpenAI API key first");
+    if (!isAuth) {
+      toast.error("Sign in to use the AI agent");
       return;
     }
 
@@ -692,8 +661,6 @@ export function AgentPanel() {
     try {
       const handlers = buildHandlers();
       await agentLoop(
-        apiKey,
-        model,
         apiMessages,
         handlers,
         // onText
@@ -747,7 +714,6 @@ export function AgentPanel() {
           });
         },
         abort.signal,
-        baseUrl,
       );
 
       triggerAutosave({ immediate: true });
@@ -773,9 +739,7 @@ export function AgentPanel() {
   }, [
     input,
     generating,
-    apiKey,
-    baseUrl,
-    model,
+    isAuth,
     messages,
     nodes,
     edges,
@@ -812,34 +776,10 @@ export function AgentPanel() {
 
   return (
     <div className="h-full flex flex-col">
-      {/* API Key + Base URL + Model bar */}
-      <div className="border-b px-3 py-2 space-y-1.5">
-        <div className="flex gap-1.5">
-          <Input
-            className="h-7 text-xs flex-1 font-mono"
-            type="password"
-            placeholder="API key"
-            value={apiKey}
-            onChange={(e) => handleApiKeyChange(e.target.value)}
-          />
-          <Input
-            className="h-7 text-xs w-32 font-mono"
-            placeholder="Model"
-            value={model}
-            onChange={(e) => handleModelChange(e.target.value)}
-          />
-        </div>
-        <Input
-          className="h-7 text-xs font-mono"
-          placeholder="Base URL (e.g. https://api.openai.com/v1)"
-          value={baseUrl}
-          onChange={(e) => handleBaseUrlChange(e.target.value)}
-        />
-        {!apiKey && (
-          <p className="text-[10px] text-muted-foreground">
-            Any OpenAI-compatible API. Key persisted in your account.
-          </p>
-        )}
+      {/* Header */}
+      <div className="border-b px-3 py-2 flex items-center gap-2">
+        <Bot className="w-4 h-4 text-muted-foreground" />
+        <span className="text-xs font-medium">Strategy Agent</span>
       </div>
 
       {/* Messages */}
@@ -854,7 +794,7 @@ export function AgentPanel() {
                   key={t.id}
                   className="flex items-center gap-2 rounded-lg border border-border/50 bg-background/50 px-3 py-2 text-left text-xs hover:bg-muted/80 hover:border-border transition-colors disabled:opacity-50"
                   onClick={() => handleTemplateClick(t.message)}
-                  disabled={!apiKey || generating}
+                  disabled={!isAuth || generating}
                 >
                   <span className="text-sm shrink-0">{t.icon}</span>
                   <div className="min-w-0">
@@ -1032,7 +972,7 @@ export function AgentPanel() {
               size="sm"
               className="h-auto px-2"
               onClick={() => handleSend()}
-              disabled={!input.trim() || !apiKey}
+              disabled={!input.trim() || !isAuth}
             >
               <Send className="w-4 h-4" />
             </Button>

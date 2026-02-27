@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod backtest;
 pub mod config;
 pub mod data;

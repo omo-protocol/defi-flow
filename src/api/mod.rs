@@ -5,6 +5,7 @@ pub mod events;
 pub mod handlers;
 pub mod history;
 pub mod middleware;
+pub mod rate_limit;
 pub mod state;
 pub mod types;
 
@@ -32,7 +33,22 @@ pub async fn serve(host: &str, port: u16, data_dir: &Path) -> Result<()> {
     let (db_conn, auth_secret) = db::open(&db_path)
         .with_context(|| format!("opening database at {}", db_path.display()))?;
 
-    let state = AppState::new(data_dir.clone(), db_conn, auth_secret);
+    let ai_api_key = std::env::var("AGENT_API_KEY").unwrap_or_default();
+    let ai_base_url = "https://api.minimax.io/v1".to_string();
+    let ai_model = "MiniMax-M2.5".to_string();
+
+    if ai_api_key.is_empty() {
+        println!("  Warning: AGENT_API_KEY not set — /api/ai/chat will be disabled");
+    }
+
+    let state = AppState::new(
+        data_dir.clone(),
+        db_conn,
+        auth_secret,
+        ai_api_key,
+        ai_base_url,
+        ai_model,
+    );
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -83,6 +99,8 @@ pub async fn serve(host: &str, port: u16, data_dir: &Path) -> Result<()> {
         .route("/api/data/fetch", post(handlers::data::fetch_data))
         .route("/api/data/upload", post(handlers::data::upload_data))
         .route("/api/data/manifest", get(handlers::data::get_manifest))
+        // AI Agent (JWT + rate limited)
+        .route("/api/ai/chat", post(handlers::ai::chat_proxy))
         // Schema
         .route("/api/schema", get(handlers::schema::get_schema))
         .layer(cors)

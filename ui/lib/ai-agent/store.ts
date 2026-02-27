@@ -23,11 +23,6 @@ export type Message = {
   toolActivities?: ToolActivity[];
 };
 
-// In-memory only — never persisted to localStorage
-export const openaiKeyAtom = atom<string>("");
-export const openaiBaseUrlAtom = atom<string>("https://api.openai.com/v1");
-export const openaiModelAtom = atom<string>("gpt-4o");
-
 // Chat state
 export const messagesAtom = atom<Message[]>([]);
 export const generatingAtom = atom<boolean>(false);

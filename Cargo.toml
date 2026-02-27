@@ -30,7 +30,7 @@ chrono = { version = "0.4", optional = true }
 # Heavy deps - optional, included via "full" feature
 clap = { version = "4", features = ["derive"], optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"], optional = true }
-reqwest = { version = "0.12", features = ["json"], optional = true }
+reqwest = { version = "0.12", features = ["json", "stream"], optional = true }
 indicatif = { version = "0.17", optional = true }
 ferrofluid = { path = "ferrofluid", optional = true }
 alloy = { version = "1.0.16", features = [

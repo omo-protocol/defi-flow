@@ -9,6 +9,7 @@ pub enum ApiError {
     Unauthorized(String),
     Conflict(String),
     Internal(String),
+    RateLimited(String),
     Validation(Vec<String>),
 }
 
@@ -20,6 +21,7 @@ impl IntoResponse for ApiError {
             ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, json!({ "error": msg })),
             ApiError::Conflict(msg) => (StatusCode::CONFLICT, json!({ "error": msg })),
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": msg })),
+            ApiError::RateLimited(msg) => (StatusCode::TOO_MANY_REQUESTS, json!({ "error": msg })),
             ApiError::Validation(errors) => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 json!({ "valid": false, "errors": errors }),

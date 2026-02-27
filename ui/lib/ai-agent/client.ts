@@ -1,4 +1,4 @@
-const DEFAULT_BASE_URL = "https://api.openai.com/v1";
+import { getToken } from "@/lib/auth-store";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -372,34 +372,28 @@ export type ToolHandlers = {
  * The model calls tools, gets results, and continues until it responds with text only.
  */
 export async function agentLoop(
-  apiKey: string,
-  model: string,
   messages: ChatMessage[],
   handlers: ToolHandlers,
   onText: (text: string) => void,
   onToolCall?: (name: string, args: string) => void,
   onToolResult?: (name: string, result: string) => void,
   signal?: AbortSignal,
-  baseUrl?: string,
 ): Promise<string> {
-  const base = (baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const url = `${base}/chat/completions`;
   const conversation = [...messages];
   let fullText = "";
   const MAX_ITERATIONS = 200;
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
-    const res = await fetch(url, {
+    const token = getToken();
+    const res = await fetch("/api/ai/chat", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({
-        model,
         messages: conversation,
         tools: TOOLS,
-        stream: true,
         temperature: 0.3,
       }),
       signal,
@@ -407,9 +401,12 @@ export async function agentLoop(
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
+      if (res.status === 429) {
+        throw new Error(body?.error ?? "Rate limit exceeded. Please wait a moment.");
+      }
       throw new Error(
-        body?.error?.message ??
-          `OpenAI API error ${res.status}: ${res.statusText}`,
+        body?.error ??
+          `API error ${res.status}: ${res.statusText}`,
       );
     }
 

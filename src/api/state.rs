@@ -9,6 +9,7 @@ use crate::model::workflow::Workflow;
 use super::db::Db;
 use super::events::EngineEvent;
 use super::history::HistoryStore;
+use super::rate_limit::RateLimiter;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -21,6 +22,10 @@ pub struct AppStateInner {
     pub history: HistoryStore,
     pub db: Db,
     pub auth_secret: String,
+    pub ai_api_key: String,
+    pub ai_base_url: String,
+    pub ai_model: String,
+    pub rate_limiter: RateLimiter,
 }
 
 pub struct RunSession {
@@ -35,7 +40,14 @@ pub struct RunSession {
 }
 
 impl AppState {
-    pub fn new(data_dir: PathBuf, db: Db, auth_secret: String) -> Self {
+    pub fn new(
+        data_dir: PathBuf,
+        db: Db,
+        auth_secret: String,
+        ai_api_key: String,
+        ai_base_url: String,
+        ai_model: String,
+    ) -> Self {
         let history_dir = data_dir.join("history");
         Self {
             inner: Arc::new(RwLock::new(AppStateInner {
@@ -44,6 +56,10 @@ impl AppState {
                 history: HistoryStore::new(history_dir),
                 db,
                 auth_secret,
+                ai_api_key,
+                ai_base_url,
+                ai_model,
+                rate_limiter: RateLimiter::new(),
             })),
         }
     }
