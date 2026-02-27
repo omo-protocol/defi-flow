@@ -43,6 +43,9 @@ services:
       - "18790:18790"
     volumes:
       - hedgefund-memory:/app/workspace/memory
+      - lending-data:/app/strategy-states/lending:ro
+      - dn-data:/app/strategy-states/delta_neutral:ro
+      - pt-data:/app/strategy-states/pt_yield:ro
     environment:
       - NODE_ENV=production
       - MONGODB_DB=hedgefund-agent

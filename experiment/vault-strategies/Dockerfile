@@ -32,4 +32,4 @@ VOLUME ["/app/data", "/app/logs"]
 # Default: dry-run daemon mode
 # Override CMD in docker-compose for production
 ENTRYPOINT ["defi-flow", "run", "/app/strategy.json"]
-CMD ["--dry-run", "--state-file", "/app/state.json", "--log-file", "/app/logs/strategy.log", "--network", "testnet"]
+CMD ["--dry-run", "--state-file", "/app/data/state.json", "--log-file", "/app/logs/strategy.log", "--network", "testnet"]

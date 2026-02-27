@@ -161,7 +161,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
           build-args: ${{ steps.resolve.outputs.build_args }}
           secrets: |
-            gh_token=${{ secrets.GH_PAT }}
+            gh_token=${{ secrets.GHCR_TOKEN }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 

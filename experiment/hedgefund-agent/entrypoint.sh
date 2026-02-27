@@ -52,6 +52,14 @@ if [ -n "$MONGODB_URI" ]; then
     node /app/scripts/ship-logs.mjs 2>&1 | while read -r line; do echo "[log-shipper] $line"; done
   done &
   echo "Log shipper PID: $!"
+
+  # Portfolio stats shipper — runs every 5 minutes
+  echo "Starting portfolio stats shipper (every 5m)..."
+  while true; do
+    sleep 300
+    node /app/scripts/ship-stats.mjs 2>&1 || true
+  done &
+  echo "Stats shipper PID: $!"
 fi
 
 echo "=== Hedgefund Agent running (gateway PID: $GATEWAY_PID) ==="
