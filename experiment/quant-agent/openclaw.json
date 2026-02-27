@@ -46,7 +46,7 @@
     }
   },
   "gateway": {
-    "port": 18789,
+    "port": "${GATEWAY_PORT:-18789}",
     "mode": "local",
     "auth": {
       "mode": "token",

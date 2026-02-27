@@ -146,6 +146,7 @@ try {
         parsed._source_file = file;
         parsed._shipped_at = new Date();
         parsed._agent = DB_NAME;
+        parsed._model = process.env.MODEL_NAME || "unknown";
         docs.push(parsed);
       } catch {
         // skip malformed lines

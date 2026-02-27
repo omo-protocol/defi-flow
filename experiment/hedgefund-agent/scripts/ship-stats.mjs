@@ -170,6 +170,7 @@ const doc = {
   timestamp: new Date(),
   wallet: wallet || "unknown",
   chain: vaultsConfig?.chain?.name || "hyperevm",
+  model: process.env.MODEL_NAME || "unknown",
   portfolio_tvl: totalStrategyTvl || totalVaultPositions,
   strategies,
   vaults,

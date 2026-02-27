@@ -102,46 +102,67 @@ jobs:
       - name: Write secrets to .env
         env:
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          AGENT_API_KEY: ${{ secrets.AGENT_API_KEY }}
-          AGENT_BASE_URL: ${{ secrets.AGENT_BASE_URL }}
-          AGENT_MODEL: ${{ secrets.AGENT_MODEL }}
-          AGENT_MODEL_ID: ${{ secrets.AGENT_MODEL_ID }}
-          AGENT_API_TYPE: ${{ secrets.AGENT_API_TYPE }}
           GATEWAY_AUTH_TOKEN: ${{ secrets.GATEWAY_AUTH_TOKEN }}
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
-          PK_QUANT_AGENT: ${{ secrets.PK_QUANT_AGENT }}
-          PK_HEDGEFUND_AGENT: ${{ secrets.PK_HEDGEFUND_AGENT }}
+          # Model API keys
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          OPUS_API_KEY: ${{ secrets.OPUS_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Quant agent PKs
+          PK_QUANT_MINIMAX: ${{ secrets.PK_QUANT_MINIMAX }}
+          PK_QUANT_QWEN: ${{ secrets.PK_QUANT_QWEN }}
+          PK_QUANT_KIMI: ${{ secrets.PK_QUANT_KIMI }}
+          PK_QUANT_GLM: ${{ secrets.PK_QUANT_GLM }}
+          PK_QUANT_OPUS: ${{ secrets.PK_QUANT_OPUS }}
+          PK_QUANT_GEMINI: ${{ secrets.PK_QUANT_GEMINI }}
+          PK_QUANT_GROK: ${{ secrets.PK_QUANT_GROK }}
+          # Hedgefund agent PKs
+          PK_HF_MINIMAX: ${{ secrets.PK_HF_MINIMAX }}
+          PK_HF_QWEN: ${{ secrets.PK_HF_QWEN }}
+          PK_HF_KIMI: ${{ secrets.PK_HF_KIMI }}
+          PK_HF_GLM: ${{ secrets.PK_HF_GLM }}
+          PK_HF_OPUS: ${{ secrets.PK_HF_OPUS }}
+          PK_HF_GEMINI: ${{ secrets.PK_HF_GEMINI }}
+          PK_HF_GROK: ${{ secrets.PK_HF_GROK }}
+          # Strategy PKs
           PK_STRATEGY_LENDING: ${{ secrets.PK_STRATEGY_LENDING }}
           PK_STRATEGY_DN: ${{ secrets.PK_STRATEGY_DN }}
           PK_STRATEGY_PT: ${{ secrets.PK_STRATEGY_PT }}
         run: |
-          # Write .env using shell vars (avoids GH expression engine inline)
           cat > /tmp/deploy.env <<EOF
           GHCR_TOKEN=$GHCR_TOKEN
-          ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
-          AGENT_API_KEY=$AGENT_API_KEY
-          AGENT_BASE_URL=$AGENT_BASE_URL
-          AGENT_MODEL=$AGENT_MODEL
-          AGENT_MODEL_ID=$AGENT_MODEL_ID
-          AGENT_API_TYPE=$AGENT_API_TYPE
           GATEWAY_AUTH_TOKEN=$GATEWAY_AUTH_TOKEN
           MONGODB_URI=$MONGODB_URI
           AUTH_SECRET=$AUTH_SECRET
-          PK_QUANT_AGENT=$PK_QUANT_AGENT
-          PK_HEDGEFUND_AGENT=$PK_HEDGEFUND_AGENT
+          MINIMAX_API_KEY=$MINIMAX_API_KEY
+          OPENROUTER_API_KEY=$OPENROUTER_API_KEY
+          KIMI_API_KEY=$KIMI_API_KEY
+          GLM_API_KEY=$GLM_API_KEY
+          OPUS_API_KEY=$OPUS_API_KEY
+          GEMINI_API_KEY=$GEMINI_API_KEY
+          PK_QUANT_MINIMAX=$PK_QUANT_MINIMAX
+          PK_QUANT_QWEN=$PK_QUANT_QWEN
+          PK_QUANT_KIMI=$PK_QUANT_KIMI
+          PK_QUANT_GLM=$PK_QUANT_GLM
+          PK_QUANT_OPUS=$PK_QUANT_OPUS
+          PK_QUANT_GEMINI=$PK_QUANT_GEMINI
+          PK_QUANT_GROK=$PK_QUANT_GROK
+          PK_HF_MINIMAX=$PK_HF_MINIMAX
+          PK_HF_QWEN=$PK_HF_QWEN
+          PK_HF_KIMI=$PK_HF_KIMI
+          PK_HF_GLM=$PK_HF_GLM
+          PK_HF_OPUS=$PK_HF_OPUS
+          PK_HF_GEMINI=$PK_HF_GEMINI
+          PK_HF_GROK=$PK_HF_GROK
           PK_STRATEGY_LENDING=$PK_STRATEGY_LENDING
           PK_STRATEGY_DN=$PK_STRATEGY_DN
           PK_STRATEGY_PT=$PK_STRATEGY_PT
           EOF
 
-          # Debug: print PK lengths to verify hex (64 chars after 0x = correct)
-          echo "PK_STRATEGY_LENDING length: ${#PK_STRATEGY_LENDING}"
-          echo "PK_STRATEGY_DN length: ${#PK_STRATEGY_DN}"
-          echo "PK_STRATEGY_PT length: ${#PK_STRATEGY_PT}"
-
-          # SCP to VPS
           scp -i ~/.ssh/deploy_key /tmp/deploy.env ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/defi-flow/experiment/.env
           rm /tmp/deploy.env
 

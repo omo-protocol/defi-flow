@@ -87,6 +87,7 @@ function computeMetrics(name, entry, state) {
     mode: entry.mode || "unknown",
     network: entry.network || "unknown",
     status: "running",
+    model: process.env.MODEL_NAME || "unknown",
   };
 }
 

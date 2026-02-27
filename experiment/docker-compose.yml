@@ -17,70 +17,360 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - AGENT_API_KEY=${AGENT_API_KEY}
+      - AGENT_API_KEY=${MINIMAX_API_KEY}
 
   # ═══════════════════════════════════════════════════════
-  # Agents
+  # Quant Agents — one per model
   # ═══════════════════════════════════════════════════════
 
-  quant-agent:
+  quant-minimax:
     image: ghcr.io/omo-protocol/defi-flow/quant-agent:latest
     build:
       context: ..
       dockerfile: experiment/quant-agent/Dockerfile
       secrets:
         - gh_token
-    container_name: quant-agent
+    container_name: quant-minimax
     restart: unless-stopped
     stop_grace_period: 30s
-    ports:
-      - "18789:18789"
     volumes:
-      - quant-strategies:/app/strategies
-      - quant-data:/app/data
-      - quant-memory:/app/workspace/memory
-      - quant-registry:/app/.defi-flow
+      - quant-minimax-strategies:/app/strategies
+      - quant-minimax-data:/app/data
+      - quant-minimax-memory:/app/workspace/memory
+      - quant-minimax-registry:/app/.defi-flow
     environment:
       - NODE_ENV=production
-      - MONGODB_DB=quant-agent
-      - AGENT_API_KEY=${AGENT_API_KEY}
-      - AGENT_BASE_URL=${AGENT_BASE_URL}
-      - AGENT_MODEL=${AGENT_MODEL}
-      - AGENT_MODEL_ID=${AGENT_MODEL_ID}
-      - AGENT_API_TYPE=${AGENT_API_TYPE}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - MODEL_NAME=minimax
+      - MONGODB_DB=quant-minimax
+      - AGENT_API_KEY=${MINIMAX_API_KEY}
+      - AGENT_BASE_URL=https://api.minimax.io/anthropic
+      - AGENT_MODEL=custom/MiniMax-M2.5
+      - AGENT_MODEL_ID=MiniMax-M2.5
+      - AGENT_API_TYPE=anthropic-messages
+      - ANTHROPIC_API_KEY=${OPUS_API_KEY}
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
-      - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_AGENT}
+      - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_MINIMAX}
       - MONGODB_URI=${MONGODB_URI}
 
-  hedgefund-agent:
+  quant-qwen:
+    image: ghcr.io/omo-protocol/defi-flow/quant-agent:latest
+    container_name: quant-qwen
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - quant-qwen-strategies:/app/strategies
+      - quant-qwen-data:/app/data
+      - quant-qwen-memory:/app/workspace/memory
+      - quant-qwen-registry:/app/.defi-flow
+    environment:
+      - NODE_ENV=production
+      - MODEL_NAME=qwen
+      - MONGODB_DB=quant-qwen
+      - AGENT_API_KEY=${OPENROUTER_API_KEY}
+      - AGENT_BASE_URL=https://openrouter.ai/api/v1
+      - AGENT_MODEL=custom/qwen/qwen3-235b-a22b
+      - AGENT_MODEL_ID=qwen/qwen3-235b-a22b
+      - AGENT_API_TYPE=openai-completions
+      - ANTHROPIC_API_KEY=${OPUS_API_KEY}
+      - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
+      - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_QWEN}
+      - MONGODB_URI=${MONGODB_URI}
+
+  quant-kimi:
+    image: ghcr.io/omo-protocol/defi-flow/quant-agent:latest
+    container_name: quant-kimi
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - quant-kimi-strategies:/app/strategies
+      - quant-kimi-data:/app/data
+      - quant-kimi-memory:/app/workspace/memory
+      - quant-kimi-registry:/app/.defi-flow
+    environment:
+      - NODE_ENV=production
+      - MODEL_NAME=kimi
+      - MONGODB_DB=quant-kimi
+      - AGENT_API_KEY=${KIMI_API_KEY}
+      - AGENT_BASE_URL=https://api.moonshot.cn/v1
+      - AGENT_MODEL=custom/kimi-k2-0711-preview
+      - AGENT_MODEL_ID=kimi-k2-0711-preview
+      - AGENT_API_TYPE=openai-completions
+      - ANTHROPIC_API_KEY=${OPUS_API_KEY}
+      - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
+      - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_KIMI}
+      - MONGODB_URI=${MONGODB_URI}
+
+  quant-glm:
+    image: ghcr.io/omo-protocol/defi-flow/quant-agent:latest
+    container_name: quant-glm
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - quant-glm-strategies:/app/strategies
+      - quant-glm-data:/app/data
+      - quant-glm-memory:/app/workspace/memory
+      - quant-glm-registry:/app/.defi-flow
+    environment:
+      - NODE_ENV=production
+      - MODEL_NAME=glm
+      - MONGODB_DB=quant-glm
+      - AGENT_API_KEY=${GLM_API_KEY}
+      - AGENT_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+      - AGENT_MODEL=custom/glm-4-plus
+      - AGENT_MODEL_ID=glm-4-plus
+      - AGENT_API_TYPE=openai-completions
+      - ANTHROPIC_API_KEY=${OPUS_API_KEY}
+      - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
+      - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_GLM}
+      - MONGODB_URI=${MONGODB_URI}
+
+  quant-opus:
+    image: ghcr.io/omo-protocol/defi-flow/quant-agent:latest
+    container_name: quant-opus
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - quant-opus-strategies:/app/strategies
+      - quant-opus-data:/app/data
+      - quant-opus-memory:/app/workspace/memory
+      - quant-opus-registry:/app/.defi-flow
+    environment:
+      - NODE_ENV=production
+      - MODEL_NAME=opus
+      - MONGODB_DB=quant-opus
+      - AGENT_API_KEY=${OPUS_API_KEY}
+      - AGENT_BASE_URL=https://api.anthropic.com
+      - AGENT_MODEL=custom/claude-opus-4-6
+      - AGENT_MODEL_ID=claude-opus-4-6
+      - AGENT_API_TYPE=anthropic-messages
+      - ANTHROPIC_API_KEY=${OPUS_API_KEY}
+      - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
+      - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_OPUS}
+      - MONGODB_URI=${MONGODB_URI}
+
+  quant-gemini:
+    image: ghcr.io/omo-protocol/defi-flow/quant-agent:latest
+    container_name: quant-gemini
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - quant-gemini-strategies:/app/strategies
+      - quant-gemini-data:/app/data
+      - quant-gemini-memory:/app/workspace/memory
+      - quant-gemini-registry:/app/.defi-flow
+    environment:
+      - NODE_ENV=production
+      - MODEL_NAME=gemini
+      - MONGODB_DB=quant-gemini
+      - AGENT_API_KEY=${GEMINI_API_KEY}
+      - AGENT_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+      - AGENT_MODEL=custom/gemini-3.1-pro-preview
+      - AGENT_MODEL_ID=gemini-3.1-pro-preview
+      - AGENT_API_TYPE=openai-completions
+      - ANTHROPIC_API_KEY=${OPUS_API_KEY}
+      - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
+      - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_GEMINI}
+      - MONGODB_URI=${MONGODB_URI}
+
+  quant-grok:
+    image: ghcr.io/omo-protocol/defi-flow/quant-agent:latest
+    container_name: quant-grok
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - quant-grok-strategies:/app/strategies
+      - quant-grok-data:/app/data
+      - quant-grok-memory:/app/workspace/memory
+      - quant-grok-registry:/app/.defi-flow
+    environment:
+      - NODE_ENV=production
+      - MODEL_NAME=grok
+      - MONGODB_DB=quant-grok
+      - AGENT_API_KEY=${OPENROUTER_API_KEY}
+      - AGENT_BASE_URL=https://openrouter.ai/api/v1
+      - AGENT_MODEL=custom/x-ai/grok-3
+      - AGENT_MODEL_ID=x-ai/grok-3
+      - AGENT_API_TYPE=openai-completions
+      - ANTHROPIC_API_KEY=${OPUS_API_KEY}
+      - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
+      - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_GROK}
+      - MONGODB_URI=${MONGODB_URI}
+
+  # ═══════════════════════════════════════════════════════
+  # Hedgefund Agents — one per model
+  # ═══════════════════════════════════════════════════════
+
+  hedgefund-minimax:
     image: ghcr.io/omo-protocol/defi-flow/hedgefund-agent:latest
     build:
       context: ..
       dockerfile: experiment/hedgefund-agent/Dockerfile
       secrets:
         - gh_token
-    container_name: hedgefund-agent
+    container_name: hedgefund-minimax
     restart: unless-stopped
     stop_grace_period: 30s
-    ports:
-      - "18790:18790"
     volumes:
-      - hedgefund-memory:/app/workspace/memory
+      - hedgefund-minimax-memory:/app/workspace/memory
       - lending-data:/app/strategy-states/lending:ro
       - dn-data:/app/strategy-states/delta_neutral:ro
       - pt-data:/app/strategy-states/pt_yield:ro
     environment:
       - NODE_ENV=production
-      - MONGODB_DB=hedgefund-agent
-      - AGENT_API_KEY=${AGENT_API_KEY}
-      - AGENT_BASE_URL=${AGENT_BASE_URL}
-      - AGENT_MODEL=${AGENT_MODEL}
-      - AGENT_MODEL_ID=${AGENT_MODEL_ID}
-      - AGENT_API_TYPE=${AGENT_API_TYPE}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - MODEL_NAME=minimax
+      - MONGODB_DB=hedgefund-minimax
+      - AGENT_API_KEY=${MINIMAX_API_KEY}
+      - AGENT_BASE_URL=https://api.minimax.io/anthropic
+      - AGENT_MODEL=custom/MiniMax-M2.5
+      - AGENT_MODEL_ID=MiniMax-M2.5
+      - AGENT_API_TYPE=anthropic-messages
+      - ANTHROPIC_API_KEY=${OPUS_API_KEY}
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
-      - PRIVATE_KEY=${PK_HEDGEFUND_AGENT}
+      - PRIVATE_KEY=${PK_HF_MINIMAX}
+      - MONGODB_URI=${MONGODB_URI}
+
+  hedgefund-qwen:
+    image: ghcr.io/omo-protocol/defi-flow/hedgefund-agent:latest
+    container_name: hedgefund-qwen
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - hedgefund-qwen-memory:/app/workspace/memory
+      - lending-data:/app/strategy-states/lending:ro
+      - dn-data:/app/strategy-states/delta_neutral:ro
+      - pt-data:/app/strategy-states/pt_yield:ro
+    environment:
+      - NODE_ENV=production
+      - MODEL_NAME=qwen
+      - MONGODB_DB=hedgefund-qwen
+      - AGENT_API_KEY=${OPENROUTER_API_KEY}
+      - AGENT_BASE_URL=https://openrouter.ai/api/v1
+      - AGENT_MODEL=custom/qwen/qwen3-235b-a22b
+      - AGENT_MODEL_ID=qwen/qwen3-235b-a22b
+      - AGENT_API_TYPE=openai-completions
+      - ANTHROPIC_API_KEY=${OPUS_API_KEY}
+      - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
+      - PRIVATE_KEY=${PK_HF_QWEN}
+      - MONGODB_URI=${MONGODB_URI}
+
+  hedgefund-kimi:
+    image: ghcr.io/omo-protocol/defi-flow/hedgefund-agent:latest
+    container_name: hedgefund-kimi
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - hedgefund-kimi-memory:/app/workspace/memory
+      - lending-data:/app/strategy-states/lending:ro
+      - dn-data:/app/strategy-states/delta_neutral:ro
+      - pt-data:/app/strategy-states/pt_yield:ro
+    environment:
+      - NODE_ENV=production
+      - MODEL_NAME=kimi
+      - MONGODB_DB=hedgefund-kimi
+      - AGENT_API_KEY=${KIMI_API_KEY}
+      - AGENT_BASE_URL=https://api.moonshot.cn/v1
+      - AGENT_MODEL=custom/kimi-k2-0711-preview
+      - AGENT_MODEL_ID=kimi-k2-0711-preview
+      - AGENT_API_TYPE=openai-completions
+      - ANTHROPIC_API_KEY=${OPUS_API_KEY}
+      - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
+      - PRIVATE_KEY=${PK_HF_KIMI}
+      - MONGODB_URI=${MONGODB_URI}
+
+  hedgefund-glm:
+    image: ghcr.io/omo-protocol/defi-flow/hedgefund-agent:latest
+    container_name: hedgefund-glm
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - hedgefund-glm-memory:/app/workspace/memory
+      - lending-data:/app/strategy-states/lending:ro
+      - dn-data:/app/strategy-states/delta_neutral:ro
+      - pt-data:/app/strategy-states/pt_yield:ro
+    environment:
+      - NODE_ENV=production
+      - MODEL_NAME=glm
+      - MONGODB_DB=hedgefund-glm
+      - AGENT_API_KEY=${GLM_API_KEY}
+      - AGENT_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+      - AGENT_MODEL=custom/glm-4-plus
+      - AGENT_MODEL_ID=glm-4-plus
+      - AGENT_API_TYPE=openai-completions
+      - ANTHROPIC_API_KEY=${OPUS_API_KEY}
+      - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
+      - PRIVATE_KEY=${PK_HF_GLM}
+      - MONGODB_URI=${MONGODB_URI}
+
+  hedgefund-opus:
+    image: ghcr.io/omo-protocol/defi-flow/hedgefund-agent:latest
+    container_name: hedgefund-opus
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - hedgefund-opus-memory:/app/workspace/memory
+      - lending-data:/app/strategy-states/lending:ro
+      - dn-data:/app/strategy-states/delta_neutral:ro
+      - pt-data:/app/strategy-states/pt_yield:ro
+    environment:
+      - NODE_ENV=production
+      - MODEL_NAME=opus
+      - MONGODB_DB=hedgefund-opus
+      - AGENT_API_KEY=${OPUS_API_KEY}
+      - AGENT_BASE_URL=https://api.anthropic.com
+      - AGENT_MODEL=custom/claude-opus-4-6
+      - AGENT_MODEL_ID=claude-opus-4-6
+      - AGENT_API_TYPE=anthropic-messages
+      - ANTHROPIC_API_KEY=${OPUS_API_KEY}
+      - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
+      - PRIVATE_KEY=${PK_HF_OPUS}
+      - MONGODB_URI=${MONGODB_URI}
+
+  hedgefund-gemini:
+    image: ghcr.io/omo-protocol/defi-flow/hedgefund-agent:latest
+    container_name: hedgefund-gemini
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - hedgefund-gemini-memory:/app/workspace/memory
+      - lending-data:/app/strategy-states/lending:ro
+      - dn-data:/app/strategy-states/delta_neutral:ro
+      - pt-data:/app/strategy-states/pt_yield:ro
+    environment:
+      - NODE_ENV=production
+      - MODEL_NAME=gemini
+      - MONGODB_DB=hedgefund-gemini
+      - AGENT_API_KEY=${GEMINI_API_KEY}
+      - AGENT_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+      - AGENT_MODEL=custom/gemini-3.1-pro-preview
+      - AGENT_MODEL_ID=gemini-3.1-pro-preview
+      - AGENT_API_TYPE=openai-completions
+      - ANTHROPIC_API_KEY=${OPUS_API_KEY}
+      - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
+      - PRIVATE_KEY=${PK_HF_GEMINI}
+      - MONGODB_URI=${MONGODB_URI}
+
+  hedgefund-grok:
+    image: ghcr.io/omo-protocol/defi-flow/hedgefund-agent:latest
+    container_name: hedgefund-grok
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - hedgefund-grok-memory:/app/workspace/memory
+      - lending-data:/app/strategy-states/lending:ro
+      - dn-data:/app/strategy-states/delta_neutral:ro
+      - pt-data:/app/strategy-states/pt_yield:ro
+    environment:
+      - NODE_ENV=production
+      - MODEL_NAME=grok
+      - MONGODB_DB=hedgefund-grok
+      - AGENT_API_KEY=${OPENROUTER_API_KEY}
+      - AGENT_BASE_URL=https://openrouter.ai/api/v1
+      - AGENT_MODEL=custom/x-ai/grok-3
+      - AGENT_MODEL_ID=x-ai/grok-3
+      - AGENT_API_TYPE=openai-completions
+      - ANTHROPIC_API_KEY=${OPUS_API_KEY}
+      - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
+      - PRIVATE_KEY=${PK_HF_GROK}
       - MONGODB_URI=${MONGODB_URI}
 
   # ═══════════════════════════════════════════════════════
@@ -142,11 +432,44 @@ secrets:
 
 volumes:
   api-data:
-  quant-strategies:
-  quant-data:
-  quant-memory:
-  quant-registry:
-  hedgefund-memory:
+  # Quant agents (7 models × 4 volumes each)
+  quant-minimax-strategies:
+  quant-minimax-data:
+  quant-minimax-memory:
+  quant-minimax-registry:
+  quant-qwen-strategies:
+  quant-qwen-data:
+  quant-qwen-memory:
+  quant-qwen-registry:
+  quant-kimi-strategies:
+  quant-kimi-data:
+  quant-kimi-memory:
+  quant-kimi-registry:
+  quant-glm-strategies:
+  quant-glm-data:
+  quant-glm-memory:
+  quant-glm-registry:
+  quant-opus-strategies:
+  quant-opus-data:
+  quant-opus-memory:
+  quant-opus-registry:
+  quant-gemini-strategies:
+  quant-gemini-data:
+  quant-gemini-memory:
+  quant-gemini-registry:
+  quant-grok-strategies:
+  quant-grok-data:
+  quant-grok-memory:
+  quant-grok-registry:
+  # Hedgefund agents (7 models × 1 volume each)
+  hedgefund-minimax-memory:
+  hedgefund-qwen-memory:
+  hedgefund-kimi-memory:
+  hedgefund-glm-memory:
+  hedgefund-opus-memory:
+  hedgefund-gemini-memory:
+  hedgefund-grok-memory:
+  # Strategy data (shared with hedgefund agents as RO)
   lending-data:
   lending-logs:
   dn-data:

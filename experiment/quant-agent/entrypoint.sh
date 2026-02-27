@@ -23,7 +23,9 @@ cleanup() {
 }
 trap cleanup SIGTERM SIGINT
 
-echo "=== Quant Agent Starting ==="
+PORT=${GATEWAY_PORT:-18789}
+
+echo "=== Quant Agent Starting (model: ${MODEL_NAME:-unknown}, port: $PORT) ==="
 
 # Ship any pending logs from previous session
 if [ -n "$MONGODB_URI" ]; then
@@ -32,13 +34,13 @@ if [ -n "$MONGODB_URI" ]; then
 fi
 
 # Start gateway in background
-openclaw gateway --port 18789 --verbose &
+openclaw gateway --port $PORT --verbose &
 GATEWAY_PID=$!
 
 # Wait for gateway to be ready
 echo "Waiting for gateway..."
 for i in $(seq 1 30); do
-  if curl -sf http://127.0.0.1:18789/ > /dev/null 2>&1; then
+  if curl -sf http://127.0.0.1:$PORT/ > /dev/null 2>&1; then
     echo "Gateway ready."
     break
   fi
