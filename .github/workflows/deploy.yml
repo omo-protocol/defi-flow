@@ -181,6 +181,11 @@ jobs:
         env:
           SERVICES: ${{ needs.compute-services.outputs.services }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AGENT_API_KEY: ${{ secrets.AGENT_API_KEY }}
+          AGENT_BASE_URL: ${{ secrets.AGENT_BASE_URL }}
+          AGENT_MODEL: ${{ secrets.AGENT_MODEL }}
+          AGENT_MODEL_ID: ${{ secrets.AGENT_MODEL_ID }}
+          AGENT_API_TYPE: ${{ secrets.AGENT_API_TYPE }}
           GATEWAY_AUTH_TOKEN: ${{ secrets.GATEWAY_AUTH_TOKEN }}
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
@@ -193,7 +198,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          envs: SERVICES,ANTHROPIC_API_KEY,GATEWAY_AUTH_TOKEN,MONGODB_URI,GHCR_TOKEN,PK_QUANT_AGENT,PK_HEDGEFUND_AGENT,PK_STRATEGY_LENDING,PK_STRATEGY_DN,PK_STRATEGY_PT
+          envs: SERVICES,ANTHROPIC_API_KEY,AGENT_API_KEY,AGENT_BASE_URL,AGENT_MODEL,AGENT_MODEL_ID,AGENT_API_TYPE,GATEWAY_AUTH_TOKEN,MONGODB_URI,GHCR_TOKEN,PK_QUANT_AGENT,PK_HEDGEFUND_AGENT,PK_STRATEGY_LENDING,PK_STRATEGY_DN,PK_STRATEGY_PT
           command_timeout: 10m
           script: |
             set -e
@@ -218,6 +223,11 @@ jobs:
 
             # ── Export secrets as env vars for docker compose ──
             export ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
+            export AGENT_API_KEY="$AGENT_API_KEY"
+            export AGENT_BASE_URL="$AGENT_BASE_URL"
+            export AGENT_MODEL="$AGENT_MODEL"
+            export AGENT_MODEL_ID="$AGENT_MODEL_ID"
+            export AGENT_API_TYPE="$AGENT_API_TYPE"
             export GATEWAY_AUTH_TOKEN="$GATEWAY_AUTH_TOKEN"
             export MONGODB_URI="$MONGODB_URI"
             export PK_QUANT_AGENT="$PK_QUANT_AGENT"

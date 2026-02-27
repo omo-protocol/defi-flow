@@ -2,8 +2,8 @@
   "name": "PT Fixed Yield",
   "description": "Buy Pendle PT-kHYPE at discount, hold to maturity (2026-03-19) for fixed yield (~2.7% implied APY). Single-leg strategy on HyperEVM.",
   "tokens": {
-    "USDC": {
-      "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f"
+    "USDT0": {
+      "hyperevm": "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb"
     }
   },
   "contracts": {
@@ -19,7 +19,7 @@
     "pendle_pt_khype_yt": {
       "hyperevm": "0x8e8df024cf6d3e916be0821ff3177db6981fcad2"
     },
-    "morpho_usdc_vault": {
+    "morpho_usdt0_vault": {
       "hyperevm": "0xe600EB6913376B4Ac7eD645B2bFF8A20B4F8cfB0"
     },
     "valuer_contract": {
@@ -30,9 +30,9 @@
     }
   },
   "reserve": {
-    "vault_address": "morpho_usdc_vault",
+    "vault_address": "morpho_usdt0_vault",
     "vault_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
-    "vault_token": "USDC",
+    "vault_token": "USDT0",
     "adapter_address": "adapter"
   },
   "valuer": {
@@ -48,7 +48,7 @@
       "type": "wallet",
       "id": "wallet",
       "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
-      "token": "USDC",
+      "token": "USDT0",
       "address": "0x0c708C70a8a1c4e1ffBcBae38680F4cCDe40bC0C"
     },
     {
@@ -62,7 +62,7 @@
     {
       "from_node": "wallet",
       "to_node": "mint_pt",
-      "token": "USDC",
+      "token": "USDT0",
       "amount": { "type": "all" }
     }
   ]
