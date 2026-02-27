@@ -12,6 +12,19 @@ import {
   tokensManifestAtom,
   contractsManifestAtom,
 } from "@/lib/workflow-store";
+import {
+  authUserAtom,
+  authLoadingAtom,
+  isAuthenticatedAtom,
+  selectedWalletIdAtom,
+  type StrategyInfo,
+} from "@/lib/auth-store";
+import { signIn } from "next-auth/react";
+import {
+  register,
+  listStrategies,
+  getStrategy,
+} from "@/lib/auth-api";
 import { WorkflowCanvas } from "@/components/workflow/workflow-canvas";
 import { NodeConfigPanel } from "@/components/workflow/node-config-panel";
 import { StatusDashboard } from "@/components/workflow/status-dashboard";
@@ -20,6 +33,7 @@ import { useEffect, useState } from "react";
 import { convertDefiFlowToCanvas } from "@/lib/converters/canvas-defi-flow";
 import type { DefiFlowWorkflow } from "@/lib/types/defi-flow";
 import { useReactFlow } from "@xyflow/react";
+import { toast } from "sonner";
 
 // Right panel mode: "config" when a node/edge is selected, "engine" for backtest/run, "agent" for AI builder
 export const panelModeAtom = atom<"config" | "engine" | "agent">("config");
@@ -36,6 +50,62 @@ function WelcomeOverlay({ onClose }: { onClose: () => void }) {
   const setTokens = useSetAtom(tokensManifestAtom);
   const setContracts = useSetAtom(contractsManifestAtom);
   const { fitView } = useReactFlow();
+
+  const authLoading = useAtomValue(authLoadingAtom);
+  const isAuth = useAtomValue(isAuthenticatedAtom);
+  const user = useAtomValue(authUserAtom);
+  const setSelectedWalletId = useSetAtom(selectedWalletIdAtom);
+
+  const [tab, setTab] = useState<"login" | "register">("login");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [savedStrategies, setSavedStrategies] = useState<StrategyInfo[]>([]);
+
+  // Load saved strategies when authenticated
+  useEffect(() => {
+    if (isAuth) {
+      listStrategies().then(setSavedStrategies).catch(() => {});
+    }
+  }, [isAuth]);
+
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError("");
+    setSubmitting(true);
+    try {
+      if (tab === "register") {
+        if (password !== confirmPassword) {
+          setAuthError("Passwords do not match");
+          setSubmitting(false);
+          return;
+        }
+        await register(username, password);
+      }
+
+      // Sign in via NextAuth credentials provider
+      const result = await signIn("credentials", {
+        username,
+        password,
+        redirect: false,
+      });
+
+      if (result?.error) {
+        setAuthError("Invalid credentials");
+        setSubmitting(false);
+        return;
+      }
+
+      // Session update is handled by AuthProvider via useSession
+      toast.success(tab === "register" ? `Welcome, ${username}!` : `Welcome back, ${username}!`);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "Authentication failed");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const loadExample = async (file: string) => {
     try {
@@ -54,18 +124,179 @@ function WelcomeOverlay({ onClose }: { onClose: () => void }) {
     }
   };
 
+  const loadStrategy = async (id: string) => {
+    try {
+      const strat = await getStrategy(id);
+      const workflow: DefiFlowWorkflow = JSON.parse(strat.workflow_json);
+      const { nodes, edges, tokens, contracts } = convertDefiFlowToCanvas(workflow);
+      setNodes(nodes);
+      setEdges(edges);
+      setName(workflow.name || strat.name);
+      setTokens(tokens);
+      setContracts(contracts);
+      if (strat.wallet_id) setSelectedWalletId(strat.wallet_id);
+      onClose();
+      toast.success(`Loaded "${strat.name}"`);
+      setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 200);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load");
+    }
+  };
+
+  if (authLoading) {
+    return (
+      <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-md">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+          <span className="text-sm text-muted-foreground">Loading...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Not authenticated — show login/register
+  if (!isAuth) {
+    return (
+      <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-md">
+        <div className="bg-card border rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4">
+          <div className="flex items-center gap-2 mb-1">
+            <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-primary"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            </div>
+            <h1 className="text-lg font-bold tracking-tight">DeFi Flow</h1>
+          </div>
+          <p className="text-sm text-muted-foreground mb-6">
+            Sign in to build and manage your strategies.
+          </p>
+
+          {/* Tabs */}
+          <div className="flex mb-4 border rounded-lg overflow-hidden">
+            <button
+              onClick={() => { setTab("login"); setAuthError(""); }}
+              className={`flex-1 px-3 py-1.5 text-xs font-medium transition-colors ${
+                tab === "login"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Sign In
+            </button>
+            <button
+              onClick={() => { setTab("register"); setAuthError(""); }}
+              className={`flex-1 px-3 py-1.5 text-xs font-medium transition-colors ${
+                tab === "register"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Register
+            </button>
+          </div>
+
+          <form onSubmit={handleAuth} className="space-y-3">
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Username</label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+                className="w-full h-9 px-3 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 transition-shadow"
+                required
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete={tab === "register" ? "new-password" : "current-password"}
+                className="w-full h-9 px-3 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 transition-shadow"
+                required
+              />
+            </div>
+            {tab === "register" && (
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Confirm Password</label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  autoComplete="new-password"
+                  className="w-full h-9 px-3 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 transition-shadow"
+                  required
+                />
+              </div>
+            )}
+            {authError && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-destructive/10 text-destructive text-xs">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                {authError}
+              </div>
+            )}
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-full px-4 py-2.5 rounded-lg bg-primary text-primary-foreground font-medium text-sm hover:bg-primary/90 transition-all disabled:opacity-50"
+            >
+              {submitting ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="w-3.5 h-3.5 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
+                  {tab === "register" ? "Creating..." : "Signing in..."}
+                </span>
+              ) : tab === "register" ? "Create Account" : "Sign In"}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // Authenticated — show strategies + examples
   return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
-      <div className="bg-card border rounded-xl shadow-2xl p-8 max-w-md w-full mx-4">
-        <h1 className="text-xl font-bold mb-1">DeFi Flow</h1>
+    <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-md">
+      <div className="bg-card border rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4">
+        <h1 className="text-lg font-bold mb-1">Welcome back, {user?.username}</h1>
         <p className="text-sm text-muted-foreground mb-6">
-          Visual strategy builder for DeFi workflows. Add nodes, connect them
-          with token flows, configure parameters, and export valid strategy JSON.
+          Load a strategy or start fresh.
         </p>
 
+        {/* Saved strategies */}
+        {savedStrategies.length > 0 && (
+          <div className="space-y-2 mb-6">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              Your Strategies
+            </p>
+            {savedStrategies.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => loadStrategy(s.id)}
+                className="w-full text-left px-4 py-3 rounded-lg border hover:bg-accent transition-colors"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">{s.name}</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    {new Date(s.updated_at * 1000).toLocaleDateString()}
+                  </span>
+                </div>
+                {(s.wallet_label || s.wallet_address) && (
+                  <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">
+                    {s.wallet_label && <span>{s.wallet_label} </span>}
+                    {s.wallet_address && (
+                      <span>{s.wallet_address.slice(0, 6)}...{s.wallet_address.slice(-4)}</span>
+                    )}
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Examples */}
         <div className="space-y-2 mb-6">
           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            Load Example
+            Examples
           </p>
           {EXAMPLES.map((ex) => (
             <button
@@ -80,10 +311,14 @@ function WelcomeOverlay({ onClose }: { onClose: () => void }) {
 
         <button
           onClick={onClose}
-          className="w-full px-4 py-2.5 rounded-lg bg-primary text-primary-foreground font-medium text-sm hover:bg-primary/90 transition-colors"
+          className="w-full px-4 py-2.5 rounded-lg bg-primary text-primary-foreground font-medium text-sm hover:bg-primary/90 transition-all"
         >
           Start from Scratch
         </button>
+
+        <p className="text-[10px] text-muted-foreground/50 text-center mt-4">
+          Cmd+S to save · Cmd+Z to undo · Delete to remove
+        </p>
       </div>
     </div>
   );
@@ -104,37 +339,20 @@ function RightPanel() {
   return (
     <div className="h-full flex flex-col">
       {/* Tab bar */}
-      <div className="flex border-b bg-card">
-        <button
-          onClick={() => setPanelMode("config")}
-          className={`flex-1 px-3 py-1.5 text-xs font-medium transition-colors ${
-            panelMode === "config"
-              ? "text-foreground border-b-2 border-primary"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Config
-        </button>
-        <button
-          onClick={() => setPanelMode("engine")}
-          className={`flex-1 px-3 py-1.5 text-xs font-medium transition-colors ${
-            panelMode === "engine"
-              ? "text-foreground border-b-2 border-primary"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Engine
-        </button>
-        <button
-          onClick={() => setPanelMode("agent")}
-          className={`flex-1 px-3 py-1.5 text-xs font-medium transition-colors ${
-            panelMode === "agent"
-              ? "text-foreground border-b-2 border-primary"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Agent
-        </button>
+      <div className="flex border-b bg-card px-1 pt-1">
+        {(["config", "engine", "agent"] as const).map((mode) => (
+          <button
+            key={mode}
+            onClick={() => setPanelMode(mode)}
+            className={`flex-1 px-3 py-1.5 text-xs font-medium transition-all rounded-t-md ${
+              panelMode === mode
+                ? "text-foreground bg-background border border-b-0 border-border -mb-px"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {mode === "config" ? "Config" : mode === "engine" ? "Engine" : "Agent"}
+          </button>
+        ))}
       </div>
 
       {/* Content */}
@@ -158,11 +376,19 @@ export default function Home() {
   const setName = useSetAtom(workflowNameAtom);
   const setTokensManifest = useSetAtom(tokensManifestAtom);
   const setContractsManifest = useSetAtom(contractsManifestAtom);
+  const isAuth = useAtomValue(isAuthenticatedAtom);
+  const authLoading = useAtomValue(authLoadingAtom);
   const [showWelcome, setShowWelcome] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
-  // Restore from localStorage on mount
+  // Restore from localStorage on mount (only when authenticated)
   useEffect(() => {
+    if (authLoading) return;
+    if (!isAuth) {
+      setShowWelcome(true);
+      setLoaded(true);
+      return;
+    }
     try {
       const saved = localStorage.getItem("defi-flow-current");
       if (saved) {
@@ -183,7 +409,7 @@ export default function Home() {
     // No saved data — show welcome
     setShowWelcome(true);
     setLoaded(true);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [authLoading, isAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!loaded) return null;
 
@@ -204,8 +430,10 @@ export default function Home() {
         </div>
       )}
 
-      {/* Welcome overlay */}
-      {showWelcome && <WelcomeOverlay onClose={() => setShowWelcome(false)} />}
+      {/* Welcome overlay — shown on first visit OR when not authenticated */}
+      {(showWelcome || !isAuth) && (
+        <WelcomeOverlay onClose={() => setShowWelcome(false)} />
+      )}
     </div>
   );
 }

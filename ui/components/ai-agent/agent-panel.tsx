@@ -18,6 +18,8 @@ import {
   type Message,
   type ToolActivity,
 } from "@/lib/ai-agent/store";
+import { userConfigAtom } from "@/lib/auth-store";
+import { updateConfig } from "@/lib/auth-api";
 import { agentLoop, type ToolHandlers } from "@/lib/ai-agent/client";
 import { buildSystemPrompt } from "@/lib/ai-agent/prompts";
 import {
@@ -91,6 +93,30 @@ export function AgentPanel() {
   const [model, setModel] = useAtom(openaiModelAtom);
   const [messages, setMessages] = useAtom(messagesAtom);
   const [generating, setGenerating] = useAtom(generatingAtom);
+  const config = useAtomValue(userConfigAtom);
+
+  // Hydrate agent settings from persisted config on mount
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    if (hydratedRef.current) return;
+    if (config.agent_api_key && !apiKey) setApiKey(config.agent_api_key);
+    if (config.agent_base_url) setBaseUrl(config.agent_base_url);
+    if (config.agent_model) setModel(config.agent_model);
+    hydratedRef.current = true;
+  }, [config]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist agent settings on change (debounced)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const persistAgent = useCallback((key: string, value: string) => {
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      updateConfig({ [key]: value || null }).catch(() => {});
+    }, 1000);
+  }, []);
+
+  const handleApiKeyChange = (v: string) => { setApiKey(v); persistAgent("agent_api_key", v); };
+  const handleBaseUrlChange = (v: string) => { setBaseUrl(v); persistAgent("agent_base_url", v); };
+  const handleModelChange = (v: string) => { setModel(v); persistAgent("agent_model", v); };
 
   const [nodes, setNodes] = useAtom(nodesAtom);
   const [edges, setEdges] = useAtom(edgesAtom);
@@ -794,24 +820,24 @@ export function AgentPanel() {
             type="password"
             placeholder="API key"
             value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
+            onChange={(e) => handleApiKeyChange(e.target.value)}
           />
           <Input
             className="h-7 text-xs w-32 font-mono"
             placeholder="Model"
             value={model}
-            onChange={(e) => setModel(e.target.value)}
+            onChange={(e) => handleModelChange(e.target.value)}
           />
         </div>
         <Input
           className="h-7 text-xs font-mono"
           placeholder="Base URL (e.g. https://api.openai.com/v1)"
           value={baseUrl}
-          onChange={(e) => setBaseUrl(e.target.value)}
+          onChange={(e) => handleBaseUrlChange(e.target.value)}
         />
         {!apiKey && (
           <p className="text-[10px] text-muted-foreground">
-            Any OpenAI-compatible API. Key stored in memory only.
+            Any OpenAI-compatible API. Key persisted in your account.
           </p>
         )}
       </div>

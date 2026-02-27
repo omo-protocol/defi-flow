@@ -48,6 +48,11 @@ next-env.d.ts
 
 tmp/
 
+# SQLite database
+/data/*.db
+/data/*.db-journal
+/data/*.db-wal
+
 # generated files
 lib/types/integration.ts
 lib/codegen-registry.ts
