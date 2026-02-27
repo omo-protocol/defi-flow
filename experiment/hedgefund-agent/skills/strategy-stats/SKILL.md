@@ -7,7 +7,6 @@ metadata:
     emoji: "📈"
     requires:
       bins:
-        - defi-flow
         - cast
 ---
 

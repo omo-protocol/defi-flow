@@ -8,8 +8,7 @@
         "scope": "agent"
       },
       "heartbeat": {
-        "every": "15m",
-        "target": ["main"]
+        "every": "15m"
       }
     },
     "list": [
@@ -33,7 +32,6 @@
   "gateway": {
     "port": 18790,
     "mode": "local",
-    "bind": "0.0.0.0",
     "auth": {
       "mode": "token",
       "token": "${GATEWAY_AUTH_TOKEN}"
