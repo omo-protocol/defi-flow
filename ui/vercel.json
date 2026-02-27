@@ -1,9 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "rootDirectory": "ui",
-  "buildCommand": "npm run build",
-  "installCommand": "npm ci",
   "headers": [
     {
       "source": "/defi_flow_bg.wasm",
