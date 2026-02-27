@@ -36,6 +36,9 @@
     "tailwind-merge": "^3.3.1",
     "vaul": "^1.1.2"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": ["better-sqlite3"]
+  },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/bcryptjs": "^2.4.6",
