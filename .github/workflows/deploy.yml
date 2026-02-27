@@ -11,7 +11,6 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io/omo-protocol/defi-flow
-  ALL_SERVICES: defi-flow-api defi-flow-ui quant-agent hedgefund-agent strategy-lending strategy-delta-neutral strategy-pt-yield
 
 jobs:
 
@@ -25,7 +24,6 @@ jobs:
       matrix:
         service:
           - defi-flow-api
-          - defi-flow-ui
           - quant-agent
           - hedgefund-agent
           - strategy-lending
@@ -49,10 +47,6 @@ jobs:
           case "$SERVICE" in
             defi-flow-api)
               echo "dockerfile=Dockerfile.api" >> $GITHUB_OUTPUT
-              echo "build_args=" >> $GITHUB_OUTPUT
-              ;;
-            defi-flow-ui)
-              echo "dockerfile=ui/Dockerfile" >> $GITHUB_OUTPUT
               echo "build_args=" >> $GITHUB_OUTPUT
               ;;
             quant-agent)
@@ -103,7 +97,6 @@ jobs:
         # NOTE: Private keys (PK_*) are in /opt/defi-flow/experiment/.env on VPS.
         # Do NOT pass them through ssh-action — it converts 0x hex to decimal.
         env:
-          SERVICES: ${{ env.ALL_SERVICES }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           AGENT_API_KEY: ${{ secrets.AGENT_API_KEY }}
           AGENT_BASE_URL: ${{ secrets.AGENT_BASE_URL }}
@@ -113,19 +106,18 @@ jobs:
           GATEWAY_AUTH_TOKEN: ${{ secrets.GATEWAY_AUTH_TOKEN }}
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
-          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          envs: SERVICES,ANTHROPIC_API_KEY,AGENT_API_KEY,AGENT_BASE_URL,AGENT_MODEL,AGENT_MODEL_ID,AGENT_API_TYPE,GATEWAY_AUTH_TOKEN,MONGODB_URI,GHCR_TOKEN,AUTH_SECRET
+          envs: ANTHROPIC_API_KEY,AGENT_API_KEY,AGENT_BASE_URL,AGENT_MODEL,AGENT_MODEL_ID,AGENT_API_TYPE,GATEWAY_AUTH_TOKEN,MONGODB_URI,GHCR_TOKEN
           command_timeout: 10m
           script: |
             set -e
             export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
             echo "═══════════════════════════════════════════════"
-            echo " Deploying: $SERVICES"
+            echo " Deploying to VPS"
             echo "═══════════════════════════════════════════════"
 
             # ── Auth with GHCR ──
@@ -135,17 +127,11 @@ jobs:
             mkdir -p /opt/defi-flow/experiment
             cd /opt/defi-flow
 
-            # ── Pull latest docker-compose.yml + Caddyfile ──
             curl -sL -H "Authorization: token $GHCR_TOKEN" \
               "https://raw.githubusercontent.com/omo-protocol/defi-flow/main/experiment/docker-compose.yml" \
               -o experiment/docker-compose.yml
 
-            curl -sL -H "Authorization: token $GHCR_TOKEN" \
-              "https://raw.githubusercontent.com/omo-protocol/defi-flow/main/experiment/Caddyfile" \
-              -o experiment/Caddyfile
-
             # ── Export secrets as env vars for docker compose ──
-            # PKs come from /opt/defi-flow/experiment/.env (not passed via SSH)
             export ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
             export AGENT_API_KEY="$AGENT_API_KEY"
             export AGENT_BASE_URL="$AGENT_BASE_URL"
@@ -154,7 +140,6 @@ jobs:
             export AGENT_API_TYPE="$AGENT_API_TYPE"
             export GATEWAY_AUTH_TOKEN="$GATEWAY_AUTH_TOKEN"
             export MONGODB_URI="$MONGODB_URI"
-            export AUTH_SECRET="$AUTH_SECRET"
 
             # ── Load PKs from .env (hex keys that ssh-action would mangle) ──
             cd experiment
