@@ -106,6 +106,36 @@ pub fn check_reserve_config(workflow: &Workflow) -> Vec<ValidationError> {
         });
     }
 
+    // adapter_address (if set) must exist in contracts manifest for vault_chain
+    if let Some(ref adapter_key) = rc.adapter_address {
+        if let Some(manifest) = &workflow.contracts {
+            match manifest.get(adapter_key) {
+                Some(chains) => {
+                    if !chains
+                        .keys()
+                        .any(|c| c.eq_ignore_ascii_case(&rc.vault_chain.name))
+                    {
+                        errors.push(ValidationError::ReserveVaultNotInManifest {
+                            vault: adapter_key.clone(),
+                            chain: rc.vault_chain.name.clone(),
+                        });
+                    }
+                }
+                None => {
+                    errors.push(ValidationError::ReserveVaultNotInManifest {
+                        vault: adapter_key.clone(),
+                        chain: rc.vault_chain.name.clone(),
+                    });
+                }
+            }
+        } else {
+            errors.push(ValidationError::ReserveVaultNotInManifest {
+                vault: adapter_key.clone(),
+                chain: rc.vault_chain.name.clone(),
+            });
+        }
+    }
+
     // Cross-chain warning: if vault is on a different chain than venues,
     // warn if no bridge/movement node exists to route capital.
     let vault_chain = rc.vault_chain.name.to_lowercase();

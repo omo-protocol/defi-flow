@@ -60,7 +60,30 @@ impl MorphoVault {
         config: &RuntimeConfig,
         tokens: &evm::TokenManifest,
         contracts: &evm::ContractManifest,
+        node: &Node,
     ) -> Result<Self> {
+        // Pre-populate cached context so total_value() can query on-chain after restart.
+        let cached_ctx = if let Node::Vault {
+            chain,
+            vault_address,
+            asset,
+            ..
+        } = node
+        {
+            let rpc_url = chain.rpc_url();
+            let vault_addr = evm::resolve_contract(contracts, vault_address, chain);
+            match (rpc_url, vault_addr) {
+                (Some(rpc), Some(addr)) => Some(CachedVaultContext {
+                    vault_addr: addr,
+                    rpc_url: rpc.to_string(),
+                    asset_symbol: asset.clone(),
+                }),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
         Ok(MorphoVault {
             wallet_address: config.wallet_address,
             private_key: config.private_key.clone(),
@@ -69,8 +92,33 @@ impl MorphoVault {
             contracts: contracts.clone(),
             deposited_value: 0.0,
             metrics: SimMetrics::default(),
-            cached_ctx: None,
+            cached_ctx,
         })
+    }
+
+    /// Query on-chain vault share balance and convert to underlying asset value.
+    async fn query_onchain_value(&self, ctx: &CachedVaultContext) -> Result<f64> {
+        let rp = evm::read_provider(&ctx.rpc_url)?;
+        let vault = IMorphoVault::new(ctx.vault_addr, &rp);
+
+        let shares = vault
+            .balanceOf(self.wallet_address)
+            .call()
+            .await
+            .context("vault.balanceOf")?;
+
+        if shares.is_zero() {
+            return Ok(0.0);
+        }
+
+        let assets = vault
+            .convertToAssets(shares)
+            .call()
+            .await
+            .context("vault.convertToAssets")?;
+
+        let decimals = token_decimals_for(&ctx.asset_symbol);
+        Ok(evm::from_token_units(assets, decimals))
     }
 
     async fn execute_deposit(
@@ -261,6 +309,20 @@ impl Venue for MorphoVault {
     }
 
     async fn total_value(&self) -> Result<f64> {
+        // Live mode: query on-chain share balance → convertToAssets for accurate TVL.
+        if !self.dry_run {
+            if let Some(ctx) = &self.cached_ctx {
+                match self.query_onchain_value(ctx).await {
+                    Ok(val) => return Ok(val),
+                    Err(e) => {
+                        eprintln!(
+                            "  VAULT: on-chain query failed, falling back to local: {:#}",
+                            e
+                        );
+                    }
+                }
+            }
+        }
         Ok(self.deposited_value)
     }
 

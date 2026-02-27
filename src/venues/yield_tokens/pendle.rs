@@ -76,10 +76,23 @@ pub struct PendleYield {
     contracts: evm::ContractManifest,
     pt_holdings: HashMap<String, f64>,
     yt_holdings: HashMap<String, f64>,
+    /// Pre-populated market name from node for on-chain queries.
+    market_name: Option<String>,
 }
 
 impl PendleYield {
-    pub fn new(config: &RuntimeConfig, contracts: &evm::ContractManifest) -> Result<Self> {
+    pub fn new(
+        config: &RuntimeConfig,
+        contracts: &evm::ContractManifest,
+        node: &Node,
+    ) -> Result<Self> {
+        // Pre-populate market name so total_value() can query on-chain after restart.
+        let market_name = if let Node::Pendle { market, .. } = node {
+            Some(market.clone())
+        } else {
+            None
+        };
+
         Ok(PendleYield {
             wallet_address: config.wallet_address,
             private_key: config.private_key.clone(),
@@ -87,7 +100,41 @@ impl PendleYield {
             contracts: contracts.clone(),
             pt_holdings: HashMap::new(),
             yt_holdings: HashMap::new(),
+            market_name,
         })
+    }
+
+    /// Query on-chain PT and YT token balances for a market.
+    async fn query_onchain_value(&self, market_name: &str) -> Result<f64> {
+        let chain = pendle_chain(&self.contracts, market_name)
+            .context("Pendle market chain not found")?;
+        let rpc_url = chain
+            .rpc_url()
+            .context("Pendle chain requires RPC URL")?;
+        let rp = evm::read_provider(rpc_url)?;
+
+        let mut total = 0.0;
+
+        // Query PT token balance
+        let pt_key = pendle_contract_key(market_name, "pt");
+        if let Some(pt_addr) = evm::resolve_contract(&self.contracts, &pt_key, &chain) {
+            let pt_token = IERC20::new(pt_addr, &rp);
+            if let Ok(balance) = pt_token.balanceOf(self.wallet_address).call().await {
+                // PT tokens are 18 decimals, approximately 1:1 with underlying at maturity
+                total += evm::from_token_units(balance, 18);
+            }
+        }
+
+        // Query YT token balance
+        let yt_key = pendle_contract_key(market_name, "yt");
+        if let Some(yt_addr) = evm::resolve_contract(&self.contracts, &yt_key, &chain) {
+            let yt_token = IERC20::new(yt_addr, &rp);
+            if let Ok(balance) = yt_token.balanceOf(self.wallet_address).call().await {
+                total += evm::from_token_units(balance, 18);
+            }
+        }
+
+        Ok(total)
     }
 
     async fn execute_mint_pt(
@@ -268,6 +315,21 @@ impl Venue for PendleYield {
     }
 
     async fn total_value(&self) -> Result<f64> {
+        // Live mode: query on-chain PT/YT token balances for accurate TVL.
+        if !self.dry_run {
+            if let Some(ref market) = self.market_name {
+                match self.query_onchain_value(market).await {
+                    Ok(val) if val > 0.0 => return Ok(val),
+                    Ok(_) => {} // 0 balance, fall through to local tracking
+                    Err(e) => {
+                        eprintln!(
+                            "  PENDLE: on-chain query failed, falling back to local: {:#}",
+                            e
+                        );
+                    }
+                }
+            }
+        }
         let pt_total: f64 = self.pt_holdings.values().sum();
         let yt_total: f64 = self.yt_holdings.values().sum();
         Ok(pt_total + yt_total)

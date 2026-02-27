@@ -81,7 +81,33 @@ impl AaveLending {
         config: &RuntimeConfig,
         tokens: &evm::TokenManifest,
         contracts: &evm::ContractManifest,
+        node: &Node,
     ) -> Result<Self> {
+        // Pre-populate cached context from the node so total_value() can query
+        // on-chain state even before the first execute() (e.g. after a restart).
+        let cached_ctx = if let Node::Lending {
+            chain,
+            pool_address,
+            asset,
+            ..
+        } = node
+        {
+            let rpc_url = chain.rpc_url();
+            let pool_addr = evm::resolve_contract(contracts, pool_address, chain);
+            let token_addr = evm::resolve_token(tokens, chain, asset);
+            match (rpc_url, pool_addr, token_addr) {
+                (Some(rpc), Some(pool), Some(token)) => Some(CachedLendingContext {
+                    pool_addr: pool,
+                    token_addr: token,
+                    rpc_url: rpc.to_string(),
+                    asset_symbol: asset.clone(),
+                }),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
         Ok(AaveLending {
             wallet_address: config.wallet_address,
             private_key: config.private_key.clone(),
@@ -91,8 +117,43 @@ impl AaveLending {
             supplied_value: 0.0,
             borrowed_value: 0.0,
             metrics: SimMetrics::default(),
-            cached_ctx: None,
+            cached_ctx,
         })
+    }
+
+    /// Query on-chain aToken balance (supply) and variable debt token balance (borrow).
+    async fn query_onchain_value(&self, ctx: &CachedLendingContext) -> Result<f64> {
+        let rp = evm::read_provider(&ctx.rpc_url)?;
+        let pool_read = IAavePoolRead::new(ctx.pool_addr, &rp);
+        let reserve_data = pool_read
+            .getReserveData(ctx.token_addr)
+            .call()
+            .await
+            .context("getReserveData for total_value")?;
+
+        let decimals = token_decimals_for(&ctx.asset_symbol);
+
+        // aToken balance = supplied value (includes accrued interest)
+        let a_token_addr = reserve_data._8;
+        let a_token = IERC20::new(a_token_addr, &rp);
+        let supply_balance = a_token
+            .balanceOf(self.wallet_address)
+            .call()
+            .await
+            .context("aToken.balanceOf")?;
+        let supplied = evm::from_token_units(supply_balance, decimals);
+
+        // Variable debt token balance = borrowed value (includes accrued interest)
+        let var_debt_addr = reserve_data._10;
+        let var_debt = IERC20::new(var_debt_addr, &rp);
+        let debt_balance = var_debt
+            .balanceOf(self.wallet_address)
+            .call()
+            .await
+            .unwrap_or(U256::ZERO);
+        let borrowed = evm::from_token_units(debt_balance, decimals);
+
+        Ok((supplied - borrowed).max(0.0))
     }
 
     async fn execute_supply(
@@ -485,6 +546,20 @@ impl Venue for AaveLending {
     }
 
     async fn total_value(&self) -> Result<f64> {
+        // Live mode: query on-chain aToken + debt token balances for accurate TVL.
+        if !self.dry_run {
+            if let Some(ctx) = &self.cached_ctx {
+                match self.query_onchain_value(ctx).await {
+                    Ok(val) => return Ok(val),
+                    Err(e) => {
+                        eprintln!(
+                            "  LENDING: on-chain query failed, falling back to local: {:#}",
+                            e
+                        );
+                    }
+                }
+            }
+        }
         Ok((self.supplied_value - self.borrowed_value).max(0.0))
     }
 

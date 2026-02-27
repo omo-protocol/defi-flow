@@ -36,6 +36,13 @@ pub struct ReserveConfig {
     /// Prevents dust-level unwinds.
     #[serde(default = "default_min_unwind")]
     pub min_unwind: f64,
+
+    /// Contracts manifest key for the universal adapter (e.g. "adapter").
+    /// Required for allocation (pulling excess funds from vault into strategy wallet).
+    /// When set, the allocator calls `vault.allocate(adapter, data, excess)` then
+    /// `adapter.executeStrategyBypassCircuitBreaker(strategyId, [transfer(wallet, excess)])`.
+    #[serde(default)]
+    pub adapter_address: Option<String>,
 }
 
 fn default_target_ratio() -> f64 {

@@ -6,6 +6,8 @@ use alloy::sol;
 use alloy::sol_types::SolValue;
 use anyhow::{Context, Result};
 
+use crate::engine::reserve::IAdapter;
+use crate::model::reserve::ReserveConfig;
 use crate::model::valuer::ValuerConfig;
 use crate::venues::evm;
 
@@ -58,6 +60,7 @@ impl Default for ValuerState {
 /// Push TVL to onchain valuer if enough time has elapsed.
 ///
 /// Returns `Ok(true)` if a push was performed, `Ok(false)` if throttled.
+/// If `reserve_config` has an adapter, calls `refreshCachedValuation()` after push.
 pub async fn maybe_push_value(
     config: &ValuerConfig,
     contracts: &evm::ContractManifest,
@@ -65,6 +68,7 @@ pub async fn maybe_push_value(
     tvl: f64,
     valuer_state: &mut ValuerState,
     dry_run: bool,
+    reserve_config: Option<&ReserveConfig>,
 ) -> Result<bool> {
     let now = chrono::Utc::now().timestamp() as u64;
 
@@ -81,7 +85,20 @@ pub async fn maybe_push_value(
         .rpc_url()
         .context("valuer chain requires rpc_url")?;
 
-    let strategy_id = strategy_id_from_text(&config.strategy_id);
+    // Use escrow totalId when adapter is configured (adapter reads from this key).
+    // Falls back to keccak256(strategy_name) for non-vault strategies.
+    let strategy_id = match reserve_config.and_then(|rc| rc.adapter_address.as_ref()) {
+        Some(adapter_key) => {
+            let adapter_addr =
+                evm::resolve_contract(contracts, adapter_key, &config.chain).with_context(|| {
+                    format!("Adapter '{}' on {} not in contracts manifest", adapter_key, config.chain)
+                })?;
+            let id = escrow_total_id(adapter_addr);
+            eprintln!("[valuer] Using escrow totalId={:?} (adapter={})", id, adapter_addr);
+            id
+        }
+        None => strategy_id_from_text(&config.strategy_id),
+    };
     let value = tvl_to_uint256(tvl, config.underlying_decimals);
 
     if dry_run {
@@ -176,6 +193,47 @@ pub async fn maybe_push_value(
         );
     }
 
+    // Refresh adapter's cached valuation after successful push
+    if !dry_run {
+        if let Some(rc) = reserve_config {
+            if let Some(ref adapter_key) = rc.adapter_address {
+                if let Some(adapter_addr) =
+                    evm::resolve_contract(contracts, adapter_key, &config.chain)
+                {
+                    let adapter = IAdapter::new(adapter_addr, &wp);
+                    match adapter.refreshCachedValuation().send().await {
+                        Ok(pending) => match pending.get_receipt().await {
+                            Ok(receipt) if receipt.status() => {
+                                eprintln!(
+                                    "[valuer] adapter.refreshCachedValuation() tx: {:?}",
+                                    receipt.transaction_hash,
+                                );
+                            }
+                            Ok(receipt) => {
+                                eprintln!(
+                                    "[valuer] WARNING: refreshCachedValuation() reverted (tx: {:?})",
+                                    receipt.transaction_hash,
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[valuer] WARNING: refreshCachedValuation() receipt failed: {:#}",
+                                    e
+                                );
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!(
+                                "[valuer] WARNING: refreshCachedValuation() send failed: {:#}",
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     valuer_state.last_push = now;
     Ok(true)
 }
@@ -185,6 +243,19 @@ pub async fn maybe_push_value(
 /// Compute bytes32 strategy ID: `keccak256(abi.encodePacked(text))`.
 pub fn strategy_id_from_text(text: &str) -> FixedBytes<32> {
     keccak256(text.as_bytes())
+}
+
+/// Compute the adapter's totalId for the valuer:
+/// `keccak256(abi.encodePacked("ESCROW_TOTAL", adapter_address))`.
+///
+/// This is the key the adapter uses to look up its total value via
+/// `valuer.getValue(totalId)`. The valuer must have a report stored
+/// under this key for `realAssets()` and `refreshCachedValuation()`.
+pub fn escrow_total_id(adapter_address: Address) -> FixedBytes<32> {
+    let mut packed = Vec::with_capacity(32);
+    packed.extend_from_slice(b"ESCROW_TOTAL");
+    packed.extend_from_slice(adapter_address.as_slice());
+    keccak256(&packed)
 }
 
 /// Convert f64 TVL (USD) to uint256 scaled by `decimals`.

@@ -24,12 +24,16 @@
     },
     "valuer_contract": {
       "hyperevm": "0x_REPLACE_VALUER"
+    },
+    "adapter": {
+      "hyperevm": "0x_REPLACE_ADAPTER"
     }
   },
   "reserve": {
     "vault_address": "morpho_usdc_vault",
     "vault_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
-    "vault_token": "USDC"
+    "vault_token": "USDC",
+    "adapter_address": "adapter"
   },
   "valuer": {
     "contract": "valuer_contract",

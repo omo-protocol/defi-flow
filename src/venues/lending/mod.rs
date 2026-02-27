@@ -77,7 +77,7 @@ impl VenueCategory for LendingCategory {
                     tokens,
                     contracts,
                 } => Ok(Some(Box::new(aave::AaveLending::new(
-                    config, tokens, contracts,
+                    config, tokens, contracts, node,
                 )?))),
             },
             _ => Ok(None),

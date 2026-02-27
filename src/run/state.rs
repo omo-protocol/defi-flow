@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::engine::reserve::ReserveActionRecord;
+use crate::engine::reserve::{AllocationRecord, ReserveActionRecord};
 
 /// Persistent state for the run command, saved as JSON between restarts.
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -15,9 +15,12 @@ pub struct RunState {
     pub last_tick: u64,
     /// Per-node USD balance tracking.
     pub balances: HashMap<String, f64>,
-    /// Audit trail of reserve management actions.
+    /// Audit trail of reserve management actions (deallocate/unwind).
     #[serde(default)]
     pub reserve_actions: Vec<ReserveActionRecord>,
+    /// Audit trail of allocation actions (pulling excess from vault).
+    #[serde(default)]
+    pub allocation_actions: Vec<AllocationRecord>,
 
     // ── Performance tracking ──
     /// Capital deployed at the end of the deploy phase (sum of all node balances).

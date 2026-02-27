@@ -47,7 +47,7 @@ impl VenueCategory for VaultCategory {
                     tokens,
                     contracts,
                 } => Ok(Some(Box::new(morpho::MorphoVault::new(
-                    config, tokens, contracts,
+                    config, tokens, contracts, node,
                 )?))),
             },
             _ => Ok(None),

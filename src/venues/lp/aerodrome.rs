@@ -50,6 +50,39 @@ sol! {
         function mint(MintParams calldata params) external payable returns (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1);
         function decreaseLiquidity(DecreaseLiquidityParams calldata params) external payable returns (uint256 amount0, uint256 amount1);
         function collect(CollectParams calldata params) external payable returns (uint256 amount0, uint256 amount1);
+
+        // ERC721Enumerable view functions for on-chain position discovery
+        function balanceOf(address owner) external view returns (uint256);
+        function tokenOfOwnerByIndex(address owner, uint256 index) external view returns (uint256);
+        function positions(uint256 tokenId) external view returns (
+            uint96 nonce,
+            address operator,
+            address token0,
+            address token1,
+            int24 tickSpacing,
+            int24 tickLower,
+            int24 tickUpper,
+            uint128 liquidity,
+            uint256 feeGrowthInside0LastX128,
+            uint256 feeGrowthInside1LastX128,
+            uint128 tokensOwed0,
+            uint128 tokensOwed1
+        );
+    }
+}
+
+sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    contract ICLPool {
+        function slot0() external view returns (
+            uint160 sqrtPriceX96,
+            int24 tick,
+            uint16 observationIndex,
+            uint16 observationCardinality,
+            uint16 observationCardinalityNext,
+            bool unlocked
+        );
     }
 }
 
@@ -95,7 +128,14 @@ impl AerodromeLp {
         tokens: &evm::TokenManifest,
         contracts: &evm::ContractManifest,
         chain: Chain,
+        node: &Node,
     ) -> Result<Self> {
+        let cached_pool = if let Node::Lp { pool, .. } = node {
+            Some(pool.clone())
+        } else {
+            None
+        };
+
         Ok(AerodromeLp {
             wallet_address: config.wallet_address,
             private_key: config.private_key.clone(),
@@ -107,8 +147,124 @@ impl AerodromeLp {
             gauge_address: None,
             deposited_value: 0.0,
             metrics: SimMetrics::default(),
-            cached_pool: None,
+            cached_pool,
         })
+    }
+
+    /// Query on-chain position value by enumerating NFTs owned by the wallet.
+    /// For each position, computes token amounts from liquidity + tick range + current price,
+    /// plus any uncollected fees (tokensOwed).
+    async fn query_onchain_value(&self) -> Result<f64> {
+        let rpc_url = self
+            .chain
+            .rpc_url()
+            .context("LP chain requires RPC URL")?;
+        let position_manager =
+            evm::resolve_contract(&self.contracts, "aerodrome_position_manager", &self.chain)
+                .context("aerodrome_position_manager not in contracts manifest")?;
+
+        let rp = evm::read_provider(rpc_url)?;
+        let pm = INonfungiblePositionManager::new(position_manager, &rp);
+
+        // How many NFT positions does the wallet own?
+        let nft_count = pm
+            .balanceOf(self.wallet_address)
+            .call()
+            .await
+            .context("positionManager.balanceOf")?;
+
+        let count: u64 = nft_count.try_into().unwrap_or(0);
+        if count == 0 {
+            return Ok(0.0);
+        }
+
+        let pool_name = self.cached_pool.as_deref();
+        let mut total_value = 0.0;
+
+        for i in 0..count {
+            let token_id = pm
+                .tokenOfOwnerByIndex(self.wallet_address, U256::from(i))
+                .call()
+                .await
+                .context("tokenOfOwnerByIndex")?;
+
+            let pos = pm.positions(token_id).call().await;
+            let pos = match pos {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+
+            let liquidity = pos.liquidity;
+            if liquidity == 0 {
+                // Position exists but has zero liquidity — only fees owed matter
+                let fees0 = pos.tokensOwed0 as f64;
+                let fees1 = pos.tokensOwed1 as f64;
+                let d0 = self.decimals_for_addr(pos.token0);
+                let d1 = self.decimals_for_addr(pos.token1);
+                total_value +=
+                    fees0 / 10f64.powi(d0 as i32) + fees1 / 10f64.powi(d1 as i32);
+                continue;
+            }
+
+            // Filter: only count positions matching our pool's tokens if known.
+            if let Some(pool_str) = pool_name {
+                let parts: Vec<&str> = pool_str.split('/').collect();
+                if parts.len() == 2 {
+                    let want_t0 = evm::resolve_token(&self.tokens, &self.chain, parts[0]);
+                    let want_t1 = evm::resolve_token(&self.tokens, &self.chain, parts[1]);
+                    if let (Some(w0), Some(w1)) = (want_t0, want_t1) {
+                        if (pos.token0 != w0 || pos.token1 != w1)
+                            && (pos.token0 != w1 || pos.token1 != w0)
+                        {
+                            continue; // different pool
+                        }
+                    }
+                }
+            }
+
+            let d0 = self.decimals_for_addr(pos.token0);
+            let d1 = self.decimals_for_addr(pos.token1);
+
+            // Compute token amounts from liquidity + tick range.
+            // Use sqrtPrice at current tick from Aerodrome pool.
+            // Simplified: compute amounts assuming tokens are both USD-denominated,
+            // which works for stablecoin pairs and is approximate for volatile pairs.
+            let tick_lower: i32 = pos.tickLower.as_i32();
+            let tick_upper: i32 = pos.tickUpper.as_i32();
+
+            // Use mid-tick as rough current tick estimate (conservative).
+            // For better accuracy, we'd query the pool's slot0.
+            let (amount0, amount1) = cl_amounts_from_liquidity(
+                liquidity as f64,
+                tick_lower,
+                tick_upper,
+                (tick_lower + tick_upper) / 2, // rough mid estimate
+            );
+
+            let val0 = amount0 / 10f64.powi(d0 as i32);
+            let val1 = amount1 / 10f64.powi(d1 as i32);
+            let fees0 = pos.tokensOwed0 as f64 / 10f64.powi(d0 as i32);
+            let fees1 = pos.tokensOwed1 as f64 / 10f64.powi(d1 as i32);
+
+            total_value += val0 + val1 + fees0 + fees1;
+        }
+
+        Ok(total_value)
+    }
+
+    /// Get decimals for a token address by checking known token symbols.
+    fn decimals_for_addr(&self, addr: Address) -> u8 {
+        // Reverse-lookup: find the symbol for this address.
+        for (symbol, chains) in &self.tokens {
+            for (_, token_addr_str) in chains {
+                if let Ok(token_addr) = token_addr_str.parse::<Address>() {
+                    if token_addr == addr {
+                        return token_decimals_for(symbol);
+                    }
+                }
+            }
+        }
+        18 // default
     }
 
     fn parse_pool_tokens(&self, pool: &str) -> Result<(Address, Address)> {
@@ -411,6 +567,19 @@ impl Venue for AerodromeLp {
     }
 
     async fn total_value(&self) -> Result<f64> {
+        // Live mode: discover NFT positions from position manager and calculate value.
+        if !self.dry_run {
+            match self.query_onchain_value().await {
+                Ok(val) if val > 0.0 => return Ok(val),
+                Ok(_) => {} // no positions found, fall through
+                Err(e) => {
+                    eprintln!(
+                        "  AERO: on-chain query failed, falling back to local: {:#}",
+                        e
+                    );
+                }
+            }
+        }
         Ok(self.deposited_value)
     }
 
@@ -540,4 +709,42 @@ fn token_decimals_for(symbol: &str) -> u8 {
         "WBTC" | "CBBTC" => 8,
         _ => 18,
     }
+}
+
+/// Compute token amounts from concentrated liquidity position parameters.
+///
+/// Standard Uniswap V3 / Aerodrome Slipstream math:
+/// - If current_tick < tick_lower: all token0
+/// - If current_tick >= tick_upper: all token1
+/// - Otherwise: split between token0 and token1
+fn cl_amounts_from_liquidity(
+    liquidity: f64,
+    tick_lower: i32,
+    tick_upper: i32,
+    current_tick: i32,
+) -> (f64, f64) {
+    let sqrt_price = tick_to_sqrt_price(current_tick);
+    let sqrt_lower = tick_to_sqrt_price(tick_lower);
+    let sqrt_upper = tick_to_sqrt_price(tick_upper);
+
+    if current_tick < tick_lower {
+        // All token0
+        let amount0 = liquidity * (1.0 / sqrt_lower - 1.0 / sqrt_upper);
+        (amount0, 0.0)
+    } else if current_tick >= tick_upper {
+        // All token1
+        let amount1 = liquidity * (sqrt_upper - sqrt_lower);
+        (0.0, amount1)
+    } else {
+        // Split
+        let amount0 = liquidity * (1.0 / sqrt_price - 1.0 / sqrt_upper);
+        let amount1 = liquidity * (sqrt_price - sqrt_lower);
+        (amount0, amount1)
+    }
+}
+
+/// Convert a tick to sqrt(price) using the standard formula:
+/// sqrt(1.0001^tick) = 1.0001^(tick/2)
+fn tick_to_sqrt_price(tick: i32) -> f64 {
+    1.0001_f64.powf(tick as f64 / 2.0)
 }

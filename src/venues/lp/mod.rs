@@ -50,7 +50,7 @@ impl VenueCategory for LpCategory {
                 } => {
                     let chain = node.chain().unwrap_or_else(Chain::base);
                     Ok(Some(Box::new(aerodrome::AerodromeLp::new(
-                        config, tokens, contracts, chain,
+                        config, tokens, contracts, chain, node,
                     )?)))
                 }
             },

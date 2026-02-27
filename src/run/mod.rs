@@ -175,14 +175,49 @@ async fn run_async(
 
     // Deploy phase: execute non-triggered nodes in topological order
     if !state.deploy_completed {
+        // Vault strategies: pull funds from vault BEFORE deploy so wallet has capital
+        if let Some(rc) = engine.workflow.reserve.clone() {
+            if rc.adapter_address.is_some() {
+                println!("── Pre-deploy allocation (vault strategy) ──");
+                match reserve::check_and_allocate(
+                    &rc,
+                    engine.workflow.valuer.as_ref(),
+                    &contracts,
+                    &tokens,
+                    &config.private_key,
+                    config.wallet_address,
+                    config.dry_run,
+                )
+                .await
+                {
+                    Ok(Some(record)) => {
+                        println!(
+                            "[allocator] Pulled ${:.2} from vault (excess=${:.2})",
+                            record.pulled, record.excess,
+                        );
+                        engine.balances.add("wallet", "USDC", record.pulled);
+                        sync_balances(&engine, &mut state);
+                        state.allocation_actions.push(record);
+                    }
+                    Ok(None) => println!("[allocator] No excess to pull from vault."),
+                    Err(e) => eprintln!("[allocator] ERROR: {:#}", e),
+                }
+            }
+        }
+
         println!("── Deploy phase ──");
         println!("Deploy order: {:?}", engine.deploy_order());
         engine.deploy().await.context("deploy phase")?;
         state.deploy_completed = true;
         sync_balances(&engine, &mut state);
 
-        // Record initial capital for performance tracking
-        state.initial_capital = state.balances.values().sum();
+        // Record initial capital for performance tracking (use TVL which includes venue positions)
+        let deploy_tvl = engine.total_tvl().await;
+        state.initial_capital = if deploy_tvl > 0.0 {
+            deploy_tvl
+        } else {
+            state.balances.values().sum()
+        };
         state.peak_tvl = state.initial_capital;
 
         state.save(&config.state_file)?;
@@ -207,6 +242,40 @@ async fn run_async(
     // Execution phase
     if config.once {
         println!("── Single pass (--once) ──");
+
+        // Allocator: pull excess funds from vault before execution
+        if let Some(rc) = engine.workflow.reserve.clone() {
+            match reserve::check_and_allocate(
+                &rc,
+                engine.workflow.valuer.as_ref(),
+                &contracts,
+                &tokens,
+                &config.private_key,
+                config.wallet_address,
+                config.dry_run,
+            )
+            .await
+            {
+                Ok(Some(record)) => {
+                    println!(
+                        "[allocator] Pulled ${:.2} from vault (excess=${:.2})",
+                        record.pulled, record.excess,
+                    );
+                    engine.balances.add("wallet", "USDC", record.pulled);
+                    sync_balances(&engine, &mut state);
+                    state.allocation_actions.push(record);
+
+                    // Vault strategies: first allocation seeds initial_capital
+                    if state.initial_capital == 0.0 {
+                        state.initial_capital = state.balances.values().sum();
+                        state.peak_tvl = state.initial_capital;
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("[allocator] ERROR: {:#}", e),
+            }
+        }
+
         let mut scheduler = CronScheduler::new(&engine.workflow);
         let triggered = scheduler.get_all_due();
         if triggered.is_empty() {
@@ -266,6 +335,7 @@ async fn run_async(
             match valuer::maybe_push_value(
                 vc, &contracts, &config.private_key, tvl,
                 &mut valuer_state, config.dry_run,
+                engine.workflow.reserve.as_ref(),
             ).await {
                 Ok(true) | Ok(false) => {}
                 Err(e) => eprintln!("[valuer] ERROR: {:#}", e),
@@ -310,6 +380,33 @@ async fn run_async(
                         now.format("%Y-%m-%d %H:%M:%S"),
                         triggered
                     );
+
+                    // Allocator: pull excess funds from vault before execution
+                    if let Some(rc) = engine.workflow.reserve.clone() {
+                        match reserve::check_and_allocate(
+                            &rc, engine.workflow.valuer.as_ref(),
+                            &contracts, &tokens, &config.private_key,
+                            config.wallet_address, config.dry_run,
+                        ).await {
+                            Ok(Some(record)) => {
+                                println!(
+                                    "[allocator] Pulled ${:.2} from vault (excess=${:.2})",
+                                    record.pulled, record.excess,
+                                );
+                                engine.balances.add("wallet", "USDC", record.pulled);
+                                sync_balances(&engine, &mut state);
+                                state.allocation_actions.push(record);
+
+                                // Vault strategies: first allocation seeds initial_capital
+                                if state.initial_capital == 0.0 {
+                                    state.initial_capital = state.balances.values().sum();
+                                    state.peak_tvl = state.initial_capital;
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) => eprintln!("[allocator] ERROR: {:#}", e),
+                        }
+                    }
 
                     for node_id in &triggered {
                         if let Err(e) = engine.execute_node(node_id).await {
@@ -365,6 +462,7 @@ async fn run_async(
                         match valuer::maybe_push_value(
                             vc, &contracts, &config.private_key, tvl,
                             &mut valuer_state, config.dry_run,
+                            engine.workflow.reserve.as_ref(),
                         ).await {
                             Ok(true) | Ok(false) => {}
                             Err(e) => eprintln!("[valuer] ERROR: {:#}", e),
