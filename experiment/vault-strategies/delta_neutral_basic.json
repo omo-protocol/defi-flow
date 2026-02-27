@@ -46,7 +46,7 @@
       "id": "wallet",
       "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
       "token": "USDC",
-      "address": "0x_REPLACE_WALLET"
+      "address": "0xA97aA84f1aaed8AB6e217FC7bAe9dEbce4c7c0E3"
     },
     {
       "type": "optimizer",
