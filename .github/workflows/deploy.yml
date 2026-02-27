@@ -202,6 +202,7 @@ jobs:
           command_timeout: 10m
           script: |
             set -e
+            export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
             echo "═══════════════════════════════════════════════"
             echo " Deploying: $SERVICES"
