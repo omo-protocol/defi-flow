@@ -128,9 +128,8 @@ jobs:
             cd /opt/defi-flow
 
             # ── Pull latest docker-compose.yml ──
-            curl -sH "Authorization: token $GHCR_TOKEN" \
-              -H "Accept: application/vnd.github.raw+json" \
-              "https://api.github.com/repos/omo-protocol/defi-flow/contents/experiment/docker-compose.yml?ref=main" \
+            curl -sL -H "Authorization: token $GHCR_TOKEN" \
+              "https://raw.githubusercontent.com/omo-protocol/defi-flow/main/experiment/docker-compose.yml" \
               -o experiment/docker-compose.yml
 
             # ── Export secrets as env vars for docker compose ──
