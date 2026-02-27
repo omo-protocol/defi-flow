@@ -2,13 +2,13 @@
 
 import { useState } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
-import { signOut } from "next-auth/react";
 import {
   authUserAtom,
   authLoadingAtom,
   isAuthenticatedAtom,
   walletsAtom,
   strategiesAtom,
+  tokenAtom,
 } from "@/lib/auth-store";
 import { LoginDialog } from "./login-dialog";
 import { WalletManager } from "./wallet-manager";
@@ -30,6 +30,7 @@ export function UserMenu() {
   const loading = useAtomValue(authLoadingAtom);
   const isAuth = useAtomValue(isAuthenticatedAtom);
   const setUser = useSetAtom(authUserAtom);
+  const setToken = useSetAtom(tokenAtom);
   const setWallets = useSetAtom(walletsAtom);
   const setStrategies = useSetAtom(strategiesAtom);
 
@@ -38,11 +39,13 @@ export function UserMenu() {
   const [strategiesOpen, setStrategiesOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const handleLogout = async () => {
-    await signOut({ redirect: false });
+  const handleLogout = () => {
+    setToken(null);
     setUser(null);
     setWallets([]);
     setStrategies([]);
+    localStorage.removeItem("defi-flow-token");
+    localStorage.removeItem("defi-flow-user");
     toast.success("Logged out");
   };
 

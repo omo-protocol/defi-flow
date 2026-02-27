@@ -22,6 +22,9 @@ export interface StrategyInfo {
   created_at: number;
 }
 
+// JWT token from Rust API
+export const tokenAtom = atom<string | null>(null);
+
 export const authUserAtom = atom<AuthUser | null>(null);
 export const authLoadingAtom = atom<boolean>(true);
 export const isAuthenticatedAtom = atom((get) => get(authUserAtom) !== null);
@@ -38,3 +41,12 @@ export const strategiesAtom = atom<StrategyInfo[]>([]);
 
 // User config (persisted key-value)
 export const userConfigAtom = atom<Record<string, string>>({});
+
+// Helper to get current token (used by auth-api)
+let _getToken: () => string | null = () => null;
+export function setTokenGetter(fn: () => string | null) {
+  _getToken = fn;
+}
+export function getToken(): string | null {
+  return _getToken();
+}

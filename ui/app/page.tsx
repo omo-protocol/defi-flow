@@ -17,11 +17,13 @@ import {
   authLoadingAtom,
   isAuthenticatedAtom,
   selectedWalletIdAtom,
+  tokenAtom,
+  setTokenGetter,
   type StrategyInfo,
 } from "@/lib/auth-store";
-import { signIn } from "next-auth/react";
 import {
   register,
+  login,
   listStrategies,
   getStrategy,
 } from "@/lib/auth-api";
@@ -71,6 +73,10 @@ function WelcomeOverlay({ onClose }: { onClose: () => void }) {
     }
   }, [isAuth]);
 
+  const setUser = useSetAtom(authUserAtom);
+  const setToken = useSetAtom(tokenAtom);
+  const setAuthLoading = useSetAtom(authLoadingAtom);
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError("");
@@ -85,20 +91,9 @@ function WelcomeOverlay({ onClose }: { onClose: () => void }) {
         await register(username, password);
       }
 
-      // Sign in via NextAuth credentials provider
-      const result = await signIn("credentials", {
-        username,
-        password,
-        redirect: false,
-      });
-
-      if (result?.error) {
-        setAuthError("Invalid credentials");
-        setSubmitting(false);
-        return;
-      }
-
-      // Session update is handled by AuthProvider via useSession
+      const result = await login(username, password);
+      setToken(result.token);
+      setUser(result.user);
       toast.success(tab === "register" ? `Welcome, ${username}!` : `Welcome back, ${username}!`);
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : "Authentication failed");
@@ -377,9 +372,19 @@ export default function Home() {
   const setTokensManifest = useSetAtom(tokensManifestAtom);
   const setContractsManifest = useSetAtom(contractsManifestAtom);
   const isAuth = useAtomValue(isAuthenticatedAtom);
-  const authLoading = useAtomValue(authLoadingAtom);
+  const [authLoading, setAuthLoading] = useAtom(authLoadingAtom);
+  const token = useAtomValue(tokenAtom);
   const [showWelcome, setShowWelcome] = useState(false);
   const [loaded, setLoaded] = useState(false);
+
+  // Wire up token getter for auth-api and mark loading done
+  useEffect(() => {
+    setTokenGetter(() => token);
+  }, [token]);
+
+  useEffect(() => {
+    setAuthLoading(false);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Restore from localStorage on mount (only when authenticated)
   useEffect(() => {

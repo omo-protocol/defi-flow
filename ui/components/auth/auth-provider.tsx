@@ -1,46 +1,51 @@
 "use client";
 
-import { SessionProvider, useSession } from "next-auth/react";
 import { useEffect } from "react";
-import { useSetAtom } from "jotai";
-import { authUserAtom, authLoadingAtom, walletsAtom, userConfigAtom } from "@/lib/auth-store";
+import { useAtomValue, useSetAtom } from "jotai";
+import { tokenAtom, authUserAtom, authLoadingAtom, walletsAtom, userConfigAtom, setTokenGetter } from "@/lib/auth-store";
 import { listWallets, getConfig } from "@/lib/auth-api";
 
-function AuthSync({ children }: { children: React.ReactNode }) {
-  const { data: session, status } = useSession();
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const token = useAtomValue(tokenAtom);
   const setUser = useSetAtom(authUserAtom);
   const setLoading = useSetAtom(authLoadingAtom);
   const setWallets = useSetAtom(walletsAtom);
   const setConfig = useSetAtom(userConfigAtom);
 
+  // Wire up the token getter for auth-api
   useEffect(() => {
-    if (status === "loading") return;
+    setTokenGetter(() => token);
+  }, [token]);
 
-    if (session?.user) {
-      setUser({ id: session.user.id, username: session.user.name ?? "" });
-      // Load wallets and config
-      Promise.all([listWallets(), getConfig()])
-        .then(([wallets, config]) => {
-          setWallets(wallets);
-          setConfig(config);
-        })
-        .catch(() => {});
-    } else {
-      setUser(null);
-      setWallets([]);
-      setConfig({});
+  // On mount: check localStorage for persisted token
+  useEffect(() => {
+    const stored = localStorage.getItem("defi-flow-token");
+    const storedUser = localStorage.getItem("defi-flow-user");
+    if (stored && storedUser) {
+      try {
+        const user = JSON.parse(storedUser);
+        // Re-hydrate token into the getter before any API calls
+        setTokenGetter(() => stored);
+        setUser(user);
+        // Load wallets and config
+        Promise.all([listWallets(), getConfig()])
+          .then(([wallets, config]) => {
+            setWallets(wallets);
+            setConfig(config);
+          })
+          .catch(() => {
+            // Token expired — clear
+            localStorage.removeItem("defi-flow-token");
+            localStorage.removeItem("defi-flow-user");
+            setUser(null);
+          });
+      } catch {
+        localStorage.removeItem("defi-flow-token");
+        localStorage.removeItem("defi-flow-user");
+      }
     }
-
     setLoading(false);
-  }, [session, status, setUser, setLoading, setWallets, setConfig]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return <>{children}</>;
-}
-
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  return (
-    <SessionProvider>
-      <AuthSync>{children}</AuthSync>
-    </SessionProvider>
-  );
 }

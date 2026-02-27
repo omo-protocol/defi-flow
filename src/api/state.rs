@@ -6,6 +6,7 @@ use tokio::sync::{Mutex, RwLock, broadcast};
 
 use crate::model::workflow::Workflow;
 
+use super::db::Db;
 use super::events::EngineEvent;
 use super::history::HistoryStore;
 
@@ -18,6 +19,8 @@ pub struct AppStateInner {
     pub sessions: HashMap<String, RunSession>,
     pub data_dir: PathBuf,
     pub history: HistoryStore,
+    pub db: Db,
+    pub auth_secret: String,
 }
 
 pub struct RunSession {
@@ -32,14 +35,17 @@ pub struct RunSession {
 }
 
 impl AppState {
-    pub fn new(data_dir: PathBuf) -> Self {
+    pub fn new(data_dir: PathBuf, db: Db, auth_secret: String) -> Self {
         let history_dir = data_dir.join("history");
         Self {
             inner: Arc::new(RwLock::new(AppStateInner {
                 sessions: HashMap::new(),
                 data_dir,
                 history: HistoryStore::new(history_dir),
+                db,
+                auth_secret,
             })),
         }
     }
 }
+

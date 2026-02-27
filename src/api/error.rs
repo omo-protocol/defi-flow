@@ -6,6 +6,8 @@ use serde_json::json;
 pub enum ApiError {
     NotFound(String),
     BadRequest(String),
+    Unauthorized(String),
+    Conflict(String),
     Internal(String),
     Validation(Vec<String>),
 }
@@ -15,6 +17,8 @@ impl IntoResponse for ApiError {
         let (status, body) = match self {
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, json!({ "error": msg })),
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, json!({ "error": msg })),
+            ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, json!({ "error": msg })),
+            ApiError::Conflict(msg) => (StatusCode::CONFLICT, json!({ "error": msg })),
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": msg })),
             ApiError::Validation(errors) => (
                 StatusCode::UNPROCESSABLE_ENTITY,

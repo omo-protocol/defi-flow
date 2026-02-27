@@ -1,7 +1,10 @@
+pub mod auth;
+pub mod db;
 pub mod error;
 pub mod events;
 pub mod handlers;
 pub mod history;
+pub mod middleware;
 pub mod state;
 pub mod types;
 
@@ -9,7 +12,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post, put};
 use tower_http::cors::{Any, CorsLayer};
 
 use state::AppState;
@@ -25,7 +28,11 @@ pub async fn serve(host: &str, port: u16, data_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data dir {}", data_dir.display()))?;
 
-    let state = AppState::new(data_dir.clone());
+    let db_path = data_dir.join("defi-flow.db");
+    let (db_conn, auth_secret) = db::open(&db_path)
+        .with_context(|| format!("opening database at {}", db_path.display()))?;
+
+    let state = AppState::new(data_dir.clone(), db_conn, auth_secret);
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -35,6 +42,31 @@ pub async fn serve(host: &str, port: u16, data_dir: &Path) -> Result<()> {
     let app = Router::new()
         // Health
         .route("/health", get(|| async { "ok" }))
+        // Auth (public)
+        .route("/api/auth/register", post(handlers::users::register))
+        .route("/api/auth/login", post(handlers::users::login))
+        // Wallets (JWT required)
+        .route(
+            "/api/auth/wallets",
+            get(handlers::wallets::list).post(handlers::wallets::create),
+        )
+        .route("/api/auth/wallets/{id}", delete(handlers::wallets::delete))
+        // Strategies (JWT required)
+        .route(
+            "/api/auth/strategies",
+            get(handlers::strategies::list).post(handlers::strategies::create),
+        )
+        .route(
+            "/api/auth/strategies/{id}",
+            get(handlers::strategies::get_one)
+                .put(handlers::strategies::update)
+                .delete(handlers::strategies::delete),
+        )
+        // Config (JWT required)
+        .route(
+            "/api/auth/config",
+            get(handlers::config::get_config).put(handlers::config::update_config),
+        )
         // Validate
         .route("/api/validate", post(handlers::validate::validate_workflow))
         // Backtest
@@ -59,6 +91,8 @@ pub async fn serve(host: &str, port: u16, data_dir: &Path) -> Result<()> {
     let addr = format!("{host}:{port}");
     println!("defi-flow API server listening on {addr}");
     println!("  Health:   GET  http://{addr}/health");
+    println!("  Auth:     POST http://{addr}/api/auth/register");
+    println!("  Auth:     POST http://{addr}/api/auth/login");
     println!("  Schema:   GET  http://{addr}/api/schema");
     println!("  Validate: POST http://{addr}/api/validate");
     println!("  Backtest: POST http://{addr}/api/backtest");

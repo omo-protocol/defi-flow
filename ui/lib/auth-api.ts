@@ -1,18 +1,32 @@
 import type { WalletInfo, StrategyInfo } from "./auth-store";
+import { getToken } from "./auth-store";
+
+const API = process.env.NEXT_PUBLIC_API_URL || "";
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const token = getToken();
+  const res = await fetch(`${API}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init?.headers,
+    },
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Request failed");
   return data as T;
 }
 
-// Auth (register only — login/logout handled by NextAuth)
+// Auth
 export const register = (username: string, password: string) =>
   api<{ ok: boolean; username: string }>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+
+export const login = (username: string, password: string) =>
+  api<{ token: string; user: { id: string; username: string } }>("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ username, password }),
   });

@@ -1,6 +1,10 @@
 pub mod backtest;
+pub mod config;
 pub mod data;
 pub mod events;
 pub mod run;
 pub mod schema;
+pub mod strategies;
+pub mod users;
 pub mod validate;
+pub mod wallets;

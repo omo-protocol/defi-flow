@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { signIn } from "next-auth/react";
-import { register } from "@/lib/auth-api";
+import { useSetAtom } from "jotai";
+import { register, login } from "@/lib/auth-api";
+import { tokenAtom, authUserAtom, walletsAtom, userConfigAtom } from "@/lib/auth-store";
+import { listWallets, getConfig } from "@/lib/auth-api";
 import {
   Dialog,
   DialogContent,
@@ -28,6 +30,11 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const setToken = useSetAtom(tokenAtom);
+  const setUser = useSetAtom(authUserAtom);
+  const setWallets = useSetAtom(walletsAtom);
+  const setConfig = useSetAtom(userConfigAtom);
+
   const reset = () => {
     setUsername("");
     setPassword("");
@@ -47,22 +54,25 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
           setLoading(false);
           return;
         }
-        // Create account, then sign in via NextAuth
         await register(username, password);
       }
 
-      // Sign in via NextAuth credentials provider
-      const result = await signIn("credentials", {
-        username,
-        password,
-        redirect: false,
-      });
+      // Login via Rust API
+      const result = await login(username, password);
+      setToken(result.token);
+      setUser(result.user);
 
-      if (result?.error) {
-        setError("Invalid credentials");
-        setLoading(false);
-        return;
-      }
+      // Persist to localStorage
+      localStorage.setItem("defi-flow-token", result.token);
+      localStorage.setItem("defi-flow-user", JSON.stringify(result.user));
+
+      // Load wallets and config
+      Promise.all([listWallets(), getConfig()])
+        .then(([wallets, config]) => {
+          setWallets(wallets);
+          setConfig(config);
+        })
+        .catch(() => {});
 
       toast.success(tab === "register" ? `Welcome, ${username}!` : `Welcome back, ${username}!`);
       reset();
