@@ -15,7 +15,8 @@
     {
       "name": "Lending Vault",
       "strategy": "lending",
-      "address": "0x_REPLACE_LENDING_VAULT",
+      "address": "0x58D0F36A87177a4F1Aa8C2eB6e91d424D7248f1C",
+      "strategy_wallet": "0x6f58C594914C19ED0556bD4752accAB8D255FCE4",
       "reserve": {
         "target_ratio": 0.20,
         "trigger_threshold": 0.05
@@ -24,7 +25,8 @@
     {
       "name": "Delta-Neutral Vault",
       "strategy": "delta_neutral_basic",
-      "address": "0x_REPLACE_DN_VAULT",
+      "address": "0x41B5FBB5c6E3938A8536B1d8828a45f7fd839ab6",
+      "strategy_wallet": "0xA97aA84f1aaed8AB6e217FC7bAe9dEbce4c7c0E3",
       "reserve": {
         "target_ratio": 0.20,
         "trigger_threshold": 0.05
@@ -33,7 +35,8 @@
     {
       "name": "PT Yield Vault",
       "strategy": "pt_yield",
-      "address": "0x_REPLACE_PT_VAULT",
+      "address": "0xe600EB6913376B4Ac7eD645B2bFF8A20B4F8cfB0",
+      "strategy_wallet": "0x0c708C70a8a1c4e1ffBcBae38680F4cCDe40bC0C",
       "reserve": {
         "target_ratio": 0.20,
         "trigger_threshold": 0.05

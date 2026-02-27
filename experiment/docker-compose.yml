@@ -93,7 +93,7 @@ services:
       args:
         STRATEGY: lending.json
     container_name: strategy-lending
-    restart: on-failure
+    restart: unless-stopped
     stop_grace_period: 30s
     volumes:
       - lending-data:/app/data
@@ -125,7 +125,7 @@ services:
       args:
         STRATEGY: pt_yield.json
     container_name: strategy-pt-yield
-    restart: on-failure
+    restart: unless-stopped
     stop_grace_period: 30s
     volumes:
       - pt-data:/app/data

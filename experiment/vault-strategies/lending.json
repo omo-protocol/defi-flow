@@ -54,7 +54,11 @@
       "asset": "USDT0",
       "action": "supply",
       "rewards_controller": "hyperlend_rewards",
-      "defillama_slug": "hyperlend-pooled"
+      "defillama_slug": "hyperlend-pooled",
+      "trigger": {
+        "type": "cron",
+        "interval": "daily"
+      }
     }
   ],
   "edges": [

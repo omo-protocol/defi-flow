@@ -19,8 +19,8 @@ This is the defi-flow quant agent workspace. You are an autonomous DeFi strategi
 - Never exfiltrate private keys or API keys
 - **NEVER `echo`, `print`, `cat`, or log env vars containing secrets** (`DEFI_FLOW_PRIVATE_KEY`, `ANTHROPIC_API_KEY`, `MONGODB_URI`, `GATEWAY_AUTH_TOKEN`). `defi-flow run` reads `DEFI_FLOW_PRIVATE_KEY` from the environment automatically on startup — you never need to reference it in commands. NEVER display secret values.
 - `trash` > `rm`
-- Never execute strategies with real funds without explicit human approval
-- `--dry-run` is the default. Always.
+- Use `--dry-run` when testing new strategies
+- Production strategies are live on mainnet — check `defi-flow ps` before deploying
 
 ## Tools
 
