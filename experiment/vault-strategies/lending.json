@@ -1,9 +1,9 @@
 {
-  "name": "USDC Lending",
-  "description": "Supply USDC to HyperLend for yield. Single-leg lending strategy.",
+  "name": "USDT0 Lending",
+  "description": "Supply USDT0 to HyperLend for yield. Single-leg lending strategy.",
   "tokens": {
-    "USDC": {
-      "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f"
+    "USDT0": {
+      "hyperevm": "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb"
     }
   },
   "contracts": {
@@ -13,7 +13,7 @@
     "hyperlend_rewards": {
       "hyperevm": "0x2aF0d6754A58723c50b5e73E45D964bFDD99fE2F"
     },
-    "morpho_usdc_vault": {
+    "morpho_usdt0_vault": {
       "hyperevm": "0x58D0F36A87177a4F1Aa8C2eB6e91d424D7248f1C"
     },
     "valuer_contract": {
@@ -24,9 +24,9 @@
     }
   },
   "reserve": {
-    "vault_address": "morpho_usdc_vault",
+    "vault_address": "morpho_usdt0_vault",
     "vault_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
-    "vault_token": "USDC",
+    "vault_token": "USDT0",
     "adapter_address": "adapter"
   },
   "valuer": {
@@ -42,16 +42,16 @@
       "type": "wallet",
       "id": "wallet",
       "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
-      "token": "USDC",
+      "token": "USDT0",
       "address": "0x6f58C594914C19ED0556bD4752accAB8D255FCE4"
     },
     {
       "type": "lending",
-      "id": "lend_usdc",
+      "id": "lend_usdt0",
       "archetype": "aave_v3",
       "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
       "pool_address": "hyperlend_pool",
-      "asset": "USDC",
+      "asset": "USDT0",
       "action": "supply",
       "rewards_controller": "hyperlend_rewards",
       "defillama_slug": "hyperlend-pooled"
@@ -60,8 +60,8 @@
   "edges": [
     {
       "from_node": "wallet",
-      "to_node": "lend_usdc",
-      "token": "USDC",
+      "to_node": "lend_usdt0",
+      "token": "USDT0",
       "amount": { "type": "all" }
     }
   ]

@@ -2,7 +2,7 @@
   "agents": {
     "defaults": {
       "workspace": "/app/workspace",
-      "model": "anthropic/claude-sonnet-4-5-20250929",
+      "model": "${AGENT_MODEL}",
       "sandbox": {
         "mode": "off",
         "scope": "agent"
@@ -19,6 +19,22 @@
         "workspace": "/app/workspace"
       }
     ]
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "custom": {
+        "baseUrl": "${AGENT_BASE_URL}",
+        "apiKey": "${AGENT_API_KEY}",
+        "api": "${AGENT_API_TYPE}",
+        "models": [
+          {
+            "id": "${AGENT_MODEL_ID}",
+            "name": "${AGENT_MODEL_ID}"
+          }
+        ]
+      }
+    }
   },
   "cron": {
     "enabled": true,

@@ -8,7 +8,7 @@ default = ["full"]
 full = [
     "dep:tokio", "dep:reqwest", "dep:alloy", "dep:rustls",
     "dep:notify", "dep:rayon", "dep:indicatif", "dep:ferrofluid",
-    "dep:clap", "dep:async-trait",
+    "dep:clap", "dep:async-trait", "dep:ctrlc",
     "dep:rand", "dep:chrono", "dep:csv",
     "dep:axum", "dep:tower-http", "dep:uuid", "dep:tokio-stream", "dep:async-stream",
 ]
@@ -51,7 +51,7 @@ async-stream = { version = "0.3", optional = true }
 # Process management (registry, ps, stop)
 libc = "0.2"
 dirs = "6"
-ctrlc = "3"
+ctrlc = { version = "3", optional = true }
 
 # WASM deps - optional, included via "wasm" feature
 wasm-bindgen = { version = "0.2", optional = true }

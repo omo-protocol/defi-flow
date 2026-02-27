@@ -1,6 +1,7 @@
 "use client";
 
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { useState } from "react";
 import {
   nodesAtom,
   edgesAtom,
@@ -17,7 +18,7 @@ import { getNodeConfig } from "@/lib/node-registry";
 import { NodeConfigForm } from "./config/node-configs";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Trash2 } from "lucide-react";
+import { Trash2, MousePointer2, Plus, ArrowRight } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -29,6 +30,44 @@ import {
 } from "@/components/ui/select";
 
 // ── Edge config ──────────────────────────────────────────────────────
+
+function ConfirmDeleteButton({ onDelete, label }: { onDelete: () => void; label: string }) {
+  const [confirming, setConfirming] = useState(false);
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-1">
+        <Button
+          variant="destructive"
+          size="sm"
+          className="h-6 px-2 text-[10px]"
+          onClick={onDelete}
+        >
+          Delete
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-[10px]"
+          onClick={() => setConfirming(false)}
+        >
+          Cancel
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+      onClick={() => setConfirming(true)}
+    >
+      <Trash2 className="w-3.5 h-3.5" />
+    </Button>
+  );
+}
 
 function EdgeConfig({ edge }: { edge: CanvasEdge }) {
   const nodes = useAtomValue(nodesAtom);
@@ -59,21 +98,14 @@ function EdgeConfig({ edge }: { edge: CanvasEdge }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold">Edge Configuration</h3>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 w-7 p-0 text-destructive"
-          onClick={() => deleteEdge(edge.id)}
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </Button>
+        <h3 className="text-sm font-semibold">Edge</h3>
+        <ConfirmDeleteButton onDelete={() => deleteEdge(edge.id)} label="edge" />
       </div>
 
-      <div className="text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">{srcLabel}</span>
-        {" → "}
-        <span className="font-medium text-foreground">{tgtLabel}</span>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground px-2 py-1.5 rounded-md bg-muted/50">
+        <span className="font-medium text-foreground truncate">{srcLabel}</span>
+        <ArrowRight className="w-3 h-3 shrink-0" />
+        <span className="font-medium text-foreground truncate">{tgtLabel}</span>
       </div>
 
       <div className="space-y-1.5">
@@ -304,10 +336,28 @@ function EmptyState() {
   }
 
   return (
-    <div className="flex flex-col items-center justify-center h-full text-center p-6">
-      <p className="text-sm text-muted-foreground">
-        Select a node or edge to configure it
-      </p>
+    <div className="flex flex-col items-center justify-center h-full text-center p-8 space-y-4">
+      <div className="w-10 h-10 rounded-xl bg-muted/50 flex items-center justify-center">
+        <MousePointer2 className="w-5 h-5 text-muted-foreground/60" />
+      </div>
+      <div className="space-y-1.5">
+        <p className="text-sm font-medium text-muted-foreground">
+          No selection
+        </p>
+        <p className="text-xs text-muted-foreground/70 max-w-48 leading-relaxed">
+          Click a node or edge on the canvas to configure it, or use <strong>Add</strong> in the toolbar to create one.
+        </p>
+      </div>
+      <div className="flex flex-col gap-1.5 text-[10px] text-muted-foreground/50 pt-2">
+        <div className="flex items-center gap-1.5">
+          <Plus className="w-3 h-3" />
+          <span>Add Node from toolbar</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <ArrowRight className="w-3 h-3" />
+          <span>Drag between handles to connect</span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -365,14 +415,7 @@ export function NodeConfigPanel() {
               placeholder="Node label"
             />
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0 text-destructive"
-            onClick={() => deleteNode(node.id)}
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </Button>
+          <ConfirmDeleteButton onDelete={() => deleteNode(node.id)} label="node" />
         </div>
 
         <div className="px-4 py-2 border-b">

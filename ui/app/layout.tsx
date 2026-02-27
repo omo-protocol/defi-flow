@@ -4,6 +4,7 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { Provider } from "jotai";
 import type { ReactNode } from "react";
 import { ThemeProvider } from "@/components/theme-provider";
+import { AuthProvider } from "@/components/auth/auth-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { mono, sans } from "@/lib/fonts";
 import { cn } from "@/lib/utils";
@@ -32,8 +33,10 @@ const RootLayout = ({ children }: { children: ReactNode }) => (
         enableSystem
       >
         <Provider>
-          <ReactFlowProvider>{children}</ReactFlowProvider>
-          <Toaster />
+          <AuthProvider>
+            <ReactFlowProvider>{children}</ReactFlowProvider>
+            <Toaster />
+          </AuthProvider>
         </Provider>
       </ThemeProvider>
     </body>

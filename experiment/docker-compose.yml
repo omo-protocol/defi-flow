@@ -24,6 +24,11 @@ services:
     environment:
       - NODE_ENV=production
       - MONGODB_DB=quant-agent
+      - AGENT_API_KEY=${AGENT_API_KEY}
+      - AGENT_BASE_URL=${AGENT_BASE_URL}
+      - AGENT_MODEL=${AGENT_MODEL}
+      - AGENT_MODEL_ID=${AGENT_MODEL_ID}
+      - AGENT_API_TYPE=${AGENT_API_TYPE}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_AGENT}
@@ -43,9 +48,17 @@ services:
       - "18790:18790"
     volumes:
       - hedgefund-memory:/app/workspace/memory
+      - lending-data:/app/strategy-states/lending:ro
+      - dn-data:/app/strategy-states/delta_neutral:ro
+      - pt-data:/app/strategy-states/pt_yield:ro
     environment:
       - NODE_ENV=production
       - MONGODB_DB=hedgefund-agent
+      - AGENT_API_KEY=${AGENT_API_KEY}
+      - AGENT_BASE_URL=${AGENT_BASE_URL}
+      - AGENT_MODEL=${AGENT_MODEL}
+      - AGENT_MODEL_ID=${AGENT_MODEL_ID}
+      - AGENT_API_TYPE=${AGENT_API_TYPE}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - PRIVATE_KEY=${PK_HEDGEFUND_AGENT}

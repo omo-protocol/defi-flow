@@ -9,6 +9,7 @@ import {
   tokensManifestAtom,
   contractsManifestAtom,
 } from "@/lib/workflow-store";
+import { userConfigAtom } from "@/lib/auth-store";
 import { convertCanvasToDefiFlow } from "@/lib/converters/canvas-defi-flow";
 import {
   runBacktest,
@@ -33,9 +34,10 @@ export function BacktestPanel() {
   const tokens = useAtomValue(tokensManifestAtom);
   const contracts = useAtomValue(contractsManifestAtom);
 
-  const [capital, setCapital] = useState("10000");
-  const [slippage, setSlippage] = useState("10");
-  const [seed, setSeed] = useState("42");
+  const config = useAtomValue(userConfigAtom);
+  const [capital, setCapital] = useState(config.default_capital || "10000");
+  const [slippage, setSlippage] = useState(config.default_slippage || "10");
+  const [seed, setSeed] = useState(config.default_seed || "42");
   const [dataDir, setDataDir] = useState("");
   const [autoFetch, setAutoFetch] = useState(true);
   const [running, setRunning] = useState(false);

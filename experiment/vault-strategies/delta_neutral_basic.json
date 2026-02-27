@@ -1,7 +1,10 @@
 {
   "name": "Basic Delta Neutral",
-  "description": "Spot buy ETH + short ETH perp for funding income. Idle USDC to HyperLend lending. Kelly splits between hedged pair and lending. Weekly rebalance on 5% drift.",
+  "description": "Spot buy ETH + short ETH perp for funding income. Idle USDT0 to HyperLend lending. Kelly splits between hedged pair and lending. Weekly rebalance on 5% drift.",
   "tokens": {
+    "USDT0": {
+      "hyperevm": "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb"
+    },
     "USDC": {
       "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f"
     },
@@ -16,7 +19,7 @@
     "hyperlend_rewards": {
       "hyperevm": "0x2aF0d6754A58723c50b5e73E45D964bFDD99fE2F"
     },
-    "morpho_usdc_vault": {
+    "morpho_usdt0_vault": {
       "hyperevm": "0x41B5FBB5c6E3938A8536B1d8828a45f7fd839ab6"
     },
     "valuer_contract": {
@@ -27,9 +30,9 @@
     }
   },
   "reserve": {
-    "vault_address": "morpho_usdc_vault",
+    "vault_address": "morpho_usdt0_vault",
     "vault_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
-    "vault_token": "USDC",
+    "vault_token": "USDT0",
     "adapter_address": "adapter"
   },
   "valuer": {
@@ -45,7 +48,7 @@
       "type": "wallet",
       "id": "wallet",
       "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
-      "token": "USDC",
+      "token": "USDT0",
       "address": "0xA97aA84f1aaed8AB6e217FC7bAe9dEbce4c7c0E3"
     },
     {
@@ -61,7 +64,7 @@
           "correlation": 0.0
         },
         {
-          "target_node": "lend_usdc",
+          "target_node": "lend_usdt0",
           "correlation": 0.0
         }
       ],
@@ -69,6 +72,26 @@
         "type": "cron",
         "interval": "weekly"
       }
+    },
+    {
+      "type": "movement",
+      "id": "swap_to_usdc_spot",
+      "movement_type": "swap",
+      "provider": "LiFi",
+      "from_token": "USDT0",
+      "to_token": "USDC",
+      "from_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+      "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
+    },
+    {
+      "type": "movement",
+      "id": "swap_to_usdc_perp",
+      "movement_type": "swap",
+      "provider": "LiFi",
+      "from_token": "USDT0",
+      "to_token": "USDC",
+      "from_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+      "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
     },
     {
       "type": "spot",
@@ -88,11 +111,11 @@
     },
     {
       "type": "lending",
-      "id": "lend_usdc",
+      "id": "lend_usdt0",
       "archetype": "aave_v3",
       "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
       "pool_address": "hyperlend_pool",
-      "asset": "USDC",
+      "asset": "USDT0",
       "action": "supply",
       "rewards_controller": "hyperlend_rewards",
       "defillama_slug": "hyperlend-pooled"
@@ -102,25 +125,37 @@
     {
       "from_node": "wallet",
       "to_node": "kelly",
-      "token": "USDC",
+      "token": "USDT0",
       "amount": { "type": "all" }
     },
     {
       "from_node": "kelly",
+      "to_node": "swap_to_usdc_spot",
+      "token": "USDT0",
+      "amount": { "type": "all" }
+    },
+    {
+      "from_node": "swap_to_usdc_spot",
       "to_node": "buy_eth",
       "token": "USDC",
       "amount": { "type": "all" }
     },
     {
       "from_node": "kelly",
+      "to_node": "swap_to_usdc_perp",
+      "token": "USDT0",
+      "amount": { "type": "all" }
+    },
+    {
+      "from_node": "swap_to_usdc_perp",
       "to_node": "short_eth",
       "token": "USDC",
       "amount": { "type": "all" }
     },
     {
       "from_node": "kelly",
-      "to_node": "lend_usdc",
-      "token": "USDC",
+      "to_node": "lend_usdt0",
+      "token": "USDT0",
       "amount": { "type": "all" }
     }
   ]

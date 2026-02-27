@@ -23,6 +23,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -37,14 +43,17 @@ import {
   Undo2,
   Redo2,
   CheckCircle,
-  Save,
+  ShieldCheck,
+  FileJson,
+  Loader2,
 } from "lucide-react";
 import { useReactFlow } from "@xyflow/react";
 import { nanoid } from "nanoid";
 import { toast } from "sonner";
 import { validateWorkflow } from "@/lib/wasm";
 import { validateWorkflow as validateWorkflowApi } from "@/lib/api";
-import { useState } from "react";
+import { UserMenu } from "@/components/auth/user-menu";
+import { useState, useEffect, useRef } from "react";
 
 export function WorkflowToolbar() {
   const [name, setName] = useAtom(workflowNameAtom);
@@ -230,89 +239,195 @@ export function WorkflowToolbar() {
     }
   };
 
+  // Track save status
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const handleSave = () => {
+    setSaveStatus("saving");
+    save({ immediate: true });
+    setTimeout(() => {
+      setSaveStatus("saved");
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
+    }, 100);
+  };
+
+  // Track validation status (persists across interactions)
+  const [validationStatus, setValidationStatus] = useState<"none" | "valid" | "errors">("none");
+  const validationCountRef = useRef(0);
+
+  // Derive validation status from nodes
+  useEffect(() => {
+    const hasErrors = nodes.some((n) => n.data.validationErrors?.length);
+    const allValid = nodes.length > 0 && nodes.every((n) => n.data.status === "valid");
+    if (hasErrors) setValidationStatus("errors");
+    else if (allValid) setValidationStatus("valid");
+  }, [nodes]);
+
   return (
-    <div className="pointer-events-auto absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 bg-card/95 backdrop-blur border rounded-lg px-3 py-1.5 shadow-lg">
-      {/* Name */}
-      <Input
-        className="h-7 w-44 text-xs font-medium border-none bg-transparent p-0 focus-visible:ring-0"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder="Strategy Name"
-      />
+    <TooltipProvider delayDuration={300}>
+      <div className="pointer-events-auto absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 bg-card/95 backdrop-blur-md border rounded-xl px-2.5 py-1.5 shadow-lg">
+        {/* Name */}
+        <Input
+          className="h-7 w-40 text-xs font-medium border-none bg-transparent p-0 focus-visible:ring-0"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Strategy Name"
+        />
 
-      <Separator orientation="vertical" className="h-5" />
+        {/* Save status dot */}
+        {saveStatus === "saved" && (
+          <span className="text-[10px] text-emerald-500 font-medium mr-0.5">Saved</span>
+        )}
+        {saveStatus === "saving" && (
+          <Loader2 className="w-3 h-3 text-muted-foreground animate-spin mr-0.5" />
+        )}
 
-      {/* Add Node */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs">
-            <Plus className="w-3.5 h-3.5 mr-1" />
-            Add Node
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent className="w-52" align="center">
-          {CATEGORIES.map((cat) => (
-            <div key={cat.key}>
-              <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                {cat.label}
-              </DropdownMenuLabel>
-              {NODE_REGISTRY.filter((n) => n.category === cat.key).map((config) => {
-                const Icon = config.icon;
-                return (
-                  <DropdownMenuItem
-                    key={config.type}
-                    onClick={() => handleAddNode(config)}
-                    className="text-xs"
-                  >
-                    <Icon className="w-3.5 h-3.5 mr-2" />
-                    {config.label}
-                    <span className="ml-auto text-[10px] text-muted-foreground">
-                      {config.description.slice(0, 30)}
-                    </span>
-                  </DropdownMenuItem>
-                );
-              })}
-              <DropdownMenuSeparator />
-            </div>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+        <Separator orientation="vertical" className="h-5 mx-0.5" />
 
-      <Separator orientation="vertical" className="h-5" />
+        {/* Add Node */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1">
+              <Plus className="w-3.5 h-3.5" />
+              Add
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent className="w-52" align="center">
+            {CATEGORIES.map((cat) => (
+              <div key={cat.key}>
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {cat.label}
+                </DropdownMenuLabel>
+                {NODE_REGISTRY.filter((n) => n.category === cat.key).map((config) => {
+                  const Icon = config.icon;
+                  return (
+                    <DropdownMenuItem
+                      key={config.type}
+                      onClick={() => handleAddNode(config)}
+                      className="text-xs"
+                    >
+                      <Icon className="w-3.5 h-3.5 mr-2" />
+                      {config.label}
+                      <span className="ml-auto text-[10px] text-muted-foreground">
+                        {config.description.slice(0, 30)}
+                      </span>
+                    </DropdownMenuItem>
+                  );
+                })}
+                <DropdownMenuSeparator />
+              </div>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-      {/* Import / Export */}
-      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={handleImport}>
-        <Upload className="w-3.5 h-3.5 mr-1" />
-        Import
-      </Button>
-      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={handleExport}>
-        <Download className="w-3.5 h-3.5 mr-1" />
-        Export
-      </Button>
-      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={handleValidate} disabled={validating}>
-        <CheckCircle className="w-3.5 h-3.5 mr-1" />
-        {validating
-          ? validatePhase === "onchain" ? "On-chain..." : "Validating..."
-          : "Validate"}
-      </Button>
+        {/* File menu (Import/Export) */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1">
+              <FileJson className="w-3.5 h-3.5" />
+              File
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="center">
+            <DropdownMenuItem onClick={handleImport} className="text-xs">
+              <Upload className="w-3.5 h-3.5 mr-2" />
+              Import JSON
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleExport} className="text-xs">
+              <Download className="w-3.5 h-3.5 mr-2" />
+              Export JSON
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-      <Separator orientation="vertical" className="h-5" />
+        <Separator orientation="vertical" className="h-5 mx-0.5" />
 
-      {/* Undo / Redo */}
-      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={!canUndo} onClick={() => undo()}>
-        <Undo2 className="w-3.5 h-3.5" />
-      </Button>
-      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={!canRedo} onClick={() => redo()}>
-        <Redo2 className="w-3.5 h-3.5" />
-      </Button>
+        {/* Validate */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={`h-7 px-2 text-xs gap-1 ${
+                validationStatus === "valid"
+                  ? "text-emerald-500"
+                  : validationStatus === "errors"
+                    ? "text-red-400"
+                    : ""
+              }`}
+              onClick={handleValidate}
+              disabled={validating}
+            >
+              {validating ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : validationStatus === "valid" ? (
+                <ShieldCheck className="w-3.5 h-3.5" />
+              ) : (
+                <CheckCircle className="w-3.5 h-3.5" />
+              )}
+              {validating
+                ? validatePhase === "onchain"
+                  ? "On-chain..."
+                  : "Checking..."
+                : validationStatus === "valid"
+                  ? "Valid"
+                  : "Validate"}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="text-xs">
+            {validating
+              ? "Running validation..."
+              : validationStatus === "valid"
+                ? "All nodes validated"
+                : validationStatus === "errors"
+                  ? "Has validation errors"
+                  : "Validate workflow (WASM + on-chain)"}
+          </TooltipContent>
+        </Tooltip>
 
-      <Separator orientation="vertical" className="h-5" />
+        <Separator orientation="vertical" className="h-5 mx-0.5" />
 
-      {/* Save */}
-      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => save({ immediate: true })}>
-        <Save className="w-3.5 h-3.5 mr-1" />
-        Save
-      </Button>
-    </div>
+        {/* Undo / Redo */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={!canUndo} onClick={() => undo()}>
+              <Undo2 className="w-3.5 h-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="text-xs">Undo (Cmd+Z)</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={!canRedo} onClick={() => redo()}>
+              <Redo2 className="w-3.5 h-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="text-xs">Redo (Cmd+Shift+Z)</TooltipContent>
+        </Tooltip>
+
+        <Separator orientation="vertical" className="h-5 mx-0.5" />
+
+        {/* Save */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleSave}>
+              {saveStatus === "saving" ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="text-xs">Save (Cmd+S)</TooltipContent>
+        </Tooltip>
+
+        <Separator orientation="vertical" className="h-5 mx-0.5" />
+
+        {/* Auth */}
+        <UserMenu />
+      </div>
+    </TooltipProvider>
   );
 }

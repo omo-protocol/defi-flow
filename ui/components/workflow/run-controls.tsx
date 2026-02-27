@@ -9,6 +9,13 @@ import {
   tokensManifestAtom,
   contractsManifestAtom,
 } from "@/lib/workflow-store";
+import {
+  isAuthenticatedAtom,
+  walletsAtom,
+  selectedWalletIdAtom,
+  userConfigAtom,
+} from "@/lib/auth-store";
+import { startRun as startRunAuth } from "@/lib/auth-api";
 import { convertCanvasToDefiFlow } from "@/lib/converters/canvas-defi-flow";
 import {
   startDaemon,
@@ -19,7 +26,6 @@ import {
   type RunStatusResponse,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
@@ -30,7 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Play, Square, RefreshCw, Radio } from "lucide-react";
+import { Play, Square, Radio, Wallet } from "lucide-react";
 import { toast } from "sonner";
 
 export function RunControls({
@@ -44,13 +50,23 @@ export function RunControls({
   const tokens = useAtomValue(tokensManifestAtom);
   const contracts = useAtomValue(contractsManifestAtom);
 
-  const [network, setNetwork] = useState("testnet");
+  const isAuth = useAtomValue(isAuthenticatedAtom);
+  const wallets = useAtomValue(walletsAtom);
+  const savedWalletId = useAtomValue(selectedWalletIdAtom);
+  const config = useAtomValue(userConfigAtom);
+
+  const [network, setNetwork] = useState(config.default_network || "testnet");
   const [dryRun, setDryRun] = useState(true);
-  const [privateKey, setPrivateKey] = useState("");
+  const [walletId, setWalletId] = useState<string>("");
   const [starting, setStarting] = useState(false);
   const [sessions, setSessions] = useState<RunListEntry[]>([]);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [status, setStatus] = useState<RunStatusResponse | null>(null);
+
+  // Pre-select wallet if one is bound to the strategy
+  useEffect(() => {
+    if (savedWalletId && !walletId) setWalletId(savedWalletId);
+  }, [savedWalletId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll active runs
   useEffect(() => {
@@ -82,6 +98,11 @@ export function RunControls({
       return;
     }
 
+    if (!dryRun && !walletId) {
+      toast.error("Select a wallet for live trading");
+      return;
+    }
+
     setStarting(true);
     try {
       const workflow = convertCanvasToDefiFlow(
@@ -92,15 +113,28 @@ export function RunControls({
         tokens,
         contracts
       );
-      const res = await startDaemon(workflow, {
-        network,
-        dry_run: dryRun,
-        ...(privateKey ? { private_key: privateKey } : {}),
-      });
-      toast.success(`Daemon started: ${res.session_id.slice(0, 8)}...`);
-      setSelectedSession(res.session_id);
-      onSessionSelect?.(res.session_id);
-      // Refresh list
+
+      if (walletId && isAuth) {
+        // Use auth API — PK decrypted server-side
+        const prepared = await startRunAuth(walletId, workflow);
+        // Forward prepared strategy (with PK injected) to daemon
+        const res = await startDaemon(prepared.strategy, {
+          network,
+          dry_run: dryRun,
+        });
+        toast.success(`Daemon started: ${res.session_id.slice(0, 8)}...`);
+        setSelectedSession(res.session_id);
+        onSessionSelect?.(res.session_id);
+      } else {
+        // Dry run without wallet
+        const res = await startDaemon(workflow, {
+          network,
+          dry_run: dryRun,
+        });
+        toast.success(`Daemon started: ${res.session_id.slice(0, 8)}...`);
+        setSelectedSession(res.session_id);
+        onSessionSelect?.(res.session_id);
+      }
       listRuns().then(setSessions).catch(() => {});
     } catch (err) {
       toast.error(
@@ -116,7 +150,6 @@ export function RunControls({
     try {
       await stopDaemon(sessionId);
       toast.success("Stopping daemon...");
-      // Refresh list after a moment
       setTimeout(() => {
         listRuns().then(setSessions).catch(() => {});
         if (selectedSession === sessionId) {
@@ -132,16 +165,18 @@ export function RunControls({
     }
   };
 
+  const selectedWallet = wallets.find((w) => w.id === walletId);
+
   return (
     <div className="p-4 space-y-4 text-sm">
       <h3 className="font-semibold text-base">Live Run</h3>
 
       {/* Start controls */}
-      <div className="space-y-2">
+      <div className="space-y-3">
         <div>
           <Label className="text-xs text-muted-foreground">Network</Label>
           <Select value={network} onValueChange={setNetwork}>
-            <SelectTrigger className="h-7 text-xs">
+            <SelectTrigger className="h-8 text-xs mt-1">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -162,22 +197,51 @@ export function RunControls({
           </Label>
         </div>
 
+        {/* Wallet selector */}
         <div>
           <Label className="text-xs text-muted-foreground">
-            Private Key {dryRun ? "(or set DEFI_FLOW_PRIVATE_KEY env)" : "(required)"}
+            Wallet {!dryRun && <span className="text-destructive">*</span>}
           </Label>
-          <Input
-            className="h-7 text-xs font-mono"
-            type="password"
-            value={privateKey}
-            onChange={(e) => setPrivateKey(e.target.value)}
-            placeholder="hex key without 0x prefix"
-          />
+          {isAuth && wallets.length > 0 ? (
+            <Select value={walletId} onValueChange={setWalletId}>
+              <SelectTrigger className="h-8 text-xs mt-1">
+                <SelectValue placeholder="Select wallet" />
+              </SelectTrigger>
+              <SelectContent>
+                {dryRun && (
+                  <SelectItem value="none" className="text-xs">
+                    No wallet (dry run only)
+                  </SelectItem>
+                )}
+                {wallets.map((w) => (
+                  <SelectItem key={w.id} value={w.id} className="text-xs">
+                    <span className="font-medium">{w.label}</span>
+                    <span className="ml-2 text-muted-foreground font-mono">
+                      {w.address.slice(0, 6)}...{w.address.slice(-4)}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : isAuth ? (
+            <p className="text-xs text-muted-foreground mt-1">
+              No wallets. Add one via the user menu.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground mt-1">
+              Sign in to use saved wallets.
+            </p>
+          )}
+          {selectedWallet && (
+            <p className="text-[10px] text-muted-foreground mt-1 font-mono">
+              {selectedWallet.address}
+            </p>
+          )}
         </div>
 
         <Button
           onClick={handleStart}
-          disabled={starting || nodes.length === 0}
+          disabled={starting || nodes.length === 0 || (!dryRun && !walletId)}
           size="sm"
           className="w-full"
         >

@@ -47,16 +47,20 @@ export const DefiEdge = memo(function DefiEdge(props: EdgeProps<CanvasEdge>) {
         ? `${amount.value}%`
         : amount.value;
 
+  const isError = data?.status === "error";
+
   return (
     <>
       <BaseEdge
         id={id}
         path={edgePath}
         style={{
-          strokeWidth: selected ? 3 : 2,
-          stroke: data?.status === "error" ? "#ef4444" : selected ? "#818cf8" : "#6366f1",
-          strokeDasharray: "6 3",
-          animation: "dashdraw 0.5s linear infinite",
+          strokeWidth: selected ? 2.5 : 1.5,
+          stroke: isError ? "#ef4444" : selected ? "#818cf8" : "#64748b",
+          strokeDasharray: "5 4",
+          animation: "dashdraw 0.8s linear infinite",
+          opacity: selected ? 1 : 0.6,
+          transition: "stroke 0.15s, stroke-width 0.15s, opacity 0.15s",
         }}
       />
       {showLabel && (
@@ -71,17 +75,17 @@ export const DefiEdge = memo(function DefiEdge(props: EdgeProps<CanvasEdge>) {
           >
             <div
               className={cn(
-                "flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border cursor-pointer transition-colors",
+                "flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border cursor-pointer transition-all shadow-sm",
                 selected
-                  ? "bg-indigo-500 text-white border-indigo-400"
-                  : "bg-card text-foreground border-border hover:bg-accent"
+                  ? "bg-indigo-500 text-white border-indigo-400 shadow-indigo-500/20"
+                  : "bg-card/95 backdrop-blur-sm text-foreground border-border/60 hover:border-border hover:shadow-md"
               )}
             >
-              <span>{token}</span>
+              <span className="font-semibold">{token}</span>
               {amountText && (
                 <>
-                  <span className="text-muted-foreground">·</span>
-                  <span className="text-muted-foreground">{amountText}</span>
+                  <span className={selected ? "text-white/50" : "text-muted-foreground"}>·</span>
+                  <span className={selected ? "text-white/80" : "text-muted-foreground"}>{amountText}</span>
                 </>
               )}
             </div>
