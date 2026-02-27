@@ -1,6 +1,23 @@
 services:
 
   # ═══════════════════════════════════════════════════════
+  # API server (UI is on Vercel)
+  # ═══════════════════════════════════════════════════════
+
+  defi-flow-api:
+    image: ghcr.io/omo-protocol/defi-flow/defi-flow-api:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile.api
+    container_name: defi-flow-api
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - api-data:/app/data
+    ports:
+      - "8080:8080"
+
+  # ═══════════════════════════════════════════════════════
   # Agents
   # ═══════════════════════════════════════════════════════
 
@@ -122,6 +139,7 @@ secrets:
     file: ../.gh_token
 
 volumes:
+  api-data:
   quant-strategies:
   quant-data:
   quant-memory:

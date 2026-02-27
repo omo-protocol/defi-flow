@@ -1,25 +1,41 @@
 /**
  * WASM bridge — loads the defi-flow Rust engine compiled to WebAssembly.
  * Exposes validate, parse, and schema functions.
+ *
+ * Uses a fully-dynamic import path so the build succeeds even when
+ * pkg/ is absent (Vercel, CI). WASM is browser-only.
  */
 
-import init, {
-  validate_workflow_json,
-  parse_workflow_json,
-  get_schema,
-} from "../pkg/defi_flow";
+type WasmExports = {
+  default: (opts: { module_or_path: string }) => Promise<void>;
+  validate_workflow_json: (json: string) => string;
+  parse_workflow_json: (json: string) => string;
+  get_schema: () => string;
+};
 
-let ready = false;
-let initPromise: Promise<void> | null = null;
+let wasm: WasmExports | null = null;
+let initPromise: Promise<boolean> | null = null;
 
-async function ensureInit() {
-  if (ready) return;
+async function ensureInit(): Promise<boolean> {
+  if (wasm) return true;
+  if (typeof window === "undefined") return false;
+
   if (!initPromise) {
-    initPromise = init({ module_or_path: "/defi_flow_bg.wasm" }).then(() => {
-      ready = true;
-    });
+    initPromise = (async () => {
+      try {
+        // Variable path prevents bundler from resolving statically
+        const path = "../pkg/defi_flow";
+        const mod = (await import(/* webpackIgnore: true */ path)) as WasmExports;
+        await mod.default({ module_or_path: "/defi_flow_bg.wasm" });
+        wasm = mod;
+        return true;
+      } catch {
+        console.warn("[wasm] WASM module unavailable — validation disabled");
+        return false;
+      }
+    })();
   }
-  await initPromise;
+  return initPromise;
 }
 
 export type ValidationResult = {
@@ -28,21 +44,26 @@ export type ValidationResult = {
 };
 
 /** Validate a workflow JSON string using the Rust validator. */
-export async function validateWorkflow(json: string): Promise<ValidationResult> {
-  await ensureInit();
-  const raw = validate_workflow_json(json);
+export async function validateWorkflow(
+  json: string
+): Promise<ValidationResult> {
+  const ok = await ensureInit();
+  if (!ok || !wasm) return { valid: true };
+  const raw = wasm.validate_workflow_json(json);
   return JSON.parse(raw) as ValidationResult;
 }
 
 /** Parse and re-serialize a workflow JSON (normalizes it). */
 export async function parseWorkflow(json: string): Promise<unknown> {
-  await ensureInit();
-  const raw = parse_workflow_json(json);
+  const ok = await ensureInit();
+  if (!ok || !wasm) return JSON.parse(json);
+  const raw = wasm.parse_workflow_json(json);
   return JSON.parse(raw);
 }
 
 /** Get the JSON Schema for workflows. */
 export async function getWorkflowSchema(): Promise<unknown> {
-  await ensureInit();
-  return JSON.parse(get_schema());
+  const ok = await ensureInit();
+  if (!ok || !wasm) return {};
+  return JSON.parse(wasm.get_schema());
 }

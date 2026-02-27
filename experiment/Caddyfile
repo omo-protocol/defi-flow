@@ -1,0 +1,24 @@
+n8n.omoprotocol.ai {
+	tls choggun@omoprotocol.ai
+
+	# Auth routes → Next.js
+	handle /api/auth/* {
+		reverse_proxy defi-flow-ui:3000
+	}
+	handle /api/migrate {
+		reverse_proxy defi-flow-ui:3000
+	}
+
+	# Engine routes → Rust API
+	handle /api/* {
+		reverse_proxy defi-flow-api:8080
+	}
+	handle /health {
+		reverse_proxy defi-flow-api:8080
+	}
+
+	# Everything else → Next.js UI
+	handle {
+		reverse_proxy defi-flow-ui:3000
+	}
+}
