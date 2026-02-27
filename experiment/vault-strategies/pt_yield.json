@@ -4,6 +4,9 @@
   "tokens": {
     "USDT0": {
       "hyperevm": "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb"
+    },
+    "USDC": {
+      "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f"
     }
   },
   "contracts": {
@@ -52,6 +55,16 @@
       "address": "0x0c708C70a8a1c4e1ffBcBae38680F4cCDe40bC0C"
     },
     {
+      "type": "movement",
+      "id": "swap_to_usdc",
+      "movement_type": "swap",
+      "provider": "LiFi",
+      "from_token": "USDT0",
+      "to_token": "USDC",
+      "from_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+      "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
+    },
+    {
       "type": "pendle",
       "id": "mint_pt",
       "market": "PT-kHYPE",
@@ -61,8 +74,14 @@
   "edges": [
     {
       "from_node": "wallet",
-      "to_node": "mint_pt",
+      "to_node": "swap_to_usdc",
       "token": "USDT0",
+      "amount": { "type": "all" }
+    },
+    {
+      "from_node": "swap_to_usdc",
+      "to_node": "mint_pt",
+      "token": "USDC",
       "amount": { "type": "all" }
     }
   ]

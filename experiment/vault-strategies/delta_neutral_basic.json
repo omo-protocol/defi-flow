@@ -5,6 +5,9 @@
     "USDT0": {
       "hyperevm": "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb"
     },
+    "USDC": {
+      "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f"
+    },
     "ETH": {
       "hyperevm": "0xbe6727b535545c67d5caa73dea54865b92cf7907"
     }
@@ -71,6 +74,26 @@
       }
     },
     {
+      "type": "movement",
+      "id": "swap_to_usdc_spot",
+      "movement_type": "swap",
+      "provider": "LiFi",
+      "from_token": "USDT0",
+      "to_token": "USDC",
+      "from_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+      "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
+    },
+    {
+      "type": "movement",
+      "id": "swap_to_usdc_perp",
+      "movement_type": "swap",
+      "provider": "LiFi",
+      "from_token": "USDT0",
+      "to_token": "USDC",
+      "from_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
+      "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
+    },
+    {
       "type": "spot",
       "id": "buy_eth",
       "venue": "Hyperliquid",
@@ -107,14 +130,26 @@
     },
     {
       "from_node": "kelly",
-      "to_node": "buy_eth",
+      "to_node": "swap_to_usdc_spot",
       "token": "USDT0",
       "amount": { "type": "all" }
     },
     {
+      "from_node": "swap_to_usdc_spot",
+      "to_node": "buy_eth",
+      "token": "USDC",
+      "amount": { "type": "all" }
+    },
+    {
       "from_node": "kelly",
-      "to_node": "short_eth",
+      "to_node": "swap_to_usdc_perp",
       "token": "USDT0",
+      "amount": { "type": "all" }
+    },
+    {
+      "from_node": "swap_to_usdc_perp",
+      "to_node": "short_eth",
+      "token": "USDC",
       "amount": { "type": "all" }
     },
     {
