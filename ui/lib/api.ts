@@ -2,7 +2,7 @@
  * Typed API client for the defi-flow Rust backend.
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 async function request<T>(
   path: string,
