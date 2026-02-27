@@ -20,13 +20,13 @@
       "hyperevm": "0x8e8df024cf6d3e916be0821ff3177db6981fcad2"
     },
     "morpho_usdc_vault": {
-      "hyperevm": "0x178AB261E38b58E994C66875188b26FE0B8B7B30"
+      "hyperevm": "0xe600EB6913376B4Ac7eD645B2bFF8A20B4F8cfB0"
     },
     "valuer_contract": {
-      "hyperevm": "0x678cBFda7b1D720416F335fE8C8eBf1663fC9dD4"
+      "hyperevm": "0x93804F52BfDB6b0a44Ff61373D566eBdB48d81Ba"
     },
     "adapter": {
-      "hyperevm": "0x5eE90A49cD6ce440f0C6D25DfF1Ae82087fAd815"
+      "hyperevm": "0xb6282DE2d343256D9B9688D69acfCc988b4Ff24C"
     }
   },
   "reserve": {
@@ -49,7 +49,7 @@
       "id": "wallet",
       "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
       "token": "USDC",
-      "address": "0xA97aA84f1aaed8AB6e217FC7bAe9dEbce4c7c0E3"
+      "address": "0x0c708C70a8a1c4e1ffBcBae38680F4cCDe40bC0C"
     },
     {
       "type": "pendle",
