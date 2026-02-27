@@ -11,8 +11,8 @@ RUN apt-get update && \
       jq \
     && rm -rf /var/lib/apt/lists/*
 
-# Install OpenClaw + foundry + mongodb (single layer for caching)
-RUN npm install -g openclaw@latest mongodb@6 && \
+# Install OpenClaw + foundry
+RUN npm install -g openclaw@latest && \
     curl -L https://foundry.paradigm.xyz | bash && \
     /root/.foundry/bin/foundryup
 ENV PATH="/root/.foundry/bin:${PATH}"
@@ -41,8 +41,9 @@ COPY experiment/hedgefund-agent/openclaw.json /root/.openclaw/openclaw.json
 # Copy custom skills (override shared where names collide)
 COPY experiment/hedgefund-agent/skills/ /app/workspace/skills/
 
-# Copy scripts
+# Copy scripts + install local deps
 COPY experiment/hedgefund-agent/scripts/ /app/scripts/
+RUN cd /app/scripts && npm init -y > /dev/null 2>&1 && npm install mongodb@6
 COPY experiment/hedgefund-agent/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 

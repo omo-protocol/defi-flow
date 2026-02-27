@@ -30,8 +30,8 @@ RUN apt-get update && \
       jq \
     && rm -rf /var/lib/apt/lists/*
 
-# Install OpenClaw + mongodb (single layer)
-RUN npm install -g openclaw@latest mongodb@6
+# Install OpenClaw
+RUN npm install -g openclaw@latest
 
 # Copy defi-flow binary
 COPY --from=builder /build/target/release/defi-flow /usr/local/bin/defi-flow
@@ -63,8 +63,9 @@ COPY experiment/quant-agent/openclaw.json /root/.openclaw/openclaw.json
 # Copy our custom skills (overrides shared backtest with our defi-flow-specific one)
 COPY experiment/quant-agent/skills/ /app/workspace/skills/
 
-# Copy scripts
+# Copy scripts + install local deps
 COPY experiment/quant-agent/scripts/ /app/scripts/
+RUN cd /app/scripts && npm init -y > /dev/null 2>&1 && npm install mongodb@6
 COPY experiment/quant-agent/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
