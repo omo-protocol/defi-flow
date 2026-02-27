@@ -31,7 +31,7 @@
   },
   "valuer": {
     "contract": "valuer_contract",
-    "strategy_id": "lending",
+    "strategy_id": "usdt0-2-lending-vault",
     "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
     "confidence": 90,
     "underlying_decimals": 6,

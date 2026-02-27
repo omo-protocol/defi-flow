@@ -37,7 +37,7 @@
   },
   "valuer": {
     "contract": "valuer_contract",
-    "strategy_id": "pt_yield",
+    "strategy_id": "usdt0-3-pt-vault",
     "chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
     "confidence": 90,
     "underlying_decimals": 6,
