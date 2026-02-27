@@ -3,22 +3,7 @@ name: Deploy
 on:
   push:
     branches: [main]
-    paths:
-      - 'src/**'
-      - 'ferrofluid/**'
-      - 'Cargo.*'
-      - 'experiment/**'
   workflow_dispatch:
-    inputs:
-      services:
-        description: 'Services to deploy (space-separated, empty = auto-detect)'
-        required: false
-        default: ''
-      force_all:
-        description: 'Force rebuild all services'
-        required: false
-        type: boolean
-        default: false
 
 concurrency:
   group: deploy
@@ -26,92 +11,24 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io/omo-protocol/defi-flow
+  ALL_SERVICES: quant-agent hedgefund-agent strategy-lending strategy-delta-neutral strategy-pt-yield
 
 jobs:
 
-  # ─── Detect what changed ──────────────────────────────────
-  detect-changes:
-    runs-on: ubuntu-latest
-    outputs:
-      rust: ${{ steps.filter.outputs.rust }}
-      quant: ${{ steps.filter.outputs.quant }}
-      hedgefund: ${{ steps.filter.outputs.hedgefund }}
-      strategies: ${{ steps.filter.outputs.strategies }}
-      compose: ${{ steps.filter.outputs.compose }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            rust:
-              - 'src/**'
-              - 'ferrofluid/**'
-              - 'Cargo.*'
-            quant:
-              - 'experiment/quant-agent/**'
-            hedgefund:
-              - 'experiment/hedgefund-agent/**'
-            strategies:
-              - 'experiment/vault-strategies/**'
-            compose:
-              - 'experiment/docker-compose.yml'
-
-  # ─── Compute what to build ────────────────────────────────
-  compute-services:
-    needs: detect-changes
-    runs-on: ubuntu-latest
-    outputs:
-      services: ${{ steps.compute.outputs.services }}
-      matrix: ${{ steps.compute.outputs.matrix }}
-    steps:
-      - name: Compute services
-        id: compute
-        env:
-          INPUT_SERVICES: ${{ github.event.inputs.services }}
-          INPUT_FORCE: ${{ github.event.inputs.force_all }}
-          RUST: ${{ needs.detect-changes.outputs.rust }}
-          QUANT: ${{ needs.detect-changes.outputs.quant }}
-          HEDGEFUND: ${{ needs.detect-changes.outputs.hedgefund }}
-          STRATEGIES: ${{ needs.detect-changes.outputs.strategies }}
-          COMPOSE: ${{ needs.detect-changes.outputs.compose }}
-        run: |
-          if [ -n "$INPUT_SERVICES" ]; then
-            SERVICES="$INPUT_SERVICES"
-          elif [ "$INPUT_FORCE" == "true" ] || [ "$COMPOSE" == "true" ]; then
-            SERVICES="quant-agent hedgefund-agent strategy-lending strategy-delta-neutral strategy-pt-yield"
-          else
-            SERVICES=""
-            if [ "$RUST" == "true" ]; then
-              SERVICES="quant-agent strategy-lending strategy-delta-neutral strategy-pt-yield"
-            fi
-            [ "$QUANT" == "true" ] && SERVICES="$SERVICES quant-agent"
-            [ "$HEDGEFUND" == "true" ] && SERVICES="$SERVICES hedgefund-agent"
-            [ "$STRATEGIES" == "true" ] && SERVICES="$SERVICES strategy-lending strategy-delta-neutral strategy-pt-yield"
-            SERVICES=$(echo "$SERVICES" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)
-          fi
-
-          echo "services=$SERVICES" >> $GITHUB_OUTPUT
-          echo "Deploying: ${SERVICES:-nothing}"
-
-          # Build JSON matrix for parallel builds
-          if [ -n "$SERVICES" ]; then
-            MATRIX=$(echo "$SERVICES" | tr ' ' '\n' | jq -R . | jq -sc '{service: .}')
-          else
-            MATRIX='{"service":[]}'
-          fi
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-
-  # ─── Build & Push images to GHCR ─────────────────────────
+  # ─── Build & Push all images to GHCR ────────────────────
   build:
-    needs: compute-services
-    if: needs.compute-services.outputs.services != ''
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     strategy:
-      matrix: ${{ fromJson(needs.compute-services.outputs.matrix) }}
+      matrix:
+        service:
+          - quant-agent
+          - hedgefund-agent
+          - strategy-lending
+          - strategy-delta-neutral
+          - strategy-pt-yield
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -165,21 +82,16 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
-  # ─── Deploy to VPS ────────────────────────────────────────
+  # ─── Deploy to VPS ──────────────────────────────────────
   deploy:
-    needs: [compute-services, build]
+    needs: build
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: experiment/docker-compose.yml
-          sparse-checkout-cone-mode: false
-
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         env:
-          SERVICES: ${{ needs.compute-services.outputs.services }}
+          SERVICES: ${{ env.ALL_SERVICES }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           AGENT_API_KEY: ${{ secrets.AGENT_API_KEY }}
           AGENT_BASE_URL: ${{ secrets.AGENT_BASE_URL }}
@@ -216,7 +128,6 @@ jobs:
             cd /opt/defi-flow
 
             # ── Pull latest docker-compose.yml ──
-            # (We only need the compose file on the VPS, not the full repo)
             curl -sH "Authorization: token $GHCR_TOKEN" \
               -H "Accept: application/vnd.github.raw+json" \
               "https://api.github.com/repos/omo-protocol/defi-flow/contents/experiment/docker-compose.yml?ref=main" \
@@ -237,18 +148,10 @@ jobs:
             export PK_STRATEGY_DN="$PK_STRATEGY_DN"
             export PK_STRATEGY_PT="$PK_STRATEGY_PT"
 
-            # ── Pull only changed service images ──
+            # ── Pull & restart all services ──
             cd experiment
-            for SVC in $SERVICES; do
-              echo ">>> Pulling $SVC..."
-              docker compose pull $SVC
-            done
-
-            # ── Restart only changed services ──
-            # --no-deps: don't touch services not in the list
-            # Volumes are NEVER deleted — state, registry, memory all persist
-            echo ">>> Restarting: $SERVICES"
-            docker compose up -d --no-deps --force-recreate $SERVICES
+            docker compose pull
+            docker compose up -d --force-recreate
 
             # ── Cleanup ──
             docker image prune -f
