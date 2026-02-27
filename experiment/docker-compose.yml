@@ -1,6 +1,53 @@
 services:
 
   # ═══════════════════════════════════════════════════════
+  # Platform — UI + API + reverse proxy
+  # ═══════════════════════════════════════════════════════
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - defi-flow-ui
+      - defi-flow-api
+
+  defi-flow-api:
+    image: ghcr.io/omo-protocol/defi-flow/defi-flow-api:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile.api
+    container_name: defi-flow-api
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - api-data:/app/data
+    expose:
+      - "8080"
+
+  defi-flow-ui:
+    image: ghcr.io/omo-protocol/defi-flow/defi-flow-ui:latest
+    build:
+      context: ..
+      dockerfile: ui/Dockerfile
+    container_name: defi-flow-ui
+    restart: unless-stopped
+    volumes:
+      - ui-db:/app/data
+    expose:
+      - "3000"
+    environment:
+      - AUTH_SECRET=${AUTH_SECRET}
+      - NEXT_PUBLIC_API_URL=
+
+  # ═══════════════════════════════════════════════════════
   # Agents
   # ═══════════════════════════════════════════════════════
 
@@ -122,6 +169,10 @@ secrets:
     file: ../.gh_token
 
 volumes:
+  caddy-data:
+  caddy-config:
+  api-data:
+  ui-db:
   quant-strategies:
   quant-data:
   quant-memory:
