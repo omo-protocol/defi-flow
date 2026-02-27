@@ -11,11 +11,9 @@ RUN apt-get update && \
       jq \
     && rm -rf /var/lib/apt/lists/*
 
-# Install OpenClaw
-RUN npm install -g openclaw@latest
-
-# Install foundry (cast)
-RUN curl -L https://foundry.paradigm.xyz | bash && \
+# Install OpenClaw + foundry + mongodb (single layer for caching)
+RUN npm install -g openclaw@latest mongodb@6 && \
+    curl -L https://foundry.paradigm.xyz | bash && \
     /root/.foundry/bin/foundryup
 ENV PATH="/root/.foundry/bin:${PATH}"
 
@@ -27,11 +25,9 @@ RUN --mount=type=secret,id=gh_token \
 
 # Setup workspace
 WORKDIR /app
-RUN mkdir -p /app/workspace/skills /app/workspace/memory
-
-# Copy shared skills
-RUN cp -r /tmp/shared-configs/skills/* /app/workspace/skills/
-RUN rm -rf /tmp/shared-configs
+RUN mkdir -p /app/workspace/skills /app/workspace/memory && \
+    cp -r /tmp/shared-configs/skills/* /app/workspace/skills/ && \
+    rm -rf /tmp/shared-configs
 
 # Copy workspace files
 COPY experiment/hedgefund-agent/AGENTS.md /app/workspace/
@@ -44,9 +40,6 @@ COPY experiment/hedgefund-agent/openclaw.json /root/.openclaw/openclaw.json
 
 # Copy custom skills (override shared where names collide)
 COPY experiment/hedgefund-agent/skills/ /app/workspace/skills/
-
-# Install mongodb driver for log shipping
-RUN npm install -g mongodb@6
 
 # Copy scripts
 COPY experiment/hedgefund-agent/scripts/ /app/scripts/

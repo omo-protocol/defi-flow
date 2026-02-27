@@ -1,9 +1,19 @@
 # syntax=docker/dockerfile:1
 
-# Stage 1: Build defi-flow binary
+# Stage 1: Build defi-flow binary (with cargo cache)
 FROM rust:1.91-bookworm AS builder
 WORKDIR /build
+
+# Cache deps — only re-download when Cargo.toml/lock change
 COPY Cargo.toml Cargo.lock ./
+COPY ferrofluid/Cargo.toml ferrofluid/Cargo.toml
+RUN mkdir -p src ferrofluid/src && \
+    echo "fn main() {}" > src/main.rs && \
+    touch ferrofluid/src/lib.rs && \
+    cargo build --release --bin defi-flow 2>/dev/null || true && \
+    rm -rf src ferrofluid/src
+
+# Now copy real source and build (only recompiles changed crates)
 COPY src/ src/
 COPY ferrofluid/ ferrofluid/
 RUN cargo build --release --bin defi-flow
@@ -20,8 +30,8 @@ RUN apt-get update && \
       jq \
     && rm -rf /var/lib/apt/lists/*
 
-# Install OpenClaw
-RUN npm install -g openclaw@latest
+# Install OpenClaw + mongodb (single layer)
+RUN npm install -g openclaw@latest mongodb@6
 
 # Copy defi-flow binary
 COPY --from=builder /build/target/release/defi-flow /usr/local/bin/defi-flow
@@ -38,8 +48,9 @@ WORKDIR /app
 RUN mkdir -p /app/workspace/skills /app/workspace/memory /app/strategies /app/data
 
 # Copy shared skills + TOOLS.md from cloned repo
-RUN cp -r /tmp/shared-configs/skills/* /app/workspace/skills/
-RUN cp /tmp/shared-configs/TOOLS.md /app/workspace/TOOLS-shared.md
+RUN cp -r /tmp/shared-configs/skills/* /app/workspace/skills/ && \
+    cp /tmp/shared-configs/TOOLS.md /app/workspace/TOOLS-shared.md && \
+    rm -rf /tmp/shared-configs
 
 # Copy our workspace files (overrides shared where names collide)
 COPY experiment/quant-agent/AGENTS.md /app/workspace/
@@ -51,12 +62,6 @@ COPY experiment/quant-agent/openclaw.json /root/.openclaw/openclaw.json
 
 # Copy our custom skills (overrides shared backtest with our defi-flow-specific one)
 COPY experiment/quant-agent/skills/ /app/workspace/skills/
-
-# Cleanup clone
-RUN rm -rf /tmp/shared-configs
-
-# Install mongodb driver for log shipping
-RUN npm install -g mongodb@6
 
 # Copy scripts
 COPY experiment/quant-agent/scripts/ /app/scripts/

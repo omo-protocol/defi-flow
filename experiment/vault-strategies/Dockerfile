@@ -1,9 +1,19 @@
 # syntax=docker/dockerfile:1
 
-# Stage 1: Build defi-flow binary
+# Stage 1: Build defi-flow binary (with cargo cache)
 FROM rust:1.91-bookworm AS builder
 WORKDIR /build
+
+# Cache deps — only re-download when Cargo.toml/lock change
 COPY Cargo.toml Cargo.lock ./
+COPY ferrofluid/Cargo.toml ferrofluid/Cargo.toml
+RUN mkdir -p src ferrofluid/src && \
+    echo "fn main() {}" > src/main.rs && \
+    touch ferrofluid/src/lib.rs && \
+    cargo build --release --bin defi-flow 2>/dev/null || true && \
+    rm -rf src ferrofluid/src
+
+# Now copy real source and build (only recompiles changed crates)
 COPY src/ src/
 COPY ferrofluid/ ferrofluid/
 RUN cargo build --release --bin defi-flow
