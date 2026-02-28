@@ -129,11 +129,25 @@ function collectVaultStats(vaultsConfig, wallet) {
       : 0;
 
     let ourValue = 0;
+    let ourShares = 0;
     if (wallet) {
       const sharesRaw = cast(v.address, "balanceOf(address)(uint256)", [wallet], rpc);
       const shares = sharesRaw?.split(/\s/)[0]?.replace(/[^0-9]/g, "") || "0";
       if (shares !== "0") {
+        // Try convertToAssets first (standard ERC4626)
         ourValue = parseUnits(cast(v.address, "convertToAssets(uint256)(uint256)", [shares], rpc), decimals);
+        // Fallback: if convertToAssets reverts, estimate from share ratio
+        if (ourValue === 0) {
+          const totalSupplyRaw = cast(v.address, "totalSupply()(uint256)", [], rpc);
+          const totalSupply = totalSupplyRaw?.split(/\s/)[0]?.replace(/[^0-9]/g, "") || "0";
+          if (totalSupply !== "0") {
+            const ratio = Number(BigInt(shares) * 10000n / BigInt(totalSupply)) / 10000;
+            // Use idle balance as proxy for total vault value when totalAssets reverts
+            const vaultValue = totalAssets > 0 ? totalAssets : idle;
+            ourValue = ratio * vaultValue;
+          }
+        }
+        ourShares = parseUnits(sharesRaw, 18); // vault shares are 18 decimals
       }
     }
 
@@ -150,6 +164,7 @@ function collectVaultStats(vaultsConfig, wallet) {
       reserve_health: reserveRatio < (v.reserve?.trigger_threshold || 0.05) ? "critical"
         : reserveRatio < (v.reserve?.target_ratio || 0.2) * 0.5 ? "warning" : "healthy",
       our_position_value: ourValue,
+      our_shares: ourShares,
     });
   }
 
@@ -166,12 +181,27 @@ const vaults = collectVaultStats(vaultsConfig, wallet);
 const totalStrategyTvl = strategies.reduce((s, st) => s + st.tvl, 0);
 const totalVaultPositions = vaults.reduce((s, v) => s + (v.our_position_value || 0), 0);
 
+// Agent's own USDT0 wallet balance
+const rpc = vaultsConfig?.chain?.rpc_url || "https://rpc.hyperliquid.xyz/evm";
+const baseToken = vaultsConfig?.base_token?.address;
+const decimals = vaultsConfig?.base_token?.decimals || 6;
+const walletBalance = (wallet && baseToken)
+  ? parseUnits(cast(baseToken, "balanceOf(address)(uint256)", [wallet], rpc), decimals)
+  : 0;
+
+// Portfolio = agent's own holdings (wallet balance + vault share value)
+// Strategy TVLs are shared across agents — informational only, not portfolio
+const agentPortfolio = walletBalance + totalVaultPositions;
+
 const doc = {
   timestamp: new Date(),
   wallet: wallet || "unknown",
   chain: vaultsConfig?.chain?.name || "hyperevm",
   model: process.env.MODEL_NAME || "unknown",
-  portfolio_tvl: totalStrategyTvl || totalVaultPositions,
+  portfolio_tvl: agentPortfolio,
+  wallet_balance: walletBalance,
+  vault_positions: totalVaultPositions,
+  strategy_tvl: totalStrategyTvl,
   strategies,
   vaults,
 };
