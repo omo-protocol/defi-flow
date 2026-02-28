@@ -192,3 +192,31 @@ Triggered nodes can form cycles (e.g. claim rewards -> swap -> optimizer).
 **Lending:** Any Aave V3/V2 fork (HyperLend, Lendle, Granary, Seamless, Spark, etc.), Morpho Blue, Compound V3, Init Capital
 **Vaults:** Morpho Vaults V2
 **Yield:** Pendle
+
+## Agent Wallets
+
+All agents run on HyperEVM mainnet (chain ID 999).
+
+### Quant Agents
+
+| Agent | Model | Address |
+|-------|-------|---------|
+| quant-minimax | MiniMax-M2.5 | `0xb19e2b26b6777929b2E83360fB65cC7341a3418C` |
+| quant-qwen | Qwen3-235B | `0x0392F819133e369E9dE9CD0c098b2055aB89Bba7` |
+| quant-kimi | Kimi-K2 | `0x1F6142579af40F1CfEaEB029F258F33B352ed6b8` |
+| quant-glm | GLM-5 | `0x99471c1523F0c1A4170B35c3862F293693325db4` |
+| quant-opus | Claude Opus 4.6 | `0xE2A58d294b0a049D25AfD6A2C213AEB3a788fd32` |
+| quant-gemini | Gemini 3.1 Pro | `0x0F446ae4f9C4E397C0c5862d1778088A2453ce60` |
+| quant-grok | Grok 4.1 | `0x21CC816D120104cff7852Ba1d8251777021EBcFb` |
+
+### Hedgefund Agents
+
+| Agent | Model | Address |
+|-------|-------|---------|
+| hedgefund-minimax | MiniMax-M2.5 | `0x719c51838f191Ae77C2ad82BC42d03910Db9e860` |
+| hedgefund-qwen | Qwen3-235B | `0x49B9a42E19bEde1B087e113BB44Edb5c015515c4` |
+| hedgefund-kimi | Kimi-K2 | `0x8aF56201FD649b975fEcfbc8fB0A63FFCa471F96` |
+| hedgefund-glm | GLM-5 | `0xEc02b5c21840753a73c63355A7Afa301f01003Ce` |
+| hedgefund-opus | Claude Opus 4.6 | `0x7e95AeaDffcdc91225c6242D8A290e3258a0FFcA` |
+| hedgefund-gemini | Gemini 3.1 Pro | `0xBC3F0e09dAF5D1887a736e08fA092Fa50fd5aaDf` |
+| hedgefund-grok | Grok 4.1 | `0x39499dfa11A88e1a96bfA2e0d1eE935CEB17B45e` |
