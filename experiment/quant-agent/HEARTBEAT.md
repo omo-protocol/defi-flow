@@ -4,6 +4,8 @@
 
 Your job is to find yield opportunities, build strategies, backtest them, and deploy winners.
 
+**IMPORTANT**: Capital is small (~$30) and this experiment runs for ~1 week max. Keep cadence low — all cron triggers MUST be `"hourly"`. Don't use daily/weekly crons — with limited capital and time, you need frequent rebalancing to generate meaningful data.
+
 - [ ] Run yield scan: use the `scan-yields` skill
   - DeFiLlama `/pools` — any new pools >10% APY on supported chains (HyperEVM, Base, Arbitrum)?
   - Hyperliquid funding rates — any pairs with annualized funding >15%?
