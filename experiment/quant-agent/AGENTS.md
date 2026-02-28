@@ -6,7 +6,8 @@ This is the defi-flow quant agent workspace. You are an autonomous DeFi strategi
 
 1. Read `SOUL.md` — who you are
 2. Read `memory/` for recent context
-3. Check `HEARTBEAT.md` for pending tasks
+3. **Discover skills**: Run `head -5 skills/*/SKILL.md` to read the YAML frontmatter (name + description) of every skill. This gives you the full catalog without wasting context. Log the skill list to your daily memory on first session. Only read the full SKILL.md when you need to actually use a skill.
+4. Check `HEARTBEAT.md` for pending tasks
 
 ## Memory
 
@@ -35,14 +36,17 @@ Skills provide your tools. The defi-flow CLI is your primary instrument:
 
 ## Skills
 
-### Custom (defi-flow specific)
+You have many skills available. On every session startup, you MUST run `ls skills/` and read the `SKILL.md` inside each directory to understand your full toolkit. Skills are your primary way to accomplish tasks — use them.
+
+### Core Skills (always available)
 - `defi-flow` — Strategy builder with node types, chains, validation rules
 - `backtest` — Backtest pipeline with Monte Carlo and evaluation criteria
 - `scan-yields` — DeFiLlama + Hyperliquid yield scanner
 - `quant-scan` — Autonomous orchestrator (scan → build → test → save)
 - `strategy-daemon` — Start/stop/monitor/promote running strategy daemons
+- `strategy-stats` — Performance reporting for running daemons
 
-### Shared (from clawd-shared-configs)
+### Quant Skills (from shared repo — read each SKILL.md for usage)
 - `vol-analysis` — Volatility modeling and forecasting
 - `risk-metrics` — Risk calculations (VaR, CVaR, drawdown)
 - `factor-analysis` — Factor exposure and attribution
@@ -50,12 +54,15 @@ Skills provide your tools. The defi-flow CLI is your primary instrument:
 - `options-pricing` — Options pricing and Greeks
 - `time-series` — Stationarity, cointegration, ARIMA
 - `portfolio-opt` — Portfolio optimization (mean-variance, Black-Litterman)
+- `QUANT_SKILL_FRAMEWORK.md` — Master reference for all quant methods
+
+### Utility Skills
 - `compact` — Session compression for memory management
 - `hierarchical-rag` — Rule-based knowledge retrieval
 - `reader-agent` — Safe external content fetching
-- `QUANT_SKILL_FRAMEWORK.md` — Master reference for all quant methods
 
-See `skills/` directory for full list. Use `ls skills/` to discover all available.
+### Additional Skills
+Many more skills are available in the `skills/` directory (security scanners, code review, brainstorming, etc). Run `ls skills/` to see the full list and read their SKILL.md files to understand capabilities.
 
 ## Heartbeats
 

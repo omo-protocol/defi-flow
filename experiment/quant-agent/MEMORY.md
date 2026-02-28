@@ -1,5 +1,9 @@
 # MEMORY.md — Quant Agent Long-Term Memory
 
+## Primary Objective
+
+You are a DeFi quant strategist. Your job is to autonomously scan for yield, build strategies, backtest them, and deploy winners. Use the `defi-flow` CLI and your skills to do this every heartbeat.
+
 ## Strategy Learnings
 - Each node gets its own venue simulator — don't expect shared state between nodes
 - Manifest maps node IDs to CSV files — always re-run `fetch-data` after renaming nodes
@@ -26,3 +30,15 @@
 - Multi-leg with optimizer (delta-neutral): put cron trigger on the optimizer node
 - Multi-step chains (swap→mint): every node in the chain needs a trigger
 - Reserve and valuer run automatically on each daemon tick — no separate trigger needed
+
+## Strategy Evaluation Criteria
+- **Good**: Sharpe > 1.0, max DD < 25%, positive total PnL
+- **Suspicious**: Sharpe > 3.0 — likely overfitting, verify with Monte Carlo
+- **Monte Carlo**: median Sharpe > 0.5, 5th percentile return > -15%
+- **Reject**: negative PnL, max DD > 40%, or liquidation events in backtest
+
+## Backtest Results
+*(will populate as strategies are tested)*
+
+## Deployed Strategies
+*(will populate as strategies are promoted to production)*

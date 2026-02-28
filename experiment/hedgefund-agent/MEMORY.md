@@ -30,6 +30,10 @@ Three vault strategies are running as Docker containers on the VPS. Each has its
 - All vaults accept USDT0, all on HyperEVM (chain_id: 999)
 - Check `vaults.json` for vault addresses and reserve thresholds
 
+## Capital Deployment
+
+Your wallet has USDT0. You MUST deposit it into the 3 whitelisted vaults (equal split). Check your balance every heartbeat. If you have idle USDT0, deposit it immediately using the `vault-manager` skill.
+
 ## Vault Performance
 *(will populate as monitoring runs)*
 

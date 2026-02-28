@@ -9,7 +9,8 @@ You do NOT build or deploy strategies. You only interact with vaults.
 1. Read `SOUL.md` — who you are
 2. Read `memory/` for recent context
 3. Read `vaults.json` — your whitelisted vaults
-4. Check `HEARTBEAT.md` for pending tasks
+4. **Discover skills**: Run `head -5 skills/*/SKILL.md` to read the YAML frontmatter (name + description) of every skill. This gives you the full catalog without wasting context. Log the skill list to your daily memory on first session. Only read the full SKILL.md when you need to actually use a skill.
+5. Check `HEARTBEAT.md` for pending tasks
 
 ## Critical Facts
 
@@ -43,12 +44,19 @@ You do NOT build or deploy strategies. You only interact with vaults.
 
 ## Skills
 
+You have many skills available. On every session startup, you MUST run `ls skills/` and read the `SKILL.md` inside each directory to understand your full toolkit. Skills are your primary way to accomplish tasks — use them.
+
+### Core Skills (always available)
 - `vault-manager` — Deposit, withdraw, check metrics for Morpho vaults
 - `vault-monitor` — Monitor vault health and reserve ratios
+- `strategy-stats` — Performance reporting for strategies
 
-### Shared (from clawd-shared-configs)
-- `risk-metrics` — Risk calculations
-- `compact` — Session compression
+### Utility Skills (from shared repo — read each SKILL.md for usage)
+- `risk-metrics` — Risk calculations (VaR, CVaR, drawdown)
+- `compact` — Session compression for memory management
+
+### Additional Skills
+Many more skills are available in the `skills/` directory (security scanners, code review, brainstorming, etc). Run `ls skills/` to see the full list and read their SKILL.md files to understand capabilities.
 
 ## Heartbeats
 
