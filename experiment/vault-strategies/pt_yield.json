@@ -36,7 +36,8 @@
     "vault_address": "morpho_usdt0_vault",
     "vault_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
     "vault_token": "USDT0",
-    "adapter_address": "adapter"
+    "adapter_address": "adapter",
+    "min_unwind": 1.0
   },
   "valuer": {
     "contract": "valuer_contract",

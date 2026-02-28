@@ -230,6 +230,65 @@ async fn run_async(
             }
             let _ = reg.save(reg_dir_ref);
         }
+    } else if state.initial_capital <= 0.0 && state.balances.values().sum::<f64>() <= 0.0 {
+        // Deploy "completed" but no capital was allocated (e.g. min_unwind blocked it).
+        // Reset and re-deploy so the strategy can try again with updated config.
+        println!("Deploy completed with zero capital — resetting for re-deploy...\n");
+        state.deploy_completed = false;
+
+        // Re-run the pre-deploy allocation + deploy
+        if let Some(rc) = engine.workflow.reserve.clone() {
+            if rc.adapter_address.is_some() {
+                println!("── Pre-deploy allocation (retry) ──");
+                match reserve::check_and_allocate(
+                    &rc,
+                    engine.workflow.valuer.as_ref(),
+                    &contracts,
+                    &tokens,
+                    &config.private_key,
+                    config.wallet_address,
+                    config.dry_run,
+                )
+                .await
+                {
+                    Ok(Some(record)) => {
+                        println!(
+                            "[allocator] Pulled ${:.2} from vault (excess=${:.2})",
+                            record.pulled, record.excess,
+                        );
+                        engine.balances.add("wallet", "USDC", record.pulled);
+                        sync_balances(&engine, &mut state);
+                        state.allocation_actions.push(record);
+                    }
+                    Ok(None) => println!("[allocator] No excess to pull from vault."),
+                    Err(e) => eprintln!("[allocator] ERROR: {:#}", e),
+                }
+            }
+        }
+
+        println!("── Deploy phase (retry) ──");
+        println!("Deploy order: {:?}", engine.deploy_order());
+        engine.deploy().await.context("deploy phase (retry)")?;
+        state.deploy_completed = true;
+        sync_balances(&engine, &mut state);
+
+        let deploy_tvl = engine.total_tvl().await;
+        state.initial_capital = if deploy_tvl > 0.0 {
+            deploy_tvl
+        } else {
+            state.balances.values().sum()
+        };
+        state.peak_tvl = state.initial_capital;
+
+        state.save(&config.state_file)?;
+        println!("Deploy complete. Capital: ${:.2}. State saved.\n", state.initial_capital);
+
+        if let Ok(mut reg) = Registry::load(reg_dir_ref) {
+            if let Some(entry) = reg.daemons.get_mut(&strategy_name) {
+                entry.capital = state.initial_capital;
+            }
+            let _ = reg.save(reg_dir_ref);
+        }
     } else {
         // Backfill initial_capital for old state files (pre-perf-tracking)
         if state.initial_capital == 0.0 {
