@@ -9,6 +9,7 @@ Your wallet holds USDT0. Your job is to deposit it into the whitelisted vaults.
   - Derive your wallet: `cast wallet address --private-key $PRIVATE_KEY`
 - [ ] If balance > $1 USDT0 (> 1000000 raw): **deposit equally across all 3 vaults** using the `vault-manager` skill
   - Split: 1/3 to Lending Vault, 1/3 to Delta-Neutral Vault, 1/3 to PT Yield Vault
+  - **CRITICAL: These are Morpho v2 ERC4626 vaults. You MUST use the `deposit(uint256,address)` function via `cast send`. NEVER do a raw ERC20 `transfer()` to the vault address — tokens sent via transfer are NOT tracked by the vault and WILL BE PERMANENTLY LOST. Always: `approve` the vault, then call `deposit` on the vault contract.**
   - For each vault: `approve` then `deposit` (see `vault-manager` skill for exact commands)
   - Log every tx hash to daily memory
   - Re-check vault state after each deposit to verify success

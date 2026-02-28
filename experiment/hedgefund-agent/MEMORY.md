@@ -25,8 +25,11 @@ Three vault strategies are running as Docker containers on the VPS. Each has its
 - State file: `/app/strategy-states/pt_yield/state.json`
 
 ## Vault Operations
-- Use `cast call` to read vault state (totalAssets, balanceOf, convertToAssets)
-- Use `cast send` to deposit/withdraw (ERC4626 interface)
+- Vaults are **Morpho v2 ERC4626** contracts. Interaction MUST use the ERC4626 interface.
+- **DEPOSIT**: `cast send $VAULT "deposit(uint256,address)" $AMOUNT $YOUR_WALLET` (after approving)
+- **WITHDRAW**: `cast send $VAULT "redeem(uint256,address,address)" $SHARES $YOUR_WALLET $YOUR_WALLET`
+- **READ**: `cast call` for totalAssets, balanceOf, convertToAssets
+- **NEVER use raw ERC20 transfer() to send USDT0 to a vault address. Funds sent via transfer() are permanently lost — the vault does not track them and no shares are minted.**
 - All vaults accept USDT0, all on HyperEVM (chain_id: 999)
 - Check `vaults.json` for vault addresses and reserve thresholds
 

@@ -85,7 +85,8 @@ async function collectStrategyStats() {
       const state = await readJson(statePath);
       if (!state) continue;
 
-      const tvl = state.peak_tvl || 0;
+      const balances = state.balances || {};
+      const tvl = Object.values(balances).reduce((a, b) => a + b, 0);
       const initial = state.initial_capital || 0;
       const pnl = initial > 0 ? tvl - initial : 0;
 
@@ -110,7 +111,7 @@ async function collectStrategyStats() {
 
 // ── Collect vault on-chain data ─────────────────────────
 
-function collectVaultStats(vaultsConfig, wallet) {
+async function collectVaultStats(vaultsConfig, wallet) {
   if (!vaultsConfig?.vaults) return [];
   const rpc = vaultsConfig.chain?.rpc_url || "https://rpc.hyperliquid.xyz/evm";
   const baseToken = vaultsConfig.base_token?.address;
@@ -142,8 +143,15 @@ function collectVaultStats(vaultsConfig, wallet) {
           const totalSupply = totalSupplyRaw?.split(/\s/)[0]?.replace(/[^0-9]/g, "") || "0";
           if (totalSupply !== "0") {
             const ratio = Number(BigInt(shares) * 10000n / BigInt(totalSupply)) / 10000;
-            // Use idle balance as proxy for total vault value when totalAssets reverts
-            const vaultValue = totalAssets > 0 ? totalAssets : idle;
+            // Query strategy wallet balance on-chain for allocated capital (no state files)
+            let allocated = 0;
+            if (v.strategy_wallet && baseToken) {
+              allocated = parseUnits(
+                cast(baseToken, "balanceOf(address)(uint256)", [v.strategy_wallet], rpc),
+                decimals
+              );
+            }
+            const vaultValue = totalAssets > 0 ? totalAssets : (idle + allocated);
             ourValue = ratio * vaultValue;
           }
         }
@@ -176,7 +184,7 @@ function collectVaultStats(vaultsConfig, wallet) {
 const wallet = walletAddress();
 const vaultsConfig = await readJson(VAULTS_JSON);
 const strategies = await collectStrategyStats();
-const vaults = collectVaultStats(vaultsConfig, wallet);
+const vaults = await collectVaultStats(vaultsConfig, wallet);
 
 const totalStrategyTvl = strategies.reduce((s, st) => s + st.tvl, 0);
 const totalVaultPositions = vaults.reduce((s, v) => s + (v.our_position_value || 0), 0);

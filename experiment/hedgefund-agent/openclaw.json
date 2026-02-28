@@ -55,8 +55,12 @@
   },
   "tools": {
     "web": {
-      "search": { "enabled": false },
-      "fetch": { "enabled": false }
+      "search": {
+        "enabled": true,
+        "provider": "brave",
+        "apiKey": "${BRAVE_API_KEY}"
+      },
+      "fetch": { "enabled": true }
     }
   },
   "channels": {

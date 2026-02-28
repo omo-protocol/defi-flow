@@ -52,7 +52,10 @@ impl CronScheduler {
         let mut min_wait = Duration::from_secs(86400);
 
         for (node_id, interval) in &self.triggers {
-            let last = self.last_fired.get(node_id).copied().unwrap_or(now);
+            let last = self.last_fired.get(node_id).copied().unwrap_or_else(|| {
+                // First run: pretend we fired one interval ago so it fires immediately
+                now.checked_sub(*interval).unwrap_or(now)
+            });
             let elapsed = now.duration_since(last);
             if elapsed >= *interval {
                 // Already due — fire immediately

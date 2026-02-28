@@ -80,3 +80,4 @@ cast send $VAULT "withdraw(uint256,address,address)" $AMOUNT $WALLET $WALLET \
 3. **Never withdraw more than 50%** without human approval.
 4. **Log every operation** to daily memory with tx hash and amounts.
 5. **Always verify** the tx succeeded by re-reading vault state after.
+6. **NEVER use raw ERC20 `transfer()` to send tokens to a vault address.** These are Morpho v2 ERC4626 vaults — you MUST use the `deposit()` function above. Tokens sent via `transfer()` are permanently lost (no shares minted, vault doesn't track them).

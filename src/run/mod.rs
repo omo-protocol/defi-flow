@@ -233,6 +233,31 @@ async fn run_async(
         println!("Deploy already completed (on-chain capital confirmed). Skipping.\n");
     }
 
+    // Push initial valuation to on-chain valuer immediately after startup.
+    // This prevents a chicken-and-egg problem: totalAssets() needs a valuer report,
+    // but the valuer push only happens during tick execution (after cron fires).
+    // If the container restarts before the first cron fires, the valuer never gets seeded.
+    if let Some(ref vc) = engine.workflow.valuer {
+        let tvl = engine.total_tvl().await;
+        // Use wallet balance as floor if venues show $0 (capital sitting in wallet)
+        let push_tvl = if tvl < 1.0 {
+            state.balances.values().sum::<f64>()
+        } else {
+            tvl
+        };
+        if push_tvl > 0.0 {
+            match valuer::maybe_push_value(
+                vc, &contracts, &config.private_key, push_tvl,
+                &mut valuer_state, config.dry_run,
+                engine.workflow.reserve.as_ref(),
+            ).await {
+                Ok(true) => println!("[valuer] Initial valuation pushed: ${:.2}", push_tvl),
+                Ok(false) => {} // Throttled (shouldn't happen on startup)
+                Err(e) => eprintln!("[valuer] WARNING: initial push failed: {:#}", e),
+            }
+        }
+    }
+
     // Execution phase
     if config.once {
         println!("── Single pass (--once) ──");

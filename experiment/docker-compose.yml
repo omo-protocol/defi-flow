@@ -51,6 +51,7 @@ services:
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_MINIMAX}
       - MONGODB_URI=${MONGODB_URI}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
 
   quant-qwen:
     image: ghcr.io/omo-protocol/defi-flow/quant-agent:latest
@@ -75,6 +76,7 @@ services:
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_QWEN}
       - MONGODB_URI=${MONGODB_URI}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
 
   quant-kimi:
     image: ghcr.io/omo-protocol/defi-flow/quant-agent:latest
@@ -99,6 +101,7 @@ services:
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_KIMI}
       - MONGODB_URI=${MONGODB_URI}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
 
   quant-glm:
     image: ghcr.io/omo-protocol/defi-flow/quant-agent:latest
@@ -123,6 +126,7 @@ services:
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_GLM}
       - MONGODB_URI=${MONGODB_URI}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
 
   quant-opus:
     image: ghcr.io/omo-protocol/defi-flow/quant-agent:latest
@@ -147,6 +151,7 @@ services:
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_OPUS}
       - MONGODB_URI=${MONGODB_URI}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
 
   quant-gemini:
     image: ghcr.io/omo-protocol/defi-flow/quant-agent:latest
@@ -171,6 +176,7 @@ services:
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_GEMINI}
       - MONGODB_URI=${MONGODB_URI}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
 
   quant-grok:
     image: ghcr.io/omo-protocol/defi-flow/quant-agent:latest
@@ -195,6 +201,7 @@ services:
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - DEFI_FLOW_PRIVATE_KEY=${PK_QUANT_GROK}
       - MONGODB_URI=${MONGODB_URI}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
 
   # ═══════════════════════════════════════════════════════
   # Hedgefund Agents — one per model
@@ -228,6 +235,7 @@ services:
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - PRIVATE_KEY=${PK_HF_MINIMAX}
       - MONGODB_URI=${MONGODB_URI}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
 
   hedgefund-qwen:
     image: ghcr.io/omo-protocol/defi-flow/hedgefund-agent:latest
@@ -252,6 +260,7 @@ services:
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - PRIVATE_KEY=${PK_HF_QWEN}
       - MONGODB_URI=${MONGODB_URI}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
 
   hedgefund-kimi:
     image: ghcr.io/omo-protocol/defi-flow/hedgefund-agent:latest
@@ -276,6 +285,7 @@ services:
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - PRIVATE_KEY=${PK_HF_KIMI}
       - MONGODB_URI=${MONGODB_URI}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
 
   hedgefund-glm:
     image: ghcr.io/omo-protocol/defi-flow/hedgefund-agent:latest
@@ -300,6 +310,7 @@ services:
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - PRIVATE_KEY=${PK_HF_GLM}
       - MONGODB_URI=${MONGODB_URI}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
 
   hedgefund-opus:
     image: ghcr.io/omo-protocol/defi-flow/hedgefund-agent:latest
@@ -324,6 +335,7 @@ services:
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - PRIVATE_KEY=${PK_HF_OPUS}
       - MONGODB_URI=${MONGODB_URI}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
 
   hedgefund-gemini:
     image: ghcr.io/omo-protocol/defi-flow/hedgefund-agent:latest
@@ -348,6 +360,7 @@ services:
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - PRIVATE_KEY=${PK_HF_GEMINI}
       - MONGODB_URI=${MONGODB_URI}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
 
   hedgefund-grok:
     image: ghcr.io/omo-protocol/defi-flow/hedgefund-agent:latest
@@ -372,6 +385,7 @@ services:
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
       - PRIVATE_KEY=${PK_HF_GROK}
       - MONGODB_URI=${MONGODB_URI}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
 
   # ═══════════════════════════════════════════════════════
   # Baseline Tracker — control wallet PnL

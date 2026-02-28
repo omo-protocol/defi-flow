@@ -405,17 +405,18 @@ export function AgentPanel() {
       },
 
       web_search: async (query: string) => {
-        // Use a simple web search proxy — try DuckDuckGo instant answers
         try {
-          const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`;
-          const res = await fetch(url);
+          const res = await fetch(
+            `/api/search?q=${encodeURIComponent(query)}`,
+          );
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            return `Search failed: ${err.error || res.statusText}`;
+          }
           const data = await res.json();
           const results: string[] = [];
-          if (data.AbstractText) results.push(data.AbstractText);
-          if (data.RelatedTopics) {
-            for (const t of data.RelatedTopics.slice(0, 5)) {
-              if (t.Text) results.push(t.Text);
-            }
+          for (const r of data.web?.results?.slice(0, 5) ?? []) {
+            results.push(`${r.title}\n${r.url}\n${r.description}`);
           }
           if (results.length === 0)
             return `No results found for "${query}". Try a more specific query, or use known contract addresses from the protocol's documentation.`;
