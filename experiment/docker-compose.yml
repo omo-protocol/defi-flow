@@ -116,8 +116,8 @@ services:
       - MONGODB_DB=quant-glm
       - AGENT_API_KEY=${GLM_API_KEY}
       - AGENT_BASE_URL=https://open.bigmodel.cn/api/paas/v4
-      - AGENT_MODEL=custom/glm-4-plus
-      - AGENT_MODEL_ID=glm-4-plus
+      - AGENT_MODEL=custom/glm-5
+      - AGENT_MODEL_ID=glm-5
       - AGENT_API_TYPE=openai-completions
       - ANTHROPIC_API_KEY=${OPUS_API_KEY}
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
@@ -188,8 +188,8 @@ services:
       - MONGODB_DB=quant-grok
       - AGENT_API_KEY=${OPENROUTER_API_KEY}
       - AGENT_BASE_URL=https://openrouter.ai/api/v1
-      - AGENT_MODEL=custom/x-ai/grok-3
-      - AGENT_MODEL_ID=x-ai/grok-3
+      - AGENT_MODEL=custom/x-ai/grok-4.1
+      - AGENT_MODEL_ID=x-ai/grok-4.1
       - AGENT_API_TYPE=openai-completions
       - ANTHROPIC_API_KEY=${OPUS_API_KEY}
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
@@ -293,8 +293,8 @@ services:
       - MONGODB_DB=hedgefund-glm
       - AGENT_API_KEY=${GLM_API_KEY}
       - AGENT_BASE_URL=https://open.bigmodel.cn/api/paas/v4
-      - AGENT_MODEL=custom/glm-4-plus
-      - AGENT_MODEL_ID=glm-4-plus
+      - AGENT_MODEL=custom/glm-5
+      - AGENT_MODEL_ID=glm-5
       - AGENT_API_TYPE=openai-completions
       - ANTHROPIC_API_KEY=${OPUS_API_KEY}
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
@@ -365,8 +365,8 @@ services:
       - MONGODB_DB=hedgefund-grok
       - AGENT_API_KEY=${OPENROUTER_API_KEY}
       - AGENT_BASE_URL=https://openrouter.ai/api/v1
-      - AGENT_MODEL=custom/x-ai/grok-3
-      - AGENT_MODEL_ID=x-ai/grok-3
+      - AGENT_MODEL=custom/x-ai/grok-4.1
+      - AGENT_MODEL_ID=x-ai/grok-4.1
       - AGENT_API_TYPE=openai-completions
       - ANTHROPIC_API_KEY=${OPUS_API_KEY}
       - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN}
