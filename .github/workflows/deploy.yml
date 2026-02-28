@@ -29,6 +29,7 @@ jobs:
           - strategy-lending
           - strategy-delta-neutral
           - strategy-pt-yield
+          - baseline-tracker
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -68,6 +69,10 @@ jobs:
             strategy-pt-yield)
               echo "dockerfile=experiment/vault-strategies/Dockerfile" >> $GITHUB_OUTPUT
               echo "build_args=STRATEGY=pt_yield.json" >> $GITHUB_OUTPUT
+              ;;
+            baseline-tracker)
+              echo "dockerfile=experiment/scripts/Dockerfile" >> $GITHUB_OUTPUT
+              echo "build_args=" >> $GITHUB_OUTPUT
               ;;
           esac
 

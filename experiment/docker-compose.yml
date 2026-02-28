@@ -374,6 +374,21 @@ services:
       - MONGODB_URI=${MONGODB_URI}
 
   # ═══════════════════════════════════════════════════════
+  # Baseline Tracker — control wallet PnL
+  # ═══════════════════════════════════════════════════════
+
+  baseline-tracker:
+    image: ghcr.io/omo-protocol/defi-flow/baseline-tracker:latest
+    build:
+      context: ..
+      dockerfile: experiment/scripts/Dockerfile
+    container_name: baseline-tracker
+    restart: unless-stopped
+    stop_grace_period: 10s
+    environment:
+      - MONGODB_URI=${MONGODB_URI}
+
+  # ═══════════════════════════════════════════════════════
   # Vault Strategies — each has its own wallet
   # ═══════════════════════════════════════════════════════
 
