@@ -54,6 +54,11 @@ pub struct MorphoVault {
     deposited_value: f64,
     metrics: SimMetrics,
     cached_ctx: Option<CachedVaultContext>,
+    /// Cached alpha stats: (annualized_return, volatility). Updated during tick().
+    cached_alpha: Option<(f64, f64)>,
+    /// Previous share price sample for APY computation — single point, not a Vec.
+    /// Rebuilt after one tick cycle on restart.
+    prev_share_price: Option<(u64, f64)>,
 }
 
 impl MorphoVault {
@@ -96,6 +101,8 @@ impl MorphoVault {
             deposited_value: 0.0,
             metrics: SimMetrics::default(),
             cached_ctx,
+            cached_alpha: None,
+            prev_share_price: None,
         })
     }
 
@@ -331,9 +338,34 @@ impl Venue for MorphoVault {
         Ok(self.deposited_value)
     }
 
-    async fn tick(&mut self, _now: u64, _dt_secs: f64) -> Result<()> {
+    async fn tick(&mut self, now: u64, _dt_secs: f64) -> Result<()> {
         if self.deposited_value > 0.0 {
             println!("  VAULT TICK: deposited=${:.2}", self.deposited_value,);
+        }
+
+        // Query current share price on-chain and compute APY from single previous sample.
+        // No accumulated Vec — just one prev data point, rebuilt after one tick on restart.
+        if let Some(ctx) = &self.cached_ctx {
+            if let Ok(rp) = evm::read_provider(&ctx.rpc_url) {
+                let vault = IMorphoVault::new(ctx.vault_addr, &rp);
+                let one_share = alloy::primitives::U256::from(10u128.pow(18));
+                if let Ok(assets) = vault.convertToAssets(one_share).call().await {
+                    let decimals =
+                        evm::query_decimals(&ctx.rpc_url, ctx.token_addr).await.unwrap_or(18);
+                    let price = evm::from_token_units(assets, decimals);
+                    if price > 0.0 {
+                        if let Some((prev_ts, prev_price)) = self.prev_share_price {
+                            let dt = now.saturating_sub(prev_ts) as f64;
+                            if dt > 0.0 && prev_price > 0.0 {
+                                let period_return = price / prev_price - 1.0;
+                                let apy = period_return * (365.25 * 86400.0 / dt);
+                                self.cached_alpha = Some((apy, apy.abs() * 0.3));
+                            }
+                        }
+                        self.prev_share_price = Some((now, price));
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -375,6 +407,10 @@ impl Venue for MorphoVault {
             lending_interest: self.metrics.lending_interest,
             ..SimMetrics::default()
         }
+    }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        self.cached_alpha
     }
 }
 

@@ -32,10 +32,18 @@ pub struct HyperliquidPerp {
     sz_decimals: HashMap<String, u32>,
     positions: HashMap<String, PositionState>,
     metrics: SimMetrics,
+    /// The coin this venue trades (e.g. "ETH"). Set at build time.
+    coin: Option<String>,
+    /// True if this venue is for a Spot node (not a Perp node).
+    is_spot: bool,
+    /// Cached alpha stats from funding history. Updated during tick().
+    cached_alpha: Option<(f64, f64)>,
+    /// Timestamp of last funding history fetch (avoid hammering API).
+    last_alpha_fetch: u64,
 }
 
 impl HyperliquidPerp {
-    pub fn new(config: &RuntimeConfig) -> Result<Self> {
+    pub fn new(config: &RuntimeConfig, coin: Option<String>, is_spot: bool) -> Result<Self> {
         let signer: PrivateKeySigner = config
             .private_key
             .parse()
@@ -56,6 +64,10 @@ impl HyperliquidPerp {
             sz_decimals: HashMap::new(),
             positions: HashMap::new(),
             metrics: SimMetrics::default(),
+            coin,
+            is_spot,
+            cached_alpha: None,
+            last_alpha_fetch: 0,
         })
     }
 
@@ -330,6 +342,75 @@ impl HyperliquidPerp {
         }
     }
 
+    /// Fetch 7 days of funding history and compute annualized return + volatility.
+    async fn fetch_funding_alpha(&self, coin: &str) -> Option<(f64, f64)> {
+        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+        let week_ago_ms = now_ms.saturating_sub(7 * 24 * 3600 * 1000);
+
+        let history = match self
+            .info
+            .funding_history(coin.to_string())
+            .start_time(week_ago_ms)
+            .send()
+            .await
+        {
+            Ok(h) if h.len() >= 10 => h,
+            Ok(h) => {
+                eprintln!(
+                    "  HL: funding history for {} has only {} entries, need >=10",
+                    coin,
+                    h.len()
+                );
+                return None;
+            }
+            Err(e) => {
+                eprintln!("  HL: failed to fetch funding history for {}: {}", coin, e);
+                return None;
+            }
+        };
+
+        // Each entry has funding_rate (per-hour) and time (ms).
+        // Compute per-period returns and annualize.
+        let mut returns = Vec::with_capacity(history.len() - 1);
+        for i in 1..history.len() {
+            let dt_hours =
+                (history[i].time.saturating_sub(history[i - 1].time)) as f64 / 3_600_000.0;
+            if dt_hours <= 0.0 {
+                continue;
+            }
+            let rate: f64 = history[i].funding_rate.parse().unwrap_or(0.0);
+            // funding_rate is per-hour; for shorts: positive rate = income
+            returns.push(rate * dt_hours);
+        }
+
+        if returns.len() < 10 {
+            return None;
+        }
+
+        let n = returns.len() as f64;
+        let mean = returns.iter().sum::<f64>() / n;
+        let var = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0);
+        let std = var.sqrt();
+
+        let total_ms =
+            (history.last().unwrap().time.saturating_sub(history[0].time)) as f64;
+        let avg_period_hours = total_ms / (history.len() - 1) as f64 / 3_600_000.0;
+        let periods_per_year = 8760.0 / avg_period_hours;
+
+        let annualized_return = mean * periods_per_year;
+        let annualized_vol = std * periods_per_year.sqrt();
+
+        eprintln!(
+            "  HL: {} funding alpha: {:.2}% return, {:.2}% vol (from {} samples)",
+            coin,
+            annualized_return * 100.0,
+            annualized_vol * 100.0,
+            history.len(),
+        );
+
+        Some((annualized_return, annualized_vol))
+    }
+
     async fn execute_collect_funding(&self, coin: &str, _margin: &str) -> Result<ExecutionResult> {
         println!(
             "  HL: funding for {} is auto-credited to margin (no action needed)",
@@ -448,7 +529,7 @@ impl Venue for HyperliquidPerp {
         Ok(account_value)
     }
 
-    async fn tick(&mut self, _now: u64, _dt_secs: f64) -> Result<()> {
+    async fn tick(&mut self, now: u64, _dt_secs: f64) -> Result<()> {
         if !self.positions.is_empty() {
             let mids = self.get_mids().await.unwrap_or_default();
             for pos in self.positions.values() {
@@ -464,6 +545,14 @@ impl Venue for HyperliquidPerp {
                     pos.entry_price,
                     pnl,
                 );
+            }
+        }
+
+        // Fetch funding history for alpha stats (perp only, every hour)
+        if !self.is_spot && now.saturating_sub(self.last_alpha_fetch) >= 3600 {
+            if let Some(ref coin) = self.coin {
+                self.cached_alpha = self.fetch_funding_alpha(coin).await;
+                self.last_alpha_fetch = now;
             }
         }
         Ok(())
@@ -583,5 +672,15 @@ impl Venue for HyperliquidPerp {
 
     fn metrics(&self) -> SimMetrics {
         self.metrics.clone()
+    }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        if self.is_spot {
+            // Spot has no inherent yield — directional only.
+            // In a DN group, this contributes (0, 0) so the group stats
+            // are driven entirely by the perp's funding alpha.
+            return Some((0.0, 0.0));
+        }
+        self.cached_alpha
     }
 }

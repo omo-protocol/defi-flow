@@ -91,17 +91,16 @@ pub trait Venue: Send + Sync {
         SimMetrics::default()
     }
 
-    /// Compute annualized alpha stats from historical data up to the current cursor.
+    /// Compute annualized alpha stats.
     /// Returns `(expected_return, volatility)` — the yield component only,
     /// not directional exposure. Used by the adaptive Kelly optimizer.
     ///
     /// - Perp: funding rate income (shorts receive when positive)
     /// - Spot: (0, 0) — no inherent yield, directional only
-    /// - Lending: supply APY + reward APY
-    /// - Vault: vault APY + reward APY
-    fn alpha_stats(&self) -> Option<(f64, f64)> {
-        None
-    }
+    /// - Lending: supply APY
+    /// - Vault: vault APY
+    /// - Pass-through venues (movement, wallet): None
+    fn alpha_stats(&self) -> Option<(f64, f64)>;
 
     /// Risk parameters for smooth Kelly. Returns None if the venue has no
     /// meaningful risk model (falls back to classic Kelly).

@@ -222,6 +222,11 @@ async fn run_async(
             }
         }
 
+        // Tick venues once before deploy so live venues populate alpha stats
+        // (needed by the optimizer during the deploy phase).
+        let now = chrono::Utc::now().timestamp() as u64;
+        engine.tick_venues(now, 0.0).await?;
+
         println!("── Deploy phase ──");
         println!("Deploy order: {:?}", engine.deploy_order());
         engine.deploy().await.context("deploy phase")?;

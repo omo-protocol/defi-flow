@@ -30,7 +30,7 @@ impl VenueCategory for PerpsCategory {
 
     fn build(node: &Node, mode: &BuildMode) -> Result<Option<Box<dyn Venue>>> {
         match node {
-            Node::Perp { venue, .. } => match mode {
+            Node::Perp { venue, pair, .. } => match mode {
                 BuildMode::Backtest {
                     manifest,
                     data_dir,
@@ -57,11 +57,16 @@ impl VenueCategory for PerpsCategory {
                 }
                 BuildMode::Live { config, .. } => match venue {
                     PerpVenue::Hyperliquid | PerpVenue::Hyena => {
-                        Ok(Some(Box::new(hyperliquid::HyperliquidPerp::new(config)?)))
+                        let coin = pair.split('/').next().unwrap_or("ETH").to_string();
+                        Ok(Some(Box::new(hyperliquid::HyperliquidPerp::new(
+                            config,
+                            Some(coin),
+                            false,
+                        )?)))
                     }
                 },
             },
-            Node::Spot { .. } => match mode {
+            Node::Spot { pair, .. } => match mode {
                 BuildMode::Backtest {
                     manifest,
                     data_dir,
@@ -85,7 +90,12 @@ impl VenueCategory for PerpsCategory {
                     ))))
                 }
                 BuildMode::Live { config, .. } => {
-                    Ok(Some(Box::new(hyperliquid::HyperliquidPerp::new(config)?)))
+                    let coin = pair.split('/').next().unwrap_or("ETH").to_string();
+                    Ok(Some(Box::new(hyperliquid::HyperliquidPerp::new(
+                        config,
+                        Some(coin),
+                        true,
+                    )?)))
                 }
             },
             _ => Ok(None),

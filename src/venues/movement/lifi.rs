@@ -321,6 +321,10 @@ impl Venue for LiFiMovement {
             ..SimMetrics::default()
         }
     }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        None // pass-through venue
+    }
 }
 
 fn token_decimals(symbol: &str) -> i32 {

@@ -122,6 +122,10 @@ pub struct AerodromeLp {
     metrics: SimMetrics,
     /// Cached pool name (e.g. "WETH/USDC") from first execute() — needed by unwind().
     cached_pool: Option<String>,
+    /// Cached alpha stats from on-chain value tracking.
+    cached_alpha: Option<(f64, f64)>,
+    /// Previous value sample for APY computation — single point, not a Vec.
+    prev_value: Option<(u64, f64)>,
 }
 
 impl AerodromeLp {
@@ -150,6 +154,8 @@ impl AerodromeLp {
             deposited_value: 0.0,
             metrics: SimMetrics::default(),
             cached_pool,
+            cached_alpha: None,
+            prev_value: None,
         })
     }
 
@@ -575,9 +581,23 @@ impl Venue for AerodromeLp {
         Ok(self.deposited_value)
     }
 
-    async fn tick(&mut self, _now: u64, _dt_secs: f64) -> Result<()> {
+    async fn tick(&mut self, now: u64, _dt_secs: f64) -> Result<()> {
         if self.deposited_value > 0.0 {
             println!("  AERO TICK: deposited=${:.2}", self.deposited_value,);
+        }
+
+        // Query on-chain position value and compute APY from single previous sample.
+        let val = self.total_value().await.unwrap_or(0.0);
+        if val > 0.0 {
+            if let Some((prev_ts, prev_val)) = self.prev_value {
+                let dt = now.saturating_sub(prev_ts) as f64;
+                if dt > 0.0 && prev_val > 0.0 {
+                    let period_return = val / prev_val - 1.0;
+                    let apy = period_return * (365.25 * 86400.0 / dt);
+                    self.cached_alpha = Some((apy, apy.abs() * 0.5));
+                }
+            }
+            self.prev_value = Some((now, val));
         }
         Ok(())
     }
@@ -677,6 +697,10 @@ impl Venue for AerodromeLp {
             lp_fees: self.metrics.lp_fees,
             ..SimMetrics::default()
         }
+    }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        self.cached_alpha
     }
 }
 

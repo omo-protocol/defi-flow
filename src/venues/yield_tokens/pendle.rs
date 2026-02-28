@@ -78,6 +78,10 @@ pub struct PendleYield {
     yt_holdings: HashMap<String, f64>,
     /// Pre-populated market name from node for on-chain queries.
     market_name: Option<String>,
+    /// Cached alpha stats from on-chain value tracking.
+    cached_alpha: Option<(f64, f64)>,
+    /// Previous value sample for APY computation — single point, not a Vec.
+    prev_value: Option<(u64, f64)>,
 }
 
 impl PendleYield {
@@ -101,6 +105,8 @@ impl PendleYield {
             pt_holdings: HashMap::new(),
             yt_holdings: HashMap::new(),
             market_name,
+            cached_alpha: None,
+            prev_value: None,
         })
     }
 
@@ -451,12 +457,31 @@ impl Venue for PendleYield {
         Ok(freed)
     }
 
-    async fn tick(&mut self, _now: u64, _dt_secs: f64) -> Result<()> {
+    async fn tick(&mut self, now: u64, _dt_secs: f64) -> Result<()> {
         let pt_total: f64 = self.pt_holdings.values().sum();
         let yt_total: f64 = self.yt_holdings.values().sum();
         if pt_total > 0.0 || yt_total > 0.0 {
             println!("  PENDLE TICK: PT=${:.2}, YT=${:.2}", pt_total, yt_total,);
         }
+
+        // Query on-chain position value and compute APY from single previous sample.
+        let val = self.total_value().await.unwrap_or(0.0);
+        if val > 0.0 {
+            if let Some((prev_ts, prev_val)) = self.prev_value {
+                let dt = now.saturating_sub(prev_ts) as f64;
+                if dt > 0.0 && prev_val > 0.0 {
+                    let period_return = val / prev_val - 1.0;
+                    let apy = period_return * (365.25 * 86400.0 / dt);
+                    self.cached_alpha = Some((apy, apy.abs() * 0.3));
+                }
+            }
+            self.prev_value = Some((now, val));
+        }
         Ok(())
     }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        self.cached_alpha
+    }
 }
+

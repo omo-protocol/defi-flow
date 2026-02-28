@@ -209,6 +209,10 @@ impl Venue for HyperliquidNativeMovement {
     fn metrics(&self) -> SimMetrics {
         self.metrics.clone()
     }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        None // pass-through venue
+    }
 }
 
 /// Compute the system address for a token index.

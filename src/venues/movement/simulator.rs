@@ -143,6 +143,10 @@ impl Venue for SwapSimulator {
             ..Default::default()
         }
     }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        None // pass-through
+    }
 }
 
 /// Bridge simulator with fixed fee model.
@@ -188,5 +192,9 @@ impl Venue for BridgeSimulator {
 
     async fn tick(&mut self, _now: u64, _dt_secs: f64) -> Result<()> {
         Ok(())
+    }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        None // pass-through
     }
 }

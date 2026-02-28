@@ -152,4 +152,16 @@ impl Venue for YieldSimulator {
 
         Ok(())
     }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        if self.market_data.len() < 2 {
+            return None;
+        }
+        // Compute mean and vol of implied APY from historical data
+        let n = self.market_data.len() as f64;
+        let apys: Vec<f64> = self.market_data.iter().map(|r| r.implied_apy).collect();
+        let mean = apys.iter().sum::<f64>() / n;
+        let var = apys.iter().map(|a| (a - mean).powi(2)).sum::<f64>() / (n - 1.0).max(1.0);
+        Some((mean, var.sqrt()))
+    }
 }

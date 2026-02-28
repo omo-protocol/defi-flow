@@ -532,4 +532,37 @@ impl Venue for RyskOptions {
             ..SimMetrics::default()
         }
     }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        if self.positions.is_empty() || self.total_collateral_locked <= 0.0 {
+            return None;
+        }
+        // Compute annualized premium yield from current positions
+        let now = chrono::Utc::now().timestamp() as u64;
+        let mut weighted_apy_sum = 0.0;
+        let mut total_collateral = 0.0;
+        for pos in &self.positions {
+            if !pos.is_short || pos.collateral <= 0.0 {
+                continue;
+            }
+            let dte = if pos.expiry > now {
+                (pos.expiry - now) as f64 / 86400.0
+            } else {
+                1.0
+            };
+            let apy = if dte > 0.0 {
+                (pos.premium / pos.collateral) * (365.0 / dte)
+            } else {
+                0.0
+            };
+            weighted_apy_sum += apy * pos.collateral;
+            total_collateral += pos.collateral;
+        }
+        if total_collateral <= 0.0 {
+            return None;
+        }
+        let mean_apy = weighted_apy_sum / total_collateral;
+        // Options premium yield has high variance — use 50% of return as vol estimate
+        Some((mean_apy, mean_apy.abs() * 0.5))
+    }
 }

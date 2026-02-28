@@ -74,6 +74,12 @@ pub struct AaveLending {
     borrowed_value: f64,
     metrics: SimMetrics,
     cached_ctx: Option<CachedLendingContext>,
+    /// Cached alpha stats from on-chain currentLiquidityRate query.
+    cached_alpha: Option<(f64, f64)>,
+    /// RPC URL cached from node for alpha stats queries (survives without execute()).
+    alpha_rpc: Option<String>,
+    alpha_pool: Option<Address>,
+    alpha_token: Option<Address>,
 }
 
 impl AaveLending {
@@ -118,6 +124,10 @@ impl AaveLending {
             borrowed_value: 0.0,
             metrics: SimMetrics::default(),
             cached_ctx,
+            cached_alpha: None,
+            alpha_rpc: None,
+            alpha_pool: None,
+            alpha_token: None,
         })
     }
 
@@ -574,6 +584,32 @@ impl Venue for AaveLending {
                 self.supplied_value - self.borrowed_value,
             );
         }
+
+        // Resolve RPC/pool/token from cached_ctx on first tick (survives restart
+        // as long as the constructor pre-populates cached_ctx from node).
+        if self.alpha_rpc.is_none() {
+            if let Some(ctx) = &self.cached_ctx {
+                self.alpha_rpc = Some(ctx.rpc_url.clone());
+                self.alpha_pool = Some(ctx.pool_addr);
+                self.alpha_token = Some(ctx.token_addr);
+            }
+        }
+
+        // Query currentLiquidityRate directly — already annualized APY in RAY (1e27).
+        // Single on-chain call, no accumulated history needed.
+        if let (Some(rpc), Some(pool), Some(token)) =
+            (&self.alpha_rpc, self.alpha_pool, self.alpha_token)
+        {
+            if let Ok(rp) = evm::read_provider(rpc) {
+                let pool_read = IAavePoolRead::new(pool, &rp);
+                if let Ok(reserve_data) = pool_read.getReserveData(token).call().await {
+                    let liquidity_rate = reserve_data._2;
+                    let apy = liquidity_rate as f64 / 1e27;
+                    // Conservative vol estimate — lending rates are relatively stable.
+                    self.cached_alpha = Some((apy, apy * 0.3));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -614,6 +650,10 @@ impl Venue for AaveLending {
             lending_interest: self.metrics.lending_interest,
             ..SimMetrics::default()
         }
+    }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        self.cached_alpha
     }
 }
 

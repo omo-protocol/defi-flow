@@ -302,6 +302,15 @@ impl Venue for OptionsSimulator {
             ..Default::default()
         }
     }
+
+    fn alpha_stats(&self) -> Option<(f64, f64)> {
+        // Compute premium yield from sold options
+        if self.sold_options.is_empty() || self.balance <= 0.0 {
+            return None;
+        }
+        let premium_rate = self.total_premium / self.balance;
+        Some((premium_rate, premium_rate * 0.5))
+    }
 }
 
 fn parse_option_type(s: &str) -> OptionType {
