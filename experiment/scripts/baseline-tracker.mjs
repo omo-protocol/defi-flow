@@ -15,7 +15,7 @@ import { MongoClient } from "mongodb";
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = "baseline";
 const WALLET = "0x03947958Df64597b534933e51914acA0420551c3";
-const INITIAL_DEPOSIT = 80;
+const INITIAL_DEPOSIT = 90;
 const POLL_INTERVAL = 300_000; // 5 minutes
 const RPC_URL = "https://rpc.hyperliquid.xyz/evm";
 const ONCE = process.argv.includes("--once");
