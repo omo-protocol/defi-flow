@@ -134,13 +134,15 @@ impl AaveLending {
         let decimals = evm::query_decimals(&ctx.rpc_url, ctx.token_addr).await?;
 
         // aToken balance = supplied value (includes accrued interest)
+        // Some Aave forks (e.g. HyperLend) can panic with arithmetic overflow
+        // in their interest rate math — treat reverts as zero balance.
         let a_token_addr = reserve_data._8;
         let a_token = IERC20::new(a_token_addr, &rp);
         let supply_balance = a_token
             .balanceOf(self.wallet_address)
             .call()
             .await
-            .context("aToken.balanceOf")?;
+            .unwrap_or(U256::ZERO);
         let supplied = evm::from_token_units(supply_balance, decimals);
 
         // Variable debt token balance = borrowed value (includes accrued interest)

@@ -172,6 +172,24 @@ async fn run_async(
     // Venues already query on-chain in total_value() — no execute() needed.
     reconcile_onchain_state(&mut engine, &mut state, &config, &tokens).await?;
 
+    // Push initial valuation to on-chain valuer immediately after reconciliation.
+    // Must happen BEFORE deploy/allocator since totalAssets() needs a valuer report.
+    // Prevents chicken-and-egg: totalAssets() needs valuer → valuer push needs tick → tick needs cron.
+    if let Some(ref vc) = engine.workflow.valuer {
+        let push_tvl = onchain_tvl(&engine, &config, &tokens).await;
+        if push_tvl > 0.0 {
+            match valuer::maybe_push_value(
+                vc, &contracts, &config.private_key, push_tvl,
+                &mut valuer_state, config.dry_run,
+                engine.workflow.reserve.as_ref(),
+            ).await {
+                Ok(true) => println!("[valuer] Initial valuation pushed: ${:.2}", push_tvl),
+                Ok(false) => {} // Throttled (shouldn't happen on startup)
+                Err(e) => eprintln!("[valuer] WARNING: initial push failed: {:#}", e),
+            }
+        }
+    }
+
     // Deploy phase: execute non-triggered nodes in topological order
     if !state.deploy_completed {
         // Vault strategies: pull funds from vault BEFORE deploy so wallet has capital
@@ -231,31 +249,6 @@ async fn run_async(
         }
     } else {
         println!("Deploy already completed (on-chain capital confirmed). Skipping.\n");
-    }
-
-    // Push initial valuation to on-chain valuer immediately after startup.
-    // This prevents a chicken-and-egg problem: totalAssets() needs a valuer report,
-    // but the valuer push only happens during tick execution (after cron fires).
-    // If the container restarts before the first cron fires, the valuer never gets seeded.
-    if let Some(ref vc) = engine.workflow.valuer {
-        let tvl = engine.total_tvl().await;
-        // Use wallet balance as floor if venues show $0 (capital sitting in wallet)
-        let push_tvl = if tvl < 1.0 {
-            state.balances.values().sum::<f64>()
-        } else {
-            tvl
-        };
-        if push_tvl > 0.0 {
-            match valuer::maybe_push_value(
-                vc, &contracts, &config.private_key, push_tvl,
-                &mut valuer_state, config.dry_run,
-                engine.workflow.reserve.as_ref(),
-            ).await {
-                Ok(true) => println!("[valuer] Initial valuation pushed: ${:.2}", push_tvl),
-                Ok(false) => {} // Throttled (shouldn't happen on startup)
-                Err(e) => eprintln!("[valuer] WARNING: initial push failed: {:#}", e),
-            }
-        }
     }
 
     // Execution phase
@@ -350,9 +343,10 @@ async fn run_async(
         println!("\nTVL: ${:.2}", tvl);
 
         // Push TVL to onchain valuer (if configured)
+        let push_tvl = onchain_tvl(&engine, &config, &tokens).await;
         if let Some(ref vc) = engine.workflow.valuer {
             match valuer::maybe_push_value(
-                vc, &contracts, &config.private_key, tvl,
+                vc, &contracts, &config.private_key, push_tvl,
                 &mut valuer_state, config.dry_run,
                 engine.workflow.reserve.as_ref(),
             ).await {
@@ -477,9 +471,12 @@ async fn run_async(
                     println!("[{}] TVL: ${:.2}\n", now.format("%H:%M:%S"), tvl);
 
                     // Push TVL to onchain valuer (if configured)
+                    // Always compute on-chain TVL (venue positions + wallet balance)
+                    // to avoid pushing stale engine state. Never push $0.
+                    let push_tvl = onchain_tvl(&engine, &config, &tokens).await;
                     if let Some(ref vc) = engine.workflow.valuer {
                         match valuer::maybe_push_value(
-                            vc, &contracts, &config.private_key, tvl,
+                            vc, &contracts, &config.private_key, push_tvl,
                             &mut valuer_state, config.dry_run,
                             engine.workflow.reserve.as_ref(),
                         ).await {
@@ -643,14 +640,23 @@ async fn reconcile_onchain_state(
                 onchain_tvl,
             );
         }
-    } else if wallet_balance > 1.0 && !state.deploy_completed {
-        // Wallet has funds but no venue positions — allocator ran but deploy
-        // didn't complete (crash between allocate and deploy). Seed the wallet
-        // balance so deploy can route it to venues.
-        println!(
-            "[reconcile] Wallet has ${:.2} but no venue positions — will deploy",
-            wallet_balance,
-        );
+    } else if venue_tvl < 1.0 && wallet_balance > 1.0 {
+        // Wallet has funds but no venue positions. Either:
+        // - deploy_completed=false: allocator ran but deploy crashed
+        // - deploy_completed=true: deploy was a no-op (only triggered nodes)
+        // Either way, reset deploy and seed wallet so deploy routes to venues.
+        if state.deploy_completed {
+            println!(
+                "[reconcile] Deploy was marked complete but no venue positions (wallet=${:.2}) — resetting for re-deploy",
+                wallet_balance,
+            );
+            state.deploy_completed = false;
+        } else {
+            println!(
+                "[reconcile] Wallet has ${:.2} but no venue positions — will deploy",
+                wallet_balance,
+            );
+        }
         engine.balances.add("wallet", "USDC", wallet_balance);
     } else if state.deploy_completed && onchain_tvl < 1.0 {
         // State says deployed but on-chain is empty — reset for re-deploy
@@ -732,6 +738,21 @@ async fn query_erc20_balance(
         .await
         .context("ERC20.balanceOf")?;
     Ok(evm::from_token_units(balance_raw, decimals))
+}
+
+/// Compute on-chain TVL: sum of venue positions + wallet ERC20 balance.
+/// Fully on-chain — no dependency on state.json or engine balances.
+async fn onchain_tvl(
+    engine: &Engine,
+    config: &RuntimeConfig,
+    tokens: &evm::TokenManifest,
+) -> f64 {
+    let mut tvl = 0.0;
+    for v in engine.venues.values() {
+        tvl += v.total_value().await.unwrap_or(0.0);
+    }
+    tvl += query_wallet_erc20(&engine.workflow, config, tokens).await;
+    tvl
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

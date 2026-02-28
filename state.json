@@ -1,6 +1,15 @@
 {
   "deploy_completed": true,
-  "last_tick": 1772036258,
-  "balances": {},
-  "reserve_actions": []
+  "last_tick": 1772290467,
+  "balances": {
+    "wallet": 24.0
+  },
+  "reserve_actions": [],
+  "allocation_actions": [],
+  "initial_capital": 24.0,
+  "peak_tvl": 24.0,
+  "cumulative_funding": 0.0,
+  "cumulative_interest": 0.0,
+  "cumulative_rewards": 0.0,
+  "cumulative_costs": 0.0
 }
