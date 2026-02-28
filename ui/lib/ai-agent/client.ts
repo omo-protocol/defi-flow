@@ -201,6 +201,78 @@ export const TOOLS = [
   {
     type: "function" as const,
     function: {
+      name: "defillama_yields",
+      description:
+        "Search DeFiLlama for yield pools. Returns APY, TVL, and pool ID (use pool ID as defillama_slug in lending/vault nodes). Use this to discover lending and vault opportunities.",
+      parameters: {
+        type: "object",
+        properties: {
+          project: {
+            type: "string",
+            description:
+              "Protocol name filter, e.g. 'aave-v3', 'morpho', 'hyperlend'",
+          },
+          chain: {
+            type: "string",
+            description: "Chain filter, e.g. 'Base', 'Arbitrum', 'Ethereum'",
+          },
+          asset: {
+            type: "string",
+            description: "Asset symbol filter, e.g. 'USDC', 'ETH', 'WETH'",
+          },
+          stablecoins_only: {
+            type: "boolean",
+            description: "If true, only return stablecoin pools",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "defillama_protocol",
+      description:
+        "Get DeFi protocol info from DeFiLlama: supported chains, TVL, category, description. Use this to check which chains a protocol is deployed on.",
+      parameters: {
+        type: "object",
+        properties: {
+          slug: {
+            type: "string",
+            description:
+              "DeFiLlama protocol slug, e.g. 'aave-v3', 'morpho', 'seamless-protocol'",
+          },
+        },
+        required: ["slug"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "etherscan_lookup",
+      description:
+        "Look up a contract address on a block explorer. Returns contract name, verification status, ABI method signatures, and proxy info. Supports: ethereum, base, arbitrum, optimism, mantle. Use this to verify addresses before using them in strategies.",
+      parameters: {
+        type: "object",
+        properties: {
+          address: {
+            type: "string",
+            description: "Contract address (0x...)",
+          },
+          chain: {
+            type: "string",
+            description:
+              "Chain name: 'ethereum', 'base', 'arbitrum', 'optimism', 'mantle'",
+          },
+        },
+        required: ["address", "chain"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
       name: "get_canvas_state",
       description:
         "Get the current strategy state from the canvas as JSON. Use this to understand what exists before making modifications.",
@@ -353,6 +425,9 @@ export type ToolHandlers = {
   validate: () => Promise<string>;
   backtest: (capital?: number, monteCarlo?: number) => Promise<string>;
   web_search: (query: string) => Promise<string>;
+  defillama_yields: (project?: string, chain?: string, asset?: string, stablecoinsOnly?: boolean) => Promise<string>;
+  defillama_protocol: (slug: string) => Promise<string>;
+  etherscan_lookup: (address: string, chain: string) => Promise<string>;
   get_canvas_state: () => string;
   fetch_data: (days?: number, interval?: string) => Promise<string>;
   start_daemon: (dryRun?: boolean, network?: string) => Promise<string>;
@@ -529,6 +604,15 @@ export async function agentLoop(
             break;
           case "web_search":
             result = await handlers.web_search(args.query);
+            break;
+          case "defillama_yields":
+            result = await handlers.defillama_yields(args.project, args.chain, args.asset, args.stablecoins_only);
+            break;
+          case "defillama_protocol":
+            result = await handlers.defillama_protocol(args.slug);
+            break;
+          case "etherscan_lookup":
+            result = await handlers.etherscan_lookup(args.address, args.chain);
             break;
           case "get_canvas_state":
             result = handlers.get_canvas_state();

@@ -117,6 +117,7 @@ jobs:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
           OPUS_API_KEY: ${{ secrets.OPUS_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
           # Quant agent PKs
           PK_QUANT_MINIMAX: ${{ secrets.PK_QUANT_MINIMAX }}
           PK_QUANT_QWEN: ${{ secrets.PK_QUANT_QWEN }}
@@ -149,6 +150,7 @@ jobs:
           GLM_API_KEY=$GLM_API_KEY
           OPUS_API_KEY=$OPUS_API_KEY
           GEMINI_API_KEY=$GEMINI_API_KEY
+          BRAVE_API_KEY=$BRAVE_API_KEY
           PK_QUANT_MINIMAX=$PK_QUANT_MINIMAX
           PK_QUANT_QWEN=$PK_QUANT_QWEN
           PK_QUANT_KIMI=$PK_QUANT_KIMI

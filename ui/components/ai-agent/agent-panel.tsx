@@ -426,6 +426,71 @@ export function AgentPanel() {
         }
       },
 
+      defillama_yields: async (project?: string, chain?: string, asset?: string, stablecoinsOnly?: boolean) => {
+        try {
+          const params = new URLSearchParams({ action: "yields" });
+          if (project) params.set("project", project);
+          if (chain) params.set("chain", chain);
+          if (asset) params.set("asset", asset);
+          if (stablecoinsOnly) params.set("stablecoins_only", "true");
+          const res = await fetch(`/api/defillama?${params}`);
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            return `DeFiLlama error: ${err.error || res.statusText}`;
+          }
+          const { results } = await res.json();
+          if (!results?.length) return "No yield pools found matching your criteria.";
+          return results.map((p: { pool: string; project: string; chain: string; symbol: string; apy: number; apyBase: number; apyReward: number; tvlUsd: number; stablecoin: boolean }) =>
+            `${p.project} | ${p.chain} | ${p.symbol}\n  APY: ${p.apy?.toFixed(2)}% (base: ${p.apyBase?.toFixed(2)}%, reward: ${(p.apyReward ?? 0).toFixed(2)}%)\n  TVL: $${(p.tvlUsd / 1e6).toFixed(1)}M | Stablecoin: ${p.stablecoin ? "yes" : "no"}\n  Pool ID (defillama_slug): ${p.pool}`
+          ).join("\n\n");
+        } catch {
+          return "DeFiLlama yields API unavailable.";
+        }
+      },
+
+      defillama_protocol: async (slug: string) => {
+        try {
+          const res = await fetch(`/api/defillama?action=protocol&slug=${encodeURIComponent(slug)}`);
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            return `DeFiLlama error: ${err.error || res.statusText}`;
+          }
+          const data = await res.json();
+          const lines = [
+            `**${data.name}** (${data.category})`,
+            `TVL: $${(data.tvl / 1e6).toFixed(1)}M`,
+            `Chains: ${data.chains?.join(", ")}`,
+          ];
+          if (data.description) lines.push(`Description: ${data.description}`);
+          if (data.url) lines.push(`URL: ${data.url}`);
+          return lines.join("\n");
+        } catch {
+          return "DeFiLlama protocol API unavailable.";
+        }
+      },
+
+      etherscan_lookup: async (address: string, chain: string) => {
+        try {
+          const res = await fetch(`/api/etherscan?address=${encodeURIComponent(address)}&chain=${encodeURIComponent(chain)}`);
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            return `Explorer error: ${err.error || res.statusText}`;
+          }
+          const data = await res.json();
+          const lines = [
+            `Contract: ${data.contractName || "Unknown"}`,
+            `Verified: ${data.isVerified ? "yes" : "no"}`,
+            `Proxy: ${data.isProxy ? `yes → ${data.implementation}` : "no"}`,
+          ];
+          if (data.methods?.length) {
+            lines.push(`Methods (${data.methods.length}): ${data.methods.slice(0, 20).join(", ")}`);
+          }
+          return lines.join("\n");
+        } catch {
+          return "Block explorer API unavailable.";
+        }
+      },
+
       get_canvas_state: () => {
         const currentNodes = getNodes();
         const currentEdges = getEdges();

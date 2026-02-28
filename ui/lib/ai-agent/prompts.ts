@@ -172,7 +172,10 @@ ${chainList}
 - **stop_daemon / list_runs / get_run_status**: Execution management
 
 ### Research
-- **web_search**: Find protocol addresses, DeFiLlama slugs, etc.
+- **web_search**: General web search (Brave). Use as fallback when other tools don't have what you need.
+- **defillama_yields**: Search yield pools by protocol/chain/asset. Returns APY, TVL, and pool ID to use as \`defillama_slug\`. **Always use this first** when building lending or vault strategies.
+- **defillama_protocol**: Get protocol metadata — supported chains, TVL, category. Use to verify which chains a protocol is deployed on.
+- **etherscan_lookup**: Verify a contract address on-chain. Returns contract name, ABI methods, proxy status. Supports ethereum, base, arbitrum, optimism, mantle. Use to confirm addresses before adding them to manifests.
 
 ## Example Workflow JSON (Delta-Neutral v2)
 
