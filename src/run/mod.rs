@@ -146,6 +146,7 @@ async fn run_async(
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     // Build venues using the unified factory
+    let wallet_tok = wallet_token(&workflow);
     let tokens = workflow.token_manifest();
     let contracts = workflow.contracts.clone().unwrap_or_default();
     let venue_map = venues::build_all(
@@ -170,7 +171,7 @@ async fn run_async(
     // ── On-chain reconciliation ──
     // Query actual on-chain state to detect stale/wrong state files.
     // Venues already query on-chain in total_value() — no execute() needed.
-    reconcile_onchain_state(&mut engine, &mut state, &config, &tokens).await?;
+    reconcile_onchain_state(&mut engine, &mut state, &config, &tokens, &wallet_tok).await?;
 
     // Push initial valuation to on-chain valuer immediately after reconciliation.
     // Must happen BEFORE deploy/allocator since totalAssets() needs a valuer report.
@@ -212,7 +213,7 @@ async fn run_async(
                             "[allocator] Pulled ${:.2} from vault (excess=${:.2})",
                             record.pulled, record.excess,
                         );
-                        engine.balances.add("wallet", "USDC", record.pulled);
+                        engine.balances.add("wallet", &wallet_tok, record.pulled);
                         sync_balances(&engine, &mut state);
                         state.allocation_actions.push(record);
                     }
@@ -278,7 +279,7 @@ async fn run_async(
                         "[allocator] Pulled ${:.2} from vault (excess=${:.2})",
                         record.pulled, record.excess,
                     );
-                    engine.balances.add("wallet", "USDC", record.pulled);
+                    engine.balances.add("wallet", &wallet_tok, record.pulled);
                     sync_balances(&engine, &mut state);
                     state.allocation_actions.push(record);
 
@@ -411,7 +412,7 @@ async fn run_async(
                                     "[allocator] Pulled ${:.2} from vault (excess=${:.2})",
                                     record.pulled, record.excess,
                                 );
-                                engine.balances.add("wallet", "USDC", record.pulled);
+                                engine.balances.add("wallet", &wallet_tok, record.pulled);
                                 sync_balances(&engine, &mut state);
                                 state.allocation_actions.push(record);
 
@@ -599,6 +600,7 @@ async fn reconcile_onchain_state(
     state: &mut RunState,
     config: &RuntimeConfig,
     tokens: &evm::TokenManifest,
+    wallet_tok: &str,
 ) -> Result<()> {
     println!("── Reconciling on-chain state ──");
 
@@ -662,7 +664,7 @@ async fn reconcile_onchain_state(
                 wallet_balance,
             );
         }
-        engine.balances.add("wallet", "USDC", wallet_balance);
+        engine.balances.add("wallet", &wallet_tok, wallet_balance);
     } else if state.deploy_completed && onchain_tvl < 1.0 {
         // State says deployed but on-chain is empty — reset for re-deploy
         println!("[reconcile] State says deployed but on-chain TVL is $0 — resetting for re-deploy");
@@ -761,6 +763,19 @@ async fn onchain_tvl(
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+/// Extract the wallet node's token symbol (e.g. "USDT0", "USDC").
+/// Falls back to "USDC" if no wallet node exists.
+fn wallet_token(workflow: &Workflow) -> String {
+    workflow
+        .nodes
+        .iter()
+        .find_map(|n| match n {
+            Node::Wallet { token, .. } => Some(token.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "USDC".to_string())
+}
 
 /// Sync the engine's per-node balance totals into the persistent RunState.
 fn sync_balances(engine: &Engine, state: &mut RunState) {

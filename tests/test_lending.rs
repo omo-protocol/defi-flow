@@ -78,10 +78,10 @@ async fn test_lending_supply_withdraw() {
     // 3. Create venue
     let config = make_config(&ctx);
     let (tokens, contracts) = lending_manifests();
-    let mut lending = AaveLending::new(&config, &tokens, &contracts).unwrap();
+    let supply_node = make_lending_node(&chain, LendingAction::Supply);
+    let mut lending = AaveLending::new(&config, &tokens, &contracts, &supply_node).unwrap();
 
     // 4. Supply 100 USDC
-    let supply_node = make_lending_node(&chain, LendingAction::Supply);
     let result = lending.execute(&supply_node, 100.0).await.unwrap();
     match &result {
         ExecutionResult::PositionUpdate { consumed, output } => {
@@ -145,10 +145,10 @@ async fn test_lending_borrow_repay() {
     // 3. Create venue
     let config = make_config(&ctx);
     let (tokens, contracts) = lending_manifests();
-    let mut lending = AaveLending::new(&config, &tokens, &contracts).unwrap();
+    let supply_node = make_lending_node(&chain, LendingAction::Supply);
+    let mut lending = AaveLending::new(&config, &tokens, &contracts, &supply_node).unwrap();
 
     // 4. Supply 5000 USDC as collateral
-    let supply_node = make_lending_node(&chain, LendingAction::Supply);
     let result = lending.execute(&supply_node, 5000.0).await.unwrap();
     assert!(matches!(result, ExecutionResult::PositionUpdate { .. }));
     println!("  SUPPLY (collateral) OK");
@@ -194,7 +194,6 @@ async fn test_lending_dryrun_wrong_pool() {
     let mut config = make_config(&ctx);
     config.dry_run = true;
 
-    let mut lending = AaveLending::new(&config, &tokens, &contracts).unwrap();
     let node = Node::Lending {
         id: "test_wrong_pool".to_string(),
         archetype: LendingArchetype::AaveV3,
@@ -206,6 +205,8 @@ async fn test_lending_dryrun_wrong_pool() {
         defillama_slug: None,
         trigger: None,
     };
+
+    let mut lending = AaveLending::new(&config, &tokens, &contracts, &node).unwrap();
 
     let result = lending.execute(&node, 100.0).await;
     assert!(result.is_err(), "Preflight should catch wrong pool address");
@@ -228,8 +229,8 @@ async fn test_lending_dryrun_correct_pool() {
     let mut config = make_config(&ctx);
     config.dry_run = true;
 
-    let mut lending = AaveLending::new(&config, &tokens, &contracts).unwrap();
     let node = make_lending_node(&chain, LendingAction::Supply);
+    let mut lending = AaveLending::new(&config, &tokens, &contracts, &node).unwrap();
 
     let result = lending.execute(&node, 100.0).await;
     assert!(
@@ -244,4 +245,45 @@ async fn test_lending_dryrun_correct_pool() {
         }
         other => panic!("Expected PositionUpdate, got {other:?}"),
     }
+}
+
+/// Alpha stats should return current liquidity rate from a single on-chain query.
+/// No accumulated history needed — works on first tick of a brand-new venue.
+#[tokio::test]
+#[ignore] // Requires Anvil + network access
+async fn test_lending_alpha_stats_first_tick() {
+    let ctx = spawn_fork(BASE_RPC, BASE_CHAIN_ID);
+    let chain = Chain::custom("base", BASE_CHAIN_ID, &ctx.rpc_url);
+
+    let (tokens, contracts) = lending_manifests();
+    let config = make_config(&ctx);
+    let node = make_lending_node(&chain, LendingAction::Supply);
+    let mut lending = AaveLending::new(&config, &tokens, &contracts, &node).unwrap();
+
+    // Before any tick, alpha_stats should be None
+    assert!(
+        lending.alpha_stats().is_none(),
+        "alpha_stats should be None before first tick"
+    );
+
+    // Single tick should populate alpha stats from on-chain currentLiquidityRate
+    let now = chrono::Utc::now().timestamp() as u64;
+    lending.tick(now, 3600.0).await.unwrap();
+
+    let stats = lending.alpha_stats();
+    assert!(
+        stats.is_some(),
+        "alpha_stats should be Some after first tick (on-chain query)"
+    );
+
+    let (apy, vol) = stats.unwrap();
+    println!("  Lending alpha_stats: apy={:.4}% vol={:.4}%", apy * 100.0, vol * 100.0);
+
+    // Aave V3 USDC on Base should have a positive lending rate
+    assert!(apy > 0.0, "APY should be positive, got {apy}");
+    assert!(apy < 1.0, "APY should be < 100%, got {apy}");
+    assert!(vol > 0.0, "Vol should be positive, got {vol}");
+    assert!(vol < apy, "Vol (30% of APY) should be less than APY");
+
+    println!("  test_lending_alpha_stats_first_tick PASSED");
 }

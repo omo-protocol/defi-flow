@@ -77,10 +77,10 @@ async fn test_vault_deposit_withdraw() {
     // 3. Create venue
     let config = make_config(&ctx);
     let (tokens, contracts) = vault_manifests();
-    let mut vault = MorphoVault::new(&config, &tokens, &contracts).unwrap();
+    let deposit_node = make_vault_node(&chain, VaultAction::Deposit);
+    let mut vault = MorphoVault::new(&config, &tokens, &contracts, &deposit_node).unwrap();
 
     // 4. Deposit 1000 USDC
-    let deposit_node = make_vault_node(&chain, VaultAction::Deposit);
     let result = vault.execute(&deposit_node, 1000.0).await.unwrap();
     match &result {
         ExecutionResult::PositionUpdate { consumed, output } => {
@@ -145,7 +145,6 @@ async fn test_vault_dryrun_wrong_address() {
     let mut config = make_config(&ctx);
     config.dry_run = true;
 
-    let mut vault = MorphoVault::new(&config, &tokens, &contracts).unwrap();
     let node = Node::Vault {
         id: "test_wrong_vault".to_string(),
         archetype: VaultArchetype::MorphoV2,
@@ -156,6 +155,8 @@ async fn test_vault_dryrun_wrong_address() {
         defillama_slug: None,
         trigger: None,
     };
+
+    let mut vault = MorphoVault::new(&config, &tokens, &contracts, &node).unwrap();
 
     let result = vault.execute(&node, 1000.0).await;
     assert!(
@@ -181,8 +182,8 @@ async fn test_vault_dryrun_correct_address() {
     let mut config = make_config(&ctx);
     config.dry_run = true;
 
-    let mut vault = MorphoVault::new(&config, &tokens, &contracts).unwrap();
     let node = make_vault_node(&chain, VaultAction::Deposit);
+    let mut vault = MorphoVault::new(&config, &tokens, &contracts, &node).unwrap();
 
     let result = vault.execute(&node, 1000.0).await;
     assert!(
@@ -197,4 +198,61 @@ async fn test_vault_dryrun_correct_address() {
         }
         other => panic!("Expected PositionUpdate, got {other:?}"),
     }
+}
+
+/// Alpha stats for vault needs two ticks (prev_share_price from first tick, APY from second).
+/// On Morpho vault, the share price is > 1.0 since the vault has accrued yield historically.
+#[tokio::test]
+#[ignore] // Requires Anvil + network access
+async fn test_vault_alpha_stats_two_ticks() {
+    let ctx = spawn_fork(ETHEREUM_RPC, ETHEREUM_CHAIN_ID);
+    let chain = Chain::custom("ethereum", ETHEREUM_CHAIN_ID, &ctx.rpc_url);
+
+    let (tokens, contracts) = vault_manifests();
+    let config = make_config(&ctx);
+    let node = make_vault_node(&chain, VaultAction::Deposit);
+    let mut vault = MorphoVault::new(&config, &tokens, &contracts, &node).unwrap();
+
+    // Deposit some USDC so total_value > 0 (needed for prev_value tracking)
+    let usdc: alloy::primitives::Address = USDC_ETHEREUM.parse().unwrap();
+    let whale: alloy::primitives::Address = USDC_WHALE.parse().unwrap();
+    fund_eth(&ctx.rpc_url, ctx.wallet_address, U256::from(10u128 * 10u128.pow(18))).await;
+    fund_erc20(&ctx.rpc_url, usdc, whale, ctx.wallet_address, U256::from(10_000_000_000u64)).await;
+
+    let result = vault.execute(&node, 1000.0).await.unwrap();
+    assert!(matches!(result, ExecutionResult::PositionUpdate { .. }));
+
+    // Before any tick
+    assert!(
+        vault.alpha_stats().is_none(),
+        "alpha_stats should be None before first tick"
+    );
+
+    // First tick: records share price, no alpha yet
+    let now = chrono::Utc::now().timestamp() as u64;
+    vault.tick(now, 3600.0).await.unwrap();
+    assert!(
+        vault.alpha_stats().is_none(),
+        "alpha_stats should be None after first tick (need 2 samples)"
+    );
+    println!("  After tick 1: alpha_stats = None (recording baseline)");
+
+    // Second tick with different timestamp: computes APY from share price delta.
+    // On a static fork the share price is the same both ticks → APY ≈ 0,
+    // but the important thing is it returns Some (not None).
+    let now2 = now + 3600;
+    vault.tick(now2, 3600.0).await.unwrap();
+
+    let stats = vault.alpha_stats();
+    assert!(
+        stats.is_some(),
+        "alpha_stats should be Some after second tick"
+    );
+
+    let (apy, vol) = stats.unwrap();
+    println!("  Vault alpha_stats: apy={:.6}% vol={:.6}%", apy * 100.0, vol * 100.0);
+    // On fork, share price is constant → APY ≈ 0. Just verify it's a reasonable number.
+    assert!(apy.abs() < 1.0, "APY should be bounded, got {apy}");
+
+    println!("  test_vault_alpha_stats_two_ticks PASSED");
 }
