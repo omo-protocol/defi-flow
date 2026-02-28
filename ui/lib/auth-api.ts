@@ -13,7 +13,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
       ...init?.headers,
     },
   });
-  const data = await res.json();
+  const data = await res.json().catch(() => ({ error: res.statusText }));
   if (!res.ok) throw new Error(data.error || "Request failed");
   return data as T;
 }
@@ -86,9 +86,13 @@ export const updateConfig = (updates: Record<string, string | null>) =>
     body: JSON.stringify(updates),
   });
 
-// Run
-export const startRun = (wallet_id: string, strategy_json: unknown) =>
-  api<{ ok: boolean; address: string; strategy: unknown }>("/api/auth/run/start", {
+// Run (PK decrypted server-side — never leaves the backend)
+export const startRun = (
+  wallet_id: string,
+  workflow: unknown,
+  options: { network?: string; dry_run?: boolean; slippage_bps?: number } = {}
+) =>
+  api<{ session_id: string; status: string }>("/api/auth/run/start", {
     method: "POST",
-    body: JSON.stringify({ wallet_id, strategy_json }),
+    body: JSON.stringify({ wallet_id, workflow, ...options }),
   });

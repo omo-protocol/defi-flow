@@ -114,27 +114,23 @@ export function RunControls({
         contracts
       );
 
-      if (walletId && isAuth) {
-        // Use auth API — PK decrypted server-side
-        const prepared = await startRunAuth(walletId, workflow);
-        // Forward prepared strategy (with PK injected) to daemon
-        const res = await startDaemon(prepared.strategy, {
+      let res;
+      if (walletId && walletId !== "none" && isAuth) {
+        // Auth API — PK decrypted server-side, never leaves backend
+        res = await startRunAuth(walletId, workflow, {
           network,
           dry_run: dryRun,
         });
-        toast.success(`Daemon started: ${res.session_id.slice(0, 8)}...`);
-        setSelectedSession(res.session_id);
-        onSessionSelect?.(res.session_id);
       } else {
         // Dry run without wallet
-        const res = await startDaemon(workflow, {
+        res = await startDaemon(workflow, {
           network,
           dry_run: dryRun,
         });
-        toast.success(`Daemon started: ${res.session_id.slice(0, 8)}...`);
-        setSelectedSession(res.session_id);
-        onSessionSelect?.(res.session_id);
       }
+      toast.success(`Daemon started: ${res.session_id.slice(0, 8)}...`);
+      setSelectedSession(res.session_id);
+      onSessionSelect?.(res.session_id);
       listRuns().then(setSessions).catch(() => {});
     } catch (err) {
       toast.error(

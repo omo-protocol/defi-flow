@@ -131,7 +131,7 @@ impl AaveLending {
             .await
             .context("getReserveData for total_value")?;
 
-        let decimals = token_decimals_for(&ctx.asset_symbol);
+        let decimals = evm::query_decimals(&ctx.rpc_url, ctx.token_addr).await?;
 
         // aToken balance = supplied value (includes accrued interest)
         let a_token_addr = reserve_data._8;
@@ -164,7 +164,7 @@ impl AaveLending {
         asset_symbol: &str,
         input_amount: f64,
     ) -> Result<ExecutionResult> {
-        let decimals = token_decimals_for(asset_symbol);
+        let decimals = evm::query_decimals(rpc_url, token_addr).await?;
         let amount_units = evm::to_token_units(input_amount, 1.0, decimals);
 
         println!(
@@ -232,7 +232,7 @@ impl AaveLending {
         asset_symbol: &str,
         input_amount: f64,
     ) -> Result<ExecutionResult> {
-        let decimals = token_decimals_for(asset_symbol);
+        let decimals = evm::query_decimals(rpc_url, token_addr).await?;
         let amount_units = evm::to_token_units(input_amount, 1.0, decimals);
 
         println!(
@@ -308,7 +308,7 @@ impl AaveLending {
         asset_symbol: &str,
         input_amount: f64,
     ) -> Result<ExecutionResult> {
-        let decimals = token_decimals_for(asset_symbol);
+        let decimals = evm::query_decimals(rpc_url, token_addr).await?;
         let amount_units = evm::to_token_units(input_amount, 1.0, decimals);
 
         println!(
@@ -374,7 +374,7 @@ impl AaveLending {
         asset_symbol: &str,
         input_amount: f64,
     ) -> Result<ExecutionResult> {
-        let decimals = token_decimals_for(asset_symbol);
+        let decimals = evm::query_decimals(rpc_url, token_addr).await?;
         let amount_units = evm::to_token_units(input_amount, 1.0, decimals);
 
         println!(
@@ -640,10 +640,3 @@ fn require_success(receipt: &alloy::rpc::types::TransactionReceipt, label: &str)
     Ok(())
 }
 
-fn token_decimals_for(symbol: &str) -> u8 {
-    match symbol.to_uppercase().as_str() {
-        "USDC" | "USDT" => 6,
-        "WBTC" | "CBBTC" => 8,
-        _ => 18,
-    }
-}

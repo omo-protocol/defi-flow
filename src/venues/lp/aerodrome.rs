@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use alloy::primitives::{Address, Signed, U256, Uint};
 use alloy::providers::ProviderBuilder;
 use alloy::sol;
@@ -180,6 +182,7 @@ impl AerodromeLp {
 
         let pool_name = self.cached_pool.as_deref();
         let mut total_value = 0.0;
+        let mut decimals_cache: HashMap<Address, u8> = HashMap::new();
 
         for i in 0..count {
             let token_id = pm
@@ -199,8 +202,8 @@ impl AerodromeLp {
                 // Position exists but has zero liquidity — only fees owed matter
                 let fees0 = pos.tokensOwed0 as f64;
                 let fees1 = pos.tokensOwed1 as f64;
-                let d0 = self.decimals_for_addr(pos.token0);
-                let d1 = self.decimals_for_addr(pos.token1);
+                let d0 = cached_decimals(&mut decimals_cache, rpc_url, pos.token0).await;
+                let d1 = cached_decimals(&mut decimals_cache, rpc_url, pos.token1).await;
                 total_value +=
                     fees0 / 10f64.powi(d0 as i32) + fees1 / 10f64.powi(d1 as i32);
                 continue;
@@ -222,8 +225,8 @@ impl AerodromeLp {
                 }
             }
 
-            let d0 = self.decimals_for_addr(pos.token0);
-            let d1 = self.decimals_for_addr(pos.token1);
+            let d0 = cached_decimals(&mut decimals_cache, rpc_url, pos.token0).await;
+            let d1 = cached_decimals(&mut decimals_cache, rpc_url, pos.token1).await;
 
             // Compute token amounts from liquidity + tick range.
             // Use sqrtPrice at current tick from Aerodrome pool.
@@ -250,21 +253,6 @@ impl AerodromeLp {
         }
 
         Ok(total_value)
-    }
-
-    /// Get decimals for a token address by checking known token symbols.
-    fn decimals_for_addr(&self, addr: Address) -> u8 {
-        // Reverse-lookup: find the symbol for this address.
-        for (symbol, chains) in &self.tokens {
-            for (_, token_addr_str) in chains {
-                if let Ok(token_addr) = token_addr_str.parse::<Address>() {
-                    if token_addr == addr {
-                        return token_decimals_for(symbol);
-                    }
-                }
-            }
-        }
-        18 // default
     }
 
     fn parse_pool_tokens(&self, pool: &str) -> Result<(Address, Address)> {
@@ -310,8 +298,12 @@ impl AerodromeLp {
                 )?;
 
         let parts: Vec<&str> = pool.split('/').collect();
-        let decimals0 = token_decimals_for(parts.get(0).unwrap_or(&"ETH"));
-        let decimals1 = token_decimals_for(parts.get(1).unwrap_or(&"ETH"));
+        let rpc = self
+            .chain
+            .rpc_url()
+            .context("LP chain requires RPC URL for decimals query")?;
+        let decimals0 = evm::query_decimals(rpc, token0).await?;
+        let decimals1 = evm::query_decimals(rpc, token1).await?;
 
         let half_amount = input_amount / 2.0;
         let amount0 = evm::to_token_units(half_amount, 1.0, decimals0);
@@ -703,12 +695,18 @@ fn require_success(
     Ok(())
 }
 
-fn token_decimals_for(symbol: &str) -> u8 {
-    match symbol.to_uppercase().as_str() {
-        "USDC" | "USDT" => 6,
-        "WBTC" | "CBBTC" => 8,
-        _ => 18,
+/// Query token decimals on-chain, caching results to avoid repeated RPC calls.
+async fn cached_decimals(
+    cache: &mut HashMap<Address, u8>,
+    rpc_url: &str,
+    addr: Address,
+) -> u8 {
+    if let Some(&d) = cache.get(&addr) {
+        return d;
     }
+    let d = evm::query_decimals(rpc_url, addr).await.unwrap_or(18);
+    cache.insert(addr, d);
+    d
 }
 
 /// Compute token amounts from concentrated liquidity position parameters.

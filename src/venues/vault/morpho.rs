@@ -40,6 +40,7 @@ sol! {
 /// Cached node context for unwind() — resolved on first execute().
 struct CachedVaultContext {
     vault_addr: Address,
+    token_addr: Address,
     rpc_url: String,
     asset_symbol: String,
 }
@@ -72,9 +73,11 @@ impl MorphoVault {
         {
             let rpc_url = chain.rpc_url();
             let vault_addr = evm::resolve_contract(contracts, vault_address, chain);
-            match (rpc_url, vault_addr) {
-                (Some(rpc), Some(addr)) => Some(CachedVaultContext {
-                    vault_addr: addr,
+            let token_addr = evm::resolve_token(tokens, chain, asset);
+            match (rpc_url, vault_addr, token_addr) {
+                (Some(rpc), Some(vaddr), Some(taddr)) => Some(CachedVaultContext {
+                    vault_addr: vaddr,
+                    token_addr: taddr,
                     rpc_url: rpc.to_string(),
                     asset_symbol: asset.clone(),
                 }),
@@ -117,7 +120,7 @@ impl MorphoVault {
             .await
             .context("vault.convertToAssets")?;
 
-        let decimals = token_decimals_for(&ctx.asset_symbol);
+        let decimals = evm::query_decimals(&ctx.rpc_url, ctx.token_addr).await?;
         Ok(evm::from_token_units(assets, decimals))
     }
 
@@ -129,7 +132,7 @@ impl MorphoVault {
         asset_symbol: &str,
         input_amount: f64,
     ) -> Result<ExecutionResult> {
-        let decimals = token_decimals_for(asset_symbol);
+        let decimals = evm::query_decimals(rpc_url, token_addr).await?;
         let amount_units = evm::to_token_units(input_amount, 1.0, decimals);
 
         println!(
@@ -203,10 +206,11 @@ impl MorphoVault {
         &mut self,
         vault_addr: Address,
         rpc_url: &str,
+        token_addr: Address,
         asset_symbol: &str,
         input_amount: f64,
     ) -> Result<ExecutionResult> {
-        let decimals = token_decimals_for(asset_symbol);
+        let decimals = evm::query_decimals(rpc_url, token_addr).await?;
         let amount_units = evm::to_token_units(input_amount, 1.0, decimals);
 
         println!(
@@ -280,6 +284,7 @@ impl Venue for MorphoVault {
                 // Cache context for unwind()
                 self.cached_ctx = Some(CachedVaultContext {
                     vault_addr,
+                    token_addr,
                     rpc_url: rpc_url.to_string(),
                     asset_symbol: asset.clone(),
                 });
@@ -290,7 +295,7 @@ impl Venue for MorphoVault {
                             .await
                     }
                     VaultAction::Withdraw => {
-                        self.execute_withdraw(vault_addr, rpc_url, asset, input_amount)
+                        self.execute_withdraw(vault_addr, rpc_url, token_addr, asset, input_amount)
                             .await
                     }
                     VaultAction::ClaimRewards => {
@@ -356,6 +361,7 @@ impl Venue for MorphoVault {
         self.execute_withdraw(
             ctx.vault_addr,
             &ctx.rpc_url.clone(),
+            ctx.token_addr,
             &ctx.asset_symbol.clone(),
             withdraw_amount,
         )
@@ -397,10 +403,3 @@ fn require_success(receipt: &alloy::rpc::types::TransactionReceipt, label: &str)
     Ok(())
 }
 
-fn token_decimals_for(symbol: &str) -> u8 {
-    match symbol.to_uppercase().as_str() {
-        "USDC" | "USDT" => 6,
-        "WBTC" | "CBBTC" => 8,
-        _ => 18,
-    }
-}

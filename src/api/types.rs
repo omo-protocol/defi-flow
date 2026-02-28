@@ -59,6 +59,18 @@ fn default_network() -> String {
     "testnet".to_string()
 }
 
+#[derive(Deserialize)]
+pub struct AuthRunStartRequest {
+    pub wallet_id: String,
+    pub workflow: Workflow,
+    #[serde(default = "default_network")]
+    pub network: String,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default = "default_slippage")]
+    pub slippage_bps: f64,
+}
+
 // ── Response types ───────────────────────────────────────────────────
 
 #[derive(Serialize)]

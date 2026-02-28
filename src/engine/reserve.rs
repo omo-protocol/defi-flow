@@ -269,7 +269,7 @@ pub async fn check_and_allocate(
         .context("vault chain requires RPC URL")?;
 
     let strategy_id = crate::run::valuer::strategy_id_from_text(strategy_id_text);
-    let decimals = token_decimals_for(&config.vault_token);
+    let decimals = evm::query_decimals(rpc_url, token_addr).await?;
     let excess_units = evm::to_token_units(excess, 1.0, decimals);
 
     // Build signer provider
@@ -500,7 +500,7 @@ async fn transfer_to_vault(
             )
         })?;
 
-    let decimals = token_decimals_for(&config.vault_token);
+    let decimals = evm::query_decimals(rpc_url, token_addr).await?;
     let amount_units = evm::to_token_units(amount, 1.0, decimals);
 
     let provider = make_signer_provider(private_key, rpc_url)?;
@@ -580,10 +580,3 @@ async fn flat_pro_rata_unwind(engine: &mut Engine, deficit: f64) -> f64 {
     total_freed
 }
 
-fn token_decimals_for(symbol: &str) -> u8 {
-    match symbol.to_uppercase().as_str() {
-        "USDC" | "USDT" => 6,
-        "WBTC" | "CBBTC" => 8,
-        _ => 18,
-    }
-}

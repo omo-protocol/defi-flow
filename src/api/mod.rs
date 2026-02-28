@@ -84,6 +84,8 @@ pub async fn serve(host: &str, port: u16, data_dir: &Path) -> Result<()> {
             "/api/auth/config",
             get(handlers::config::get_config).put(handlers::config::update_config),
         )
+        // Auth run (JWT required — PK decrypted server-side)
+        .route("/api/auth/run/start", post(handlers::run::auth_start_run))
         // Validate
         .route("/api/validate", post(handlers::validate::validate_workflow))
         // Backtest

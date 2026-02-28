@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use alloy::hex;
 use axum::Json;
 use axum::extract::{Path, State};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -8,8 +9,12 @@ use tokio::sync::broadcast;
 
 use crate::api::error::ApiError;
 use crate::api::events::EngineEvent;
+use crate::api::middleware::AuthUser;
 use crate::api::state::{AppState, RunSession};
-use crate::api::types::{RunListEntry, RunStartRequest, RunStartResponse, RunStatusResponse};
+use crate::api::types::{
+    AuthRunStartRequest, RunListEntry, RunStartRequest, RunStartResponse, RunStatusResponse,
+};
+use crate::model::workflow::Workflow;
 
 pub async fn start_run(
     State(state): State<AppState>,
@@ -32,6 +37,77 @@ pub async fn start_run(
             )
         })?;
 
+    do_start_run(
+        state,
+        req.workflow,
+        private_key,
+        req.network,
+        req.dry_run,
+        req.slippage_bps,
+    )
+    .await
+}
+
+/// Authenticated run start — decrypts wallet PK server-side so it never leaves the backend.
+pub async fn auth_start_run(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<AuthRunStartRequest>,
+) -> Result<Json<RunStartResponse>, ApiError> {
+    // Validate
+    if let Err(errs) = crate::validate::validate(&req.workflow) {
+        let msgs: Vec<String> = errs.iter().map(|e| e.to_string()).collect();
+        return Err(ApiError::Validation(msgs));
+    }
+
+    // Decrypt wallet PK from DB
+    let private_key = {
+        let inner = state.inner.read().await;
+        let db = inner.db.lock().await;
+
+        let derived_key_hex: String = db
+            .query_row(
+                "SELECT derived_key FROM users WHERE id = ?1",
+                [&auth.user_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| ApiError::Unauthorized("Session expired, please login again".into()))?;
+
+        let mut derived_key = [0u8; 32];
+        hex::decode_to_slice(&derived_key_hex, &mut derived_key)
+            .map_err(|e| ApiError::Internal(format!("derived key decode: {e}")))?;
+
+        let encrypted_pk: String = db
+            .query_row(
+                "SELECT encrypted_pk FROM wallets WHERE id = ?1 AND user_id = ?2",
+                rusqlite::params![req.wallet_id, auth.user_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| ApiError::NotFound("Wallet not found".into()))?;
+
+        crate::api::auth::decrypt_pk(&encrypted_pk, &derived_key)
+            .map_err(|e| ApiError::Internal(format!("decryption: {e:#}")))?
+    };
+
+    do_start_run(
+        state,
+        req.workflow,
+        private_key,
+        req.network,
+        req.dry_run,
+        req.slippage_bps,
+    )
+    .await
+}
+
+async fn do_start_run(
+    state: AppState,
+    workflow: Workflow,
+    private_key: String,
+    network: String,
+    dry_run: bool,
+    slippage_bps: f64,
+) -> Result<Json<RunStartResponse>, ApiError> {
     let session_id = uuid::Uuid::new_v4().to_string();
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
     let (event_tx, _) = broadcast::channel::<EngineEvent>(256);
@@ -48,7 +124,7 @@ pub async fn start_run(
     std::fs::create_dir_all(&tmp_dir)
         .map_err(|e| ApiError::Internal(format!("creating temp dir: {e}")))?;
     let workflow_path = tmp_dir.join(format!("{}.json", session_id));
-    let workflow_json = serde_json::to_string_pretty(&req.workflow)
+    let workflow_json = serde_json::to_string_pretty(&workflow)
         .map_err(|e| ApiError::Internal(format!("serializing workflow: {e}")))?;
     std::fs::write(&workflow_path, &workflow_json)
         .map_err(|e| ApiError::Internal(format!("writing temp workflow: {e}")))?;
@@ -62,25 +138,25 @@ pub async fn start_run(
         "run".to_string(),
         workflow_path.to_string_lossy().to_string(),
         "--network".to_string(),
-        req.network.clone(),
+        network.clone(),
         "--state-file".to_string(),
         state_file.to_string_lossy().to_string(),
         "--slippage-bps".to_string(),
-        req.slippage_bps.to_string(),
+        slippage_bps.to_string(),
     ];
-    if req.dry_run {
+    if dry_run {
         args.push("--dry-run".to_string());
         args.push("--once".to_string());
     }
 
     let session = RunSession {
-        workflow: req.workflow.clone(),
+        workflow: workflow.clone(),
         shutdown_tx: shutdown_tx.clone(),
         event_tx: event_tx.clone(),
         event_log: event_log.clone(),
         started_at: now,
-        network: req.network.clone(),
-        dry_run: req.dry_run,
+        network: network.clone(),
+        dry_run,
     };
 
     {

@@ -76,3 +76,10 @@ pub fn resolve_contract(manifest: &ContractManifest, name: &str, chain: &Chain) 
 pub fn read_provider(rpc_url: &str) -> anyhow::Result<impl alloy::providers::Provider + Clone> {
     Ok(alloy::providers::ProviderBuilder::new().connect_http(rpc_url.parse()?))
 }
+
+/// Query ERC20 decimals on-chain.
+pub async fn query_decimals(rpc_url: &str, token_addr: Address) -> anyhow::Result<u8> {
+    let rp = read_provider(rpc_url)?;
+    let token = IERC20::new(token_addr, &rp);
+    Ok(token.decimals().call().await?)
+}

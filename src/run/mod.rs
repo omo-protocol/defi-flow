@@ -14,8 +14,9 @@ use tokio::sync::mpsc;
 
 use crate::engine::Engine;
 use crate::engine::reserve;
+use crate::model::node::Node;
 use crate::model::workflow::Workflow;
-use crate::venues::{self, BuildMode};
+use crate::venues::{self, evm, BuildMode};
 
 use config::RuntimeConfig;
 use registry::{Registry, RegistryEntry};
@@ -162,16 +163,14 @@ async fn run_async(
     // Load or create persistent state
     let mut state = RunState::load_or_new(&config.state_file)?;
 
-    // Restore persisted balances into the engine
-    for (node_id, balance) in &state.balances {
-        if *balance > 0.0 {
-            engine.balances.add(node_id, "USDC", *balance);
-        }
-    }
-
     let strategy_name = engine.workflow.name.clone();
     let reg_dir_ref = registry_dir.as_deref();
     let mut valuer_state = valuer::ValuerState::default();
+
+    // ── On-chain reconciliation ──
+    // Query actual on-chain state to detect stale/wrong state files.
+    // Venues already query on-chain in total_value() — no execute() needed.
+    reconcile_onchain_state(&mut engine, &mut state, &config, &tokens).await?;
 
     // Deploy phase: execute non-triggered nodes in topological order
     if !state.deploy_completed {
@@ -230,72 +229,8 @@ async fn run_async(
             }
             let _ = reg.save(reg_dir_ref);
         }
-    } else if state.initial_capital <= 0.0 && state.balances.values().sum::<f64>() <= 0.0 {
-        // Deploy "completed" but no capital was allocated (e.g. min_unwind blocked it).
-        // Reset and re-deploy so the strategy can try again with updated config.
-        println!("Deploy completed with zero capital — resetting for re-deploy...\n");
-        state.deploy_completed = false;
-
-        // Re-run the pre-deploy allocation + deploy
-        if let Some(rc) = engine.workflow.reserve.clone() {
-            if rc.adapter_address.is_some() {
-                println!("── Pre-deploy allocation (retry) ──");
-                match reserve::check_and_allocate(
-                    &rc,
-                    engine.workflow.valuer.as_ref(),
-                    &contracts,
-                    &tokens,
-                    &config.private_key,
-                    config.wallet_address,
-                    config.dry_run,
-                )
-                .await
-                {
-                    Ok(Some(record)) => {
-                        println!(
-                            "[allocator] Pulled ${:.2} from vault (excess=${:.2})",
-                            record.pulled, record.excess,
-                        );
-                        engine.balances.add("wallet", "USDC", record.pulled);
-                        sync_balances(&engine, &mut state);
-                        state.allocation_actions.push(record);
-                    }
-                    Ok(None) => println!("[allocator] No excess to pull from vault."),
-                    Err(e) => eprintln!("[allocator] ERROR: {:#}", e),
-                }
-            }
-        }
-
-        println!("── Deploy phase (retry) ──");
-        println!("Deploy order: {:?}", engine.deploy_order());
-        engine.deploy().await.context("deploy phase (retry)")?;
-        state.deploy_completed = true;
-        sync_balances(&engine, &mut state);
-
-        let deploy_tvl = engine.total_tvl().await;
-        state.initial_capital = if deploy_tvl > 0.0 {
-            deploy_tvl
-        } else {
-            state.balances.values().sum()
-        };
-        state.peak_tvl = state.initial_capital;
-
-        state.save(&config.state_file)?;
-        println!("Deploy complete. Capital: ${:.2}. State saved.\n", state.initial_capital);
-
-        if let Ok(mut reg) = Registry::load(reg_dir_ref) {
-            if let Some(entry) = reg.daemons.get_mut(&strategy_name) {
-                entry.capital = state.initial_capital;
-            }
-            let _ = reg.save(reg_dir_ref);
-        }
     } else {
-        // Backfill initial_capital for old state files (pre-perf-tracking)
-        if state.initial_capital == 0.0 {
-            state.initial_capital = state.balances.values().sum();
-            state.peak_tvl = state.initial_capital;
-        }
-        println!("Deploy already completed (loaded from state). Skipping.\n");
+        println!("Deploy already completed (on-chain capital confirmed). Skipping.\n");
     }
 
     // Execution phase
@@ -619,6 +554,159 @@ fn try_reload_workflow(path: &Path, engine: &mut Engine) -> Result<bool> {
     // Apply parameter updates
     let changed = engine.update_workflow(new_workflow);
     Ok(changed)
+}
+
+// ── On-chain reconciliation ──────────────────────────────────────────
+
+/// Query on-chain state and reconcile with persisted RunState.
+///
+/// This prevents the strategy from getting stuck on stale state. It:
+/// 1. Queries all venue `total_value()` — live venues query on-chain
+/// 2. Queries wallet ERC20 balance on-chain
+/// 3. Adjusts `deploy_completed` and `initial_capital` based on reality
+///
+/// Cumulative metrics (funding, interest, costs) are left unchanged — those
+/// are the strategy's own tracking and have no on-chain equivalent.
+async fn reconcile_onchain_state(
+    engine: &mut Engine,
+    state: &mut RunState,
+    config: &RuntimeConfig,
+    tokens: &evm::TokenManifest,
+) -> Result<()> {
+    println!("── Reconciling on-chain state ──");
+
+    // 1. Query venue on-chain values
+    let mut venue_tvl = 0.0;
+    for (node_id, venue) in &engine.venues {
+        let val = venue.total_value().await.unwrap_or(0.0);
+        if val > 0.5 {
+            println!("  [reconcile] {} = ${:.2}", node_id, val);
+        }
+        venue_tvl += val;
+    }
+
+    // 2. Query wallet ERC20 balance on-chain
+    let wallet_balance = query_wallet_erc20(&engine.workflow, config, tokens).await;
+    let onchain_tvl = venue_tvl + wallet_balance;
+
+    println!(
+        "[reconcile] On-chain TVL: ${:.2} (venues=${:.2}, wallet=${:.2})",
+        onchain_tvl, venue_tvl, wallet_balance,
+    );
+
+    // 3. Reconcile — distinguish venue capital vs wallet-only capital
+    //
+    // venue_tvl > 0 → positions exist on-chain → deploy definitely happened
+    // venue_tvl = 0 && wallet > 0 → funds in wallet but no positions
+    //   could be: allocator ran but deploy crashed, or manual send
+    //   → do NOT mark deployed — let deploy phase route wallet→venues
+    // both = 0 → nothing on-chain → need fresh allocation + deploy
+    if venue_tvl > 1.0 {
+        // Venue positions exist — deploy completed for certain
+        if !state.deploy_completed {
+            println!(
+                "[reconcile] On-chain venue capital ${:.2} found — marking deploy as completed",
+                venue_tvl,
+            );
+            state.deploy_completed = true;
+        }
+        if state.initial_capital <= 0.0 {
+            state.initial_capital = onchain_tvl;
+            state.peak_tvl = onchain_tvl;
+            println!(
+                "[reconcile] Set initial_capital = ${:.2} from on-chain TVL",
+                onchain_tvl,
+            );
+        }
+    } else if wallet_balance > 1.0 && !state.deploy_completed {
+        // Wallet has funds but no venue positions — allocator ran but deploy
+        // didn't complete (crash between allocate and deploy). Seed the wallet
+        // balance so deploy can route it to venues.
+        println!(
+            "[reconcile] Wallet has ${:.2} but no venue positions — will deploy",
+            wallet_balance,
+        );
+        engine.balances.add("wallet", "USDC", wallet_balance);
+    } else if state.deploy_completed && onchain_tvl < 1.0 {
+        // State says deployed but on-chain is empty — reset for re-deploy
+        println!("[reconcile] State says deployed but on-chain TVL is $0 — resetting for re-deploy");
+        state.deploy_completed = false;
+        state.balances.clear();
+    }
+
+    // Save reconciled state
+    state.save(&config.state_file)?;
+    println!();
+    Ok(())
+}
+
+/// Query the wallet's ERC20 token balance on-chain.
+async fn query_wallet_erc20(
+    workflow: &Workflow,
+    config: &RuntimeConfig,
+    tokens: &evm::TokenManifest,
+) -> f64 {
+    // Find the wallet node to get its token and chain
+    let (token_symbol, chain) = match workflow
+        .nodes
+        .iter()
+        .find(|n| matches!(n, Node::Wallet { .. }))
+    {
+        Some(Node::Wallet { token, chain, .. }) => (token.clone(), chain.clone()),
+        _ => return 0.0,
+    };
+
+    let rpc_url = match chain.rpc_url() {
+        Some(url) => url,
+        None => return 0.0,
+    };
+
+    let token_addr = match evm::resolve_token(tokens, &chain, &token_symbol) {
+        Some(addr) => addr,
+        None => {
+            eprintln!(
+                "[reconcile] Cannot resolve token address for {}",
+                token_symbol
+            );
+            return 0.0;
+        }
+    };
+
+    match query_erc20_balance(rpc_url, token_addr, config.wallet_address).await {
+        Ok(bal) => {
+            if bal > 0.01 {
+                println!(
+                    "  [reconcile] wallet ERC20 ({}) = ${:.2}",
+                    token_symbol, bal
+                );
+            }
+            bal
+        }
+        Err(e) => {
+            eprintln!(
+                "[reconcile] Failed to query wallet ERC20 balance: {:#}",
+                e
+            );
+            0.0
+        }
+    }
+}
+
+/// Query an ERC20 token balance for an address, fetching decimals on-chain.
+async fn query_erc20_balance(
+    rpc_url: &str,
+    token_addr: alloy::primitives::Address,
+    wallet_addr: alloy::primitives::Address,
+) -> Result<f64> {
+    let rp = evm::read_provider(rpc_url)?;
+    let token = evm::IERC20::new(token_addr, &rp);
+    let decimals = token.decimals().call().await.context("ERC20.decimals")?;
+    let balance_raw = token
+        .balanceOf(wallet_addr)
+        .call()
+        .await
+        .context("ERC20.balanceOf")?;
+    Ok(evm::from_token_units(balance_raw, decimals))
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
