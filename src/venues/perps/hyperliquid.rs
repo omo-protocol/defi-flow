@@ -147,11 +147,16 @@ impl HyperliquidPerp {
                                 let spot_name = self.resolve_spot_coin(our_coin);
                                 if bal.coin == *our_coin || bal.coin == spot_name {
                                     let mids = self.get_mids().await.unwrap_or_default();
-                                    let price = mids.get(&bal.coin).copied().unwrap_or(1.0);
+                                    // Use perp coin name for price lookup (mids keys are perp names)
+                                    let price = mids.get(our_coin.as_str())
+                                        .or_else(|| mids.get(&bal.coin))
+                                        .copied()
+                                        .unwrap_or(1.0);
+                                    // Store under perp coin name so total_value() can look up mids
                                     self.positions.insert(
-                                        bal.coin.clone(),
+                                        our_coin.clone(),
                                         PositionState {
-                                            coin: bal.coin.clone(),
+                                            coin: our_coin.clone(),
                                             size: total,
                                             entry_price: price,
                                             leverage: 1.0,
