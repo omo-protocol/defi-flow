@@ -26,6 +26,9 @@ pub struct RunState {
     /// Capital deployed at the end of the deploy phase (sum of all node balances).
     #[serde(default)]
     pub initial_capital: f64,
+    /// Last computed TVL (venues + wallet, queried on-chain).
+    #[serde(default)]
+    pub last_tvl: f64,
     /// Highest TVL observed since deploy.
     #[serde(default)]
     pub peak_tvl: f64,

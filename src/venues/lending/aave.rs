@@ -576,12 +576,27 @@ impl Venue for AaveLending {
     }
 
     async fn tick(&mut self, _now: u64, _dt_secs: f64) -> Result<()> {
+        // Track lending interest: delta between current on-chain value and initial deposit.
+        if !self.dry_run {
+            if let Some(ctx) = &self.cached_ctx {
+                if let Ok(current) = self.query_onchain_value(ctx).await {
+                    if current > 0.0 {
+                        let net_deposited = self.supplied_value - self.borrowed_value;
+                        if net_deposited > 0.0 {
+                            self.metrics.lending_interest = current - net_deposited;
+                        }
+                    }
+                }
+            }
+        }
+
         if self.supplied_value > 0.0 || self.borrowed_value > 0.0 {
             println!(
-                "  LENDING TICK: supplied=${:.2}, borrowed=${:.2}, net=${:.2}",
+                "  LENDING TICK: supplied=${:.2}, borrowed=${:.2}, net=${:.2}, interest=${:.4}",
                 self.supplied_value,
                 self.borrowed_value,
                 self.supplied_value - self.borrowed_value,
+                self.metrics.lending_interest,
             );
         }
 

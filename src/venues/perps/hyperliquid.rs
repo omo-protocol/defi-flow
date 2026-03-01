@@ -36,6 +36,8 @@ pub struct HyperliquidPerp {
     coin: Option<String>,
     /// True if this venue is for a Spot node (not a Perp node).
     is_spot: bool,
+    /// Total margin deposited into HL positions (for PnL tracking).
+    margin_deposited: f64,
     /// Cached alpha stats from funding history. Updated during tick().
     cached_alpha: Option<(f64, f64)>,
     /// Timestamp of last funding history fetch (avoid hammering API).
@@ -66,6 +68,7 @@ impl HyperliquidPerp {
             metrics: SimMetrics::default(),
             coin,
             is_spot,
+            margin_deposited: 0.0,
             cached_alpha: None,
             last_alpha_fetch: 0,
         })
@@ -181,6 +184,7 @@ impl HyperliquidPerp {
                     leverage,
                 },
             );
+            self.margin_deposited += input_amount;
             return Ok(ExecutionResult::PositionUpdate {
                 consumed: input_amount,
                 output: None,
@@ -236,6 +240,7 @@ impl HyperliquidPerp {
                         }
                     }
                 }
+                self.margin_deposited += input_amount;
                 Ok(ExecutionResult::PositionUpdate {
                     consumed: input_amount,
                     output: None,
@@ -530,6 +535,15 @@ impl Venue for HyperliquidPerp {
     }
 
     async fn tick(&mut self, now: u64, _dt_secs: f64) -> Result<()> {
+        // Track total PnL (funding + unrealized) for perp positions
+        if !self.is_spot && !self.dry_run && self.margin_deposited > 0.0 {
+            if let Ok(account_value) = self.total_value().await {
+                if account_value > 0.0 {
+                    self.metrics.funding_pnl = account_value - self.margin_deposited;
+                }
+            }
+        }
+
         if !self.positions.is_empty() {
             let mids = self.get_mids().await.unwrap_or_default();
             for pos in self.positions.values() {

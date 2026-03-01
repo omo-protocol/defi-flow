@@ -368,7 +368,8 @@ async fn run_async(
         }
 
         // Update performance metrics
-        let tvl = engine.total_tvl().await;
+        let tvl = onchain_tvl(&engine, &config, &tokens).await;
+        state.last_tvl = tvl;
         if tvl > state.peak_tvl {
             state.peak_tvl = tvl;
         }
@@ -382,7 +383,7 @@ async fn run_async(
         println!("\nTVL: ${:.2}", tvl);
 
         // Push TVL to onchain valuer (if configured)
-        let push_tvl = onchain_tvl(&engine, &config, &tokens).await;
+        let push_tvl = tvl;
         if let Some(ref vc) = engine.workflow.valuer {
             match valuer::maybe_push_value(
                 vc, &contracts, &config.private_key, push_tvl,
@@ -501,7 +502,8 @@ async fn run_async(
                     }
 
                     // Update performance metrics
-                    let tvl = engine.total_tvl().await;
+                    let tvl = onchain_tvl(&engine, &config, &tokens).await;
+                    state.last_tvl = tvl;
                     if tvl > state.peak_tvl {
                         state.peak_tvl = tvl;
                     }
@@ -515,9 +517,7 @@ async fn run_async(
                     println!("[{}] TVL: ${:.2}\n", now.format("%H:%M:%S"), tvl);
 
                     // Push TVL to onchain valuer (if configured)
-                    // Always compute on-chain TVL (venue positions + wallet balance)
-                    // to avoid pushing stale engine state. Never push $0.
-                    let push_tvl = onchain_tvl(&engine, &config, &tokens).await;
+                    let push_tvl = tvl;
                     if let Some(ref vc) = engine.workflow.valuer {
                         match valuer::maybe_push_value(
                             vc, &contracts, &config.private_key, push_tvl,

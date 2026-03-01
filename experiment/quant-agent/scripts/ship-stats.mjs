@@ -42,8 +42,10 @@ async function readJson(path) {
 
 // ── Compute derived metrics ─────────────────────────────
 function computeMetrics(name, entry, state) {
+  // Prefer last_tvl (on-chain queried) over balances sum (engine routing state).
   const balances = state.balances || {};
-  const tvl = Object.values(balances).reduce((a, b) => a + b, 0);
+  const balanceSum = Object.values(balances).reduce((a, b) => a + b, 0);
+  const tvl = state.last_tvl > 0 ? state.last_tvl : balanceSum;
   const initialCapital = state.initial_capital || 0;
   const peakTvl = state.peak_tvl || tvl;
   const startedAt = entry.started_at ? new Date(entry.started_at) : null;

@@ -85,8 +85,10 @@ async function collectStrategyStats() {
       const state = await readJson(statePath);
       if (!state) continue;
 
+      // Prefer last_tvl (on-chain queried) over balances sum (engine routing state).
       const balances = state.balances || {};
-      const tvl = Object.values(balances).reduce((a, b) => a + b, 0);
+      const balanceSum = Object.values(balances).reduce((a, b) => a + b, 0);
+      const tvl = state.last_tvl > 0 ? state.last_tvl : balanceSum;
       const initial = state.initial_capital || 0;
       const pnl = initial > 0 ? tvl - initial : 0;
 
@@ -124,7 +126,11 @@ async function collectVaultStats(vaultsConfig, wallet) {
       continue;
     }
 
-    const totalAssets = parseUnits(cast(v.address, "totalAssets()(uint256)", [], rpc), decimals);
+    // Try Morpho V2 _totalAssets()(uint128) first, fall back to standard totalAssets()
+    const morphoRaw = cast(v.address, "0xce04bebb", [], rpc);
+    const morphoAssets = morphoRaw ? parseUnits(morphoRaw, decimals) : 0;
+    const stdAssets = parseUnits(cast(v.address, "totalAssets()(uint256)", [], rpc), decimals);
+    const totalAssets = morphoAssets > 0 ? morphoAssets : stdAssets;
     const idle = baseToken
       ? parseUnits(cast(baseToken, "balanceOf(address)(uint256)", [v.address], rpc), decimals)
       : 0;
