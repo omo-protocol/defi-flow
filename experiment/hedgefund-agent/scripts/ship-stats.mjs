@@ -28,6 +28,7 @@ const VAULTS_JSON = process.env.VAULTS_JSON || "/app/workspace/vaults.json";
 const STRATEGY_STATES_DIR =
   process.env.STRATEGY_STATES_DIR || "/app/strategy-states";
 
+const INITIAL_CAPITAL = parseFloat(process.env.INITIAL_CAPITAL || "90");
 const HYPEREVM_RPC = "https://rpc.hyperliquid.xyz/evm";
 const BASE_RPC = "https://mainnet.base.org";
 const USDT0 = "0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb";
@@ -103,7 +104,7 @@ function toEth(raw) {
 
 // ── Price helpers ───────────────────────────────────────
 
-async function getEthPrice() {
+async function getPrices() {
   try {
     const resp = await fetch(HL_INFO_URL, {
       method: "POST",
@@ -111,23 +112,12 @@ async function getEthPrice() {
       body: JSON.stringify({ type: "allMids" }),
     });
     const mids = await resp.json();
-    return parseFloat(mids["ETH"] || "0");
+    return {
+      eth: parseFloat(mids["ETH"] || "0"),
+      hype: parseFloat(mids["HYPE"] || "0"),
+    };
   } catch {
-    return 0;
-  }
-}
-
-// ── Wallet address from private key (secp256k1) ────────
-// Minimal: use cast if available, otherwise skip
-function walletAddress() {
-  if (!PRIVATE_KEY) return null;
-  try {
-    return execSync(`cast wallet address --private-key ${PRIVATE_KEY}`, {
-      encoding: "utf-8",
-      timeout: 5_000,
-    }).trim();
-  } catch {
-    return null;
+    return { eth: 0, hype: 0 };
   }
 }
 
@@ -141,7 +131,7 @@ async function readJson(path) {
 
 // ── Query vault positions ───────────────────────────────
 
-async function queryVaultPosition(vaultAddr, wallet, rpc, decimals) {
+async function queryVaultPosition(vaultAddr, wallet, rpc) {
   const walletEnc = encodeAddress(wallet);
 
   const [sharesHex, _totalAssetsHex, totalAssetsHex, totalSupplyHex] =
@@ -217,7 +207,6 @@ if (!wallet) {
 
 const vaultsConfig = await readJson(VAULTS_JSON);
 const rpc = vaultsConfig?.chain?.rpc_url || HYPEREVM_RPC;
-const decimals = vaultsConfig?.base_token?.decimals || 6;
 const walletEnc = encodeAddress(wallet);
 
 // 1. Agent wallet USDT0 on HyperEVM
@@ -230,7 +219,7 @@ const [baseEthHex, evmEthHex] = await Promise.all([
   ethBalance(rpc, wallet),
 ]);
 const baseEthBalance = toEth(decode(baseEthHex));
-const evmEthBalance = toEth(decode(evmEthHex));
+const evmHypeBalance = toEth(decode(evmEthHex));
 
 // 3. Vault positions — dynamic from vaults.json
 const vaults = [];
@@ -244,7 +233,7 @@ if (vaultsConfig?.vaults) {
       continue;
     }
 
-    const pos = await queryVaultPosition(v.address, wallet, rpc, decimals);
+    const pos = await queryVaultPosition(v.address, wallet, rpc);
     totalVaultPositions += pos.our_position_value;
 
     const reserveHealth =
@@ -298,10 +287,12 @@ if (vaultsConfig?.vaults) {
 
 const totalStrategyTvl = strategies.reduce((s, st) => s + st.tvl, 0);
 
-// Include all ETH at market price in portfolio TVL
-const ethPrice = await getEthPrice();
-const totalEthValue = (baseEthBalance + evmEthBalance) * ethPrice;
-const portfolioTvl = walletBalance + totalVaultPositions + totalEthValue;
+// Price Base ETH and HyperEVM native (HYPE) separately
+const prices = await getPrices();
+const baseEthValue = baseEthBalance * prices.eth;
+const evmHypeValue = evmHypeBalance * prices.hype; // HyperEVM native = HYPE, not ETH
+const totalGasValue = baseEthValue + evmHypeValue;
+const portfolioTvl = walletBalance + totalVaultPositions + totalGasValue;
 
 const client = new MongoClient(MONGODB_URI, {
   serverSelectionTimeoutMS: 10_000,
@@ -315,15 +306,17 @@ try {
   await col.createIndex({ timestamp: 1 }).catch(() => {});
   await col.createIndex({ wallet: 1, timestamp: 1 }).catch(() => {});
 
-  // Fetch previous peak + initial_capital from MongoDB (first snapshot)
+  // Fetch previous peak from MongoDB for drawdown tracking
   const prev = await col
     .find({ wallet })
     .sort({ timestamp: -1 })
     .limit(1)
     .toArray();
   const prevDoc = prev[0];
-  const initialCapital = prevDoc?.initial_capital || portfolioTvl;
-  const peakTvl = Math.max(prevDoc?.peak_tvl || 0, portfolioTvl);
+  const initialCapital = INITIAL_CAPITAL;
+  // Reset peak if previous was from inflated data (HYPE-as-ETH bug)
+  const prevPeak = prevDoc?.peak_tvl || 0;
+  const peakTvl = prevPeak > portfolioTvl * 3 ? portfolioTvl : Math.max(prevPeak, portfolioTvl);
   const maxDrawdown = peakTvl > 0 ? Math.max(0, 1 - portfolioTvl / peakTvl) : 0;
   const pnl = portfolioTvl - initialCapital;
 
@@ -337,9 +330,12 @@ try {
     wallet_balance: walletBalance,
     vault_positions: totalVaultPositions,
     base_eth_balance: baseEthBalance,
-    evm_eth_balance: evmEthBalance,
-    total_eth_value: totalEthValue,
-    eth_price: ethPrice,
+    base_eth_value: baseEthValue,
+    evm_hype_balance: evmHypeBalance,
+    evm_hype_value: evmHypeValue,
+    total_gas_value: totalGasValue,
+    eth_price: prices.eth,
+    hype_price: prices.hype,
     peak_tvl: peakTvl,
     max_drawdown: maxDrawdown,
     strategy_tvl: totalStrategyTvl,
@@ -353,7 +349,7 @@ try {
 
   console.log(
     `[stats] ${wallet.slice(0, 8)}… TVL=$${portfolioTvl.toFixed(2)} ` +
-      `(wallet=$${walletBalance.toFixed(2)} vaults=$${totalVaultPositions.toFixed(2)} eth=$${totalEthValue.toFixed(2)}) ` +
+      `(wallet=$${walletBalance.toFixed(2)} vaults=$${totalVaultPositions.toFixed(2)} gas=$${totalGasValue.toFixed(2)}) ` +
       `PnL=$${pnl.toFixed(2)} DD=${(maxDrawdown * 100).toFixed(1)}%`
   );
   for (const v of vaults.filter((v) => v.status === "active")) {
