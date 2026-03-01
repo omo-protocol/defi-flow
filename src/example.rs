@@ -211,6 +211,7 @@ pub fn run() -> anyhow::Result<()> {
                 id: "pendle_pt_khype".into(),
                 market: "PT-kHYPE".into(),
                 action: PendleAction::MintPt,
+                input_token: Some("HYPE".into()),
                 trigger: None,
             },
             // ── Periodic: collect perp funding daily ────────────

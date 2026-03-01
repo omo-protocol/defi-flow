@@ -167,6 +167,7 @@ export type PendleNode = {
   id: string;
   market: string;
   action: PendleAction;
+  input_token?: string;
   trigger?: Trigger;
 };
 
@@ -269,7 +270,7 @@ export function createDefaultNode(type: DefiNodeType, id: string): DefiNode {
     case "options":
       return { type: "options", id, venue: "Rysk", asset: "ETH", action: "sell_covered_call", delta_target: 0.3, days_to_expiry: 30 };
     case "pendle":
-      return { type: "pendle", id, market: "PT-kHYPE", action: "mint_pt" };
+      return { type: "pendle", id, market: "PT-kHYPE", action: "mint_pt", input_token: "HYPE" };
     case "movement":
       return { type: "movement", id, movement_type: "bridge", provider: "LiFi", from_token: "USDC", to_token: "USDC", from_chain: { name: "base", chain_id: 8453, rpc_url: "https://mainnet.base.org" }, to_chain: hyperevm };
     case "optimizer":
@@ -304,7 +305,7 @@ export function getOutputToken(node: DefiNode): string {
     case "options":
       return "USDC";
     case "pendle":
-      return "USDC";
+      return node.input_token ?? "USDC";
   }
 }
 
@@ -334,7 +335,7 @@ export function getInputToken(node: DefiNode): string {
     case "options":
       return "USDC";
     case "pendle":
-      return "USDC";
+      return node.input_token ?? "USDC";
   }
 }
 
@@ -357,7 +358,7 @@ const NODE_FIELDS: Record<string, string[]> = {
   vault: ["type", "id", "archetype", "chain", "vault_address", "asset", "action", "defillama_slug", "trigger"],
   lp: ["type", "id", "venue", "pool", "action", "tick_lower", "tick_upper", "tick_spacing", "chain", "trigger"],
   options: ["type", "id", "venue", "asset", "action", "delta_target", "days_to_expiry", "min_apy", "batch_size", "roll_days_before", "trigger"],
-  pendle: ["type", "id", "market", "action", "trigger"],
+  pendle: ["type", "id", "market", "action", "input_token", "trigger"],
   movement: ["type", "id", "movement_type", "provider", "from_token", "to_token", "from_chain", "to_chain", "trigger"],
   optimizer: ["type", "id", "strategy", "kelly_fraction", "max_allocation", "drift_threshold", "allocations", "trigger"],
 };

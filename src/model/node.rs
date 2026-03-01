@@ -480,6 +480,11 @@ pub enum Node {
         market: String,
         /// What action to perform.
         action: PendleAction,
+        /// Input token symbol for SY deposit (e.g. "HYPE", "kHYPE", "stETH").
+        /// Determines how the venue deposits into the SY contract before minting.
+        /// If omitted, the venue assumes the input is already SY-compatible.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_token: Option<String>,
         /// Optional periodic trigger (e.g. claim rewards weekly).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trigger: Option<Trigger>,
@@ -919,10 +924,17 @@ impl Node {
                 }),
                 _ => None,
             },
-            Node::Pendle { action, .. } => match action {
+            Node::Pendle {
+                action,
+                input_token,
+                ..
+            } => match action {
                 PendleAction::RedeemPt | PendleAction::RedeemYt | PendleAction::ClaimRewards => {
                     Some(TokenFlow {
-                        token: "USDC".to_string(),
+                        token: input_token
+                            .as_deref()
+                            .unwrap_or("USDC")
+                            .to_string(),
                         chain: Some(Chain::hyperevm()),
                     })
                 }
@@ -1013,9 +1025,16 @@ impl Node {
                 }),
                 _ => None,
             },
-            Node::Pendle { action, .. } => match action {
+            Node::Pendle {
+                action,
+                input_token,
+                ..
+            } => match action {
                 PendleAction::MintPt | PendleAction::MintYt => Some(TokenFlow {
-                    token: "USDC".to_string(),
+                    token: input_token
+                        .as_deref()
+                        .unwrap_or("USDC")
+                        .to_string(),
                     chain: Some(Chain::hyperevm()),
                 }),
                 _ => None,

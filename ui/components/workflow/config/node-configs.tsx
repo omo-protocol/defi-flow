@@ -448,6 +448,12 @@ function PendleConfig({ node, defi, onUpdate }: ConfigProps<PendleNode>) {
           { value: "claim_rewards", label: "Claim Rewards" },
         ]}
       />
+      <TextField
+        label="Input Token"
+        value={defi.input_token ?? ""}
+        onChange={(v) => onUpdate("input_token", v || undefined)}
+        placeholder="HYPE"
+      />
       <TriggerConfig
         value={defi.trigger}
         onChange={(t) => onUpdate("trigger", t)}

@@ -50,6 +50,21 @@ sol! {
     }
 }
 
+// ── SY contract interface (deposit input token → SY shares) ───────
+
+sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    contract IPendleSY {
+        function deposit(
+            address receiver,
+            address tokenIn,
+            uint256 amountTokenToDeposit,
+            uint256 minSharesOut
+        ) external payable returns (uint256 amountSharesOut);
+    }
+}
+
 // ── Contract key derivation ──────────────────────────────────────
 
 /// Derive a contracts manifest key from a Pendle market name.
@@ -73,11 +88,14 @@ pub struct PendleYield {
     wallet_address: Address,
     private_key: String,
     dry_run: bool,
+    tokens: evm::TokenManifest,
     contracts: evm::ContractManifest,
     pt_holdings: HashMap<String, f64>,
     yt_holdings: HashMap<String, f64>,
-    /// Pre-populated market name from node for on-chain queries.
+    /// Pre-populated from node for on-chain queries and token resolution.
     market_name: Option<String>,
+    /// Input token symbol from node (e.g. "HYPE", "kHYPE").
+    input_token: Option<String>,
     /// Cached alpha stats from on-chain value tracking.
     cached_alpha: Option<(f64, f64)>,
     /// Previous value sample for APY computation — single point, not a Vec.
@@ -87,27 +105,39 @@ pub struct PendleYield {
 impl PendleYield {
     pub fn new(
         config: &RuntimeConfig,
+        tokens: &evm::TokenManifest,
         contracts: &evm::ContractManifest,
         node: &Node,
     ) -> Result<Self> {
-        // Pre-populate market name so total_value() can query on-chain after restart.
-        let market_name = if let Node::Pendle { market, .. } = node {
-            Some(market.clone())
+        let (market_name, input_token) = if let Node::Pendle {
+            market,
+            input_token,
+            ..
+        } = node
+        {
+            (Some(market.clone()), input_token.clone())
         } else {
-            None
+            (None, None)
         };
 
         Ok(PendleYield {
             wallet_address: config.wallet_address,
             private_key: config.private_key.clone(),
             dry_run: config.dry_run,
+            tokens: tokens.clone(),
             contracts: contracts.clone(),
             pt_holdings: HashMap::new(),
             yt_holdings: HashMap::new(),
             market_name,
+            input_token,
             cached_alpha: None,
             prev_value: None,
         })
+    }
+
+    /// Resolve the output token symbol for redeem/claim operations.
+    fn output_token(&self) -> String {
+        self.input_token.clone().unwrap_or_else(|| "USDC".to_string())
     }
 
     /// Query on-chain PT and YT token balances for a market.
@@ -143,6 +173,69 @@ impl PendleYield {
         Ok(total)
     }
 
+    /// Deposit input token into the SY contract, returning the SY balance.
+    ///
+    /// For native-token inputs (HYPE):
+    ///   LiFi outputs native HYPE → deposit into SY via SY.deposit{value}(wallet, address(0), amount, 0)
+    ///
+    /// For ERC20 inputs (kHYPE, stETH, WHYPE, etc.):
+    ///   Approve the SY contract → SY.deposit(wallet, tokenIn, amount, 0)
+    async fn deposit_into_sy<P: alloy::providers::Provider + Clone>(
+        &self,
+        provider: &P,
+        sy_addr: Address,
+        chain: &Chain,
+        amount_units: U256,
+    ) -> Result<U256> {
+        let input_tok = self.input_token.as_deref().unwrap_or("USDC");
+
+        // Check if input token resolves to native (address(0)) or an ERC20
+        let token_addr = evm::resolve_token(&self.tokens, chain, input_tok);
+        let is_native = token_addr.map_or(false, |a| a == Address::ZERO);
+
+        if is_native {
+            // Native token (HYPE) — LiFi swap outputs native to wallet, deposit with msg.value
+            let sy = IPendleSY::new(sy_addr, provider);
+            println!("  PENDLE: depositing {:.4} native {} into SY",
+                evm::from_token_units(amount_units, 18), input_tok);
+            let receipt = sy.deposit(self.wallet_address, Address::ZERO, amount_units, U256::ZERO)
+                .value(amount_units)
+                .send().await.context("SY deposit (native)")?
+                .get_receipt().await?;
+            println!("  PENDLE: SY deposit tx: {:?}", receipt.transaction_hash);
+        } else {
+            // ERC20 input (kHYPE, WHYPE, stETH, etc.)
+            let addr = token_addr
+                .with_context(|| format!("Token '{}' not in manifest for chain {}", input_tok, chain))?;
+
+            let erc20 = IERC20::new(addr, provider);
+            let bal = erc20.balanceOf(self.wallet_address).call().await
+                .context("input token balanceOf")?;
+            let actual = amount_units.min(bal);
+            if actual.is_zero() {
+                anyhow::bail!("No {} balance for SY deposit", input_tok);
+            }
+
+            println!("  PENDLE: approving {:.4} {} for SY",
+                evm::from_token_units(actual, 18), input_tok);
+            erc20.approve(sy_addr, actual)
+                .send().await.context("approve input for SY")?
+                .get_receipt().await?;
+
+            let sy = IPendleSY::new(sy_addr, provider);
+            let receipt = sy.deposit(self.wallet_address, addr, actual, U256::ZERO)
+                .send().await.context("SY deposit (ERC20)")?
+                .get_receipt().await?;
+            println!("  PENDLE: SY deposit tx: {:?}", receipt.transaction_hash);
+        }
+
+        // Return SY balance after deposit
+        let sy_erc20 = IERC20::new(sy_addr, provider);
+        let sy_bal = sy_erc20.balanceOf(self.wallet_address).call().await
+            .context("SY balanceOf after deposit")?;
+        Ok(sy_bal)
+    }
+
     async fn execute_mint_pt(
         &mut self,
         market_name: &str,
@@ -155,8 +248,10 @@ impl PendleYield {
         let chain = pendle_chain(&self.contracts, market_name);
 
         println!(
-            "  PENDLE MINT_PT: {} with ${:.2}",
+            "  PENDLE MINT_PT: {} with {:.4} {} (input_token={:?})",
             market_name, input_amount,
+            self.input_token.as_deref().unwrap_or("?"),
+            self.input_token,
         );
 
         if let Some(ref ch) = chain {
@@ -175,7 +270,7 @@ impl PendleYield {
         }
 
         if self.dry_run {
-            println!("  PENDLE: [DRY RUN] would approve SY + mintPyFromSy()");
+            println!("  PENDLE: [DRY RUN] would deposit → SY → mintPyFromSy()");
             let pt_amount = input_amount * 0.98;
             *self
                 .pt_holdings
@@ -215,18 +310,24 @@ impl PendleYield {
 
         let amount_units = evm::to_token_units(input_amount, 1.0, 18);
 
+        // Step 1: Deposit input token into SY contract
+        let sy_balance = self.deposit_into_sy(&provider, sy_addr, &ch, amount_units).await?;
+        println!("  PENDLE: SY balance after deposit: {}", evm::from_token_units(sy_balance, 18));
+
+        // Step 2: Approve SY tokens for router
         let erc20 = IERC20::new(sy_addr, &provider);
         erc20
-            .approve(router_addr, amount_units)
+            .approve(router_addr, sy_balance)
             .send()
             .await
-            .context("approve SY")?
+            .context("approve SY for router")?
             .get_receipt()
             .await?;
 
+        // Step 3: Mint PT+YT from SY
         let router = IPendleRouter::new(router_addr, &provider);
         let result = router
-            .mintPyFromSy(self.wallet_address, yt_addr, amount_units, U256::ZERO)
+            .mintPyFromSy(self.wallet_address, yt_addr, sy_balance, U256::ZERO)
             .send()
             .await
             .context("mintPyFromSy")?;
@@ -245,10 +346,11 @@ impl PendleYield {
 
     async fn execute_redeem_pt(&mut self, market_name: &str) -> Result<ExecutionResult> {
         let holdings = self.pt_holdings.get(market_name).copied().unwrap_or(0.0);
+        let out_token = self.output_token();
 
         println!(
-            "  PENDLE REDEEM_PT: {} (holdings: ${:.2})",
-            market_name, holdings,
+            "  PENDLE REDEEM_PT: {} (holdings: {:.4} {})",
+            market_name, holdings, out_token,
         );
 
         if self.dry_run {
@@ -256,7 +358,7 @@ impl PendleYield {
             let output = holdings;
             self.pt_holdings.remove(market_name);
             return Ok(ExecutionResult::TokenOutput {
-                token: "USDC".to_string(),
+                token: out_token,
                 amount: output,
             });
         }
@@ -264,7 +366,7 @@ impl PendleYield {
         let output = holdings;
         self.pt_holdings.remove(market_name);
         Ok(ExecutionResult::TokenOutput {
-            token: "USDC".to_string(),
+            token: out_token,
             amount: output,
         })
     }
@@ -289,7 +391,7 @@ impl Venue for PendleYield {
                 PendleAction::MintPt => self.execute_mint_pt(market, input_amount).await,
                 PendleAction::RedeemPt => self.execute_redeem_pt(market).await,
                 PendleAction::MintYt => {
-                    println!("  PENDLE MINT_YT: {} ${:.2}", market, input_amount);
+                    println!("  PENDLE MINT_YT: {} {:.4}", market, input_amount);
                     if self.dry_run {
                         println!("  PENDLE: [DRY RUN] would mint YT");
                     }
@@ -307,7 +409,7 @@ impl Venue for PendleYield {
                     }
                     self.yt_holdings.remove(market);
                     Ok(ExecutionResult::TokenOutput {
-                        token: "USDC".to_string(),
+                        token: self.output_token(),
                         amount: holdings,
                     })
                 }
@@ -349,7 +451,7 @@ impl Venue for PendleYield {
         let f = fraction.min(1.0);
         let freed = total * f;
 
-        println!("  PENDLE: UNWIND {:.1}% (${:.2})", f * 100.0, freed);
+        println!("  PENDLE: UNWIND {:.1}% ({:.4})", f * 100.0, freed);
 
         if self.dry_run {
             println!(
@@ -461,7 +563,7 @@ impl Venue for PendleYield {
         let pt_total: f64 = self.pt_holdings.values().sum();
         let yt_total: f64 = self.yt_holdings.values().sum();
         if pt_total > 0.0 || yt_total > 0.0 {
-            println!("  PENDLE TICK: PT=${:.2}, YT=${:.2}", pt_total, yt_total,);
+            println!("  PENDLE TICK: PT={:.4}, YT={:.4}", pt_total, yt_total,);
         }
 
         // Query on-chain position value and compute APY from single previous sample.
@@ -484,4 +586,3 @@ impl Venue for PendleYield {
         self.cached_alpha
     }
 }
-

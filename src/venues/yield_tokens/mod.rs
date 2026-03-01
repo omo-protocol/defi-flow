@@ -43,9 +43,9 @@ impl VenueCategory for YieldTokensCategory {
                     Ok(Some(Box::new(simulator::YieldSimulator::new(rows))))
                 }
                 BuildMode::Live {
-                    config, contracts, ..
+                    config, tokens, contracts,
                 } => Ok(Some(Box::new(pendle::PendleYield::new(
-                    config, contracts, node,
+                    config, tokens, contracts, node,
                 )?))),
             },
             _ => Ok(None),

@@ -244,7 +244,7 @@ async fn check_movement_quotes(workflow: &Workflow) -> Vec<ValidationError> {
         // Use a small test amount (1 USDC = 1_000_000 for 6-decimal tokens,
         // or 1e18 for 18-decimal tokens)
         let test_amount = match from_token.to_uppercase().as_str() {
-            "USDC" | "USDT" => "1000000",
+            "USDC" | "USDT" | "USDT0" | "USDE" => "1000000",
             "WBTC" | "CBBTC" => "100000000",
             _ => "1000000000000000000", // 1e18
         };
@@ -421,10 +421,13 @@ fn group_addresses(
 ) -> HashMap<String, Vec<AddressCheck>> {
     let mut groups: HashMap<String, Vec<AddressCheck>> = HashMap::new();
 
-    // Token manifest
+    // Token manifest (skip native token address — address(0) has no code)
     if let Some(ref tokens) = workflow.tokens {
         for (symbol, chain_map) in tokens {
             for (chain_name, address_str) in chain_map {
+                if address_str.parse::<Address>().ok() == Some(Address::ZERO) {
+                    continue; // native token, no code to check
+                }
                 groups
                     .entry(chain_name.clone())
                     .or_default()
