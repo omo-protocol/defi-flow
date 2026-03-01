@@ -53,6 +53,7 @@ pub struct LiFiMovement {
     tokens: evm::TokenManifest,
     slippage_bps: f64,
     metrics: SimMetrics,
+    decimals_cache: std::collections::HashMap<(String, String), u8>,
 }
 
 impl LiFiMovement {
@@ -70,7 +71,22 @@ impl LiFiMovement {
             tokens: tokens.clone(),
             slippage_bps: config.slippage_bps,
             metrics: SimMetrics::default(),
+            decimals_cache: std::collections::HashMap::new(),
         })
+    }
+
+    async fn query_decimals(&mut self, token: &str, chain: &Chain) -> Result<u8> {
+        let key = (token.to_string(), chain.to_string());
+        if let Some(&d) = self.decimals_cache.get(&key) {
+            return Ok(d);
+        }
+        let addr = evm::resolve_token(&self.tokens, chain, token)
+            .with_context(|| format!("token '{token}' not in manifest for {chain}"))?;
+        let rpc = chain.rpc_url().context("chain requires rpc_url for decimals query")?;
+        let d = evm::query_decimals(rpc, addr).await
+            .with_context(|| format!("decimals() call failed for {token} on {chain}"))?;
+        self.decimals_cache.insert(key, d);
+        Ok(d)
     }
 
     async fn get_quote(
@@ -126,6 +142,7 @@ impl LiFiMovement {
     async fn execute_swap(
         &mut self,
         from_chain: &Chain,
+        to_chain: &Chain,
         from_token: &str,
         to_token: &str,
         input_amount: f64,
@@ -135,7 +152,7 @@ impl LiFiMovement {
             return Ok(ExecutionResult::Noop);
         }
 
-        let decimals = token_decimals(from_token);
+        let decimals = self.query_decimals(from_token, from_chain).await?;
         let amount_raw = (input_amount * 10f64.powi(decimals as i32)) as u128;
         let amount_wei = amount_raw.to_string();
 
@@ -145,11 +162,11 @@ impl LiFiMovement {
         );
 
         let quote = self
-            .get_quote(from_chain, from_chain, from_token, to_token, &amount_wei)
+            .get_quote(from_chain, to_chain, from_token, to_token, &amount_wei)
             .await?;
 
         let to_amount_raw: f64 = quote.estimate.to_amount.parse().unwrap_or(0.0);
-        let to_decimals = token_decimals(to_token);
+        let to_decimals = self.query_decimals(to_token, to_chain).await.unwrap_or(18);
         let output_amount = to_amount_raw / 10f64.powi(to_decimals as i32);
 
         println!(
@@ -201,7 +218,7 @@ impl LiFiMovement {
             return Ok(ExecutionResult::Noop);
         }
 
-        let decimals = token_decimals(token);
+        let decimals = self.query_decimals(token, from_chain).await?;
         let amount_raw = (input_amount * 10f64.powi(decimals as i32)) as u128;
         let amount_wei = amount_raw.to_string();
 
@@ -215,7 +232,8 @@ impl LiFiMovement {
             .await?;
 
         let to_amount_raw: f64 = quote.estimate.to_amount.parse().unwrap_or(0.0);
-        let output_amount = to_amount_raw / 10f64.powi(decimals as i32);
+        let to_decimals = self.query_decimals(token, to_chain).await.unwrap_or(decimals);
+        let output_amount = to_amount_raw / 10f64.powi(to_decimals as i32);
         let bridge_fee = input_amount - output_amount;
 
         println!(
@@ -274,7 +292,7 @@ impl Venue for LiFiMovement {
                     MovementType::Swap => {
                         let swap_chain =
                             from_chain.as_ref().cloned().unwrap_or_else(Chain::hyperevm);
-                        self.execute_swap(&swap_chain, from_token, to_token, input_amount)
+                        self.execute_swap(&swap_chain, &swap_chain, from_token, to_token, input_amount)
                             .await
                     }
                     MovementType::Bridge => {
@@ -287,11 +305,9 @@ impl Venue for LiFiMovement {
                         self.execute_bridge(fc, tc, from_token, input_amount).await
                     }
                     MovementType::SwapBridge => {
-                        // For now, LiFi handles swap+bridge atomically — same as swap
-                        // TODO: use LiFi's cross-chain swap endpoint
-                        let swap_chain =
-                            from_chain.as_ref().cloned().unwrap_or_else(Chain::hyperevm);
-                        self.execute_swap(&swap_chain, from_token, to_token, input_amount)
+                        let fc = from_chain.as_ref().cloned().unwrap_or_else(Chain::hyperevm);
+                        let tc = to_chain.as_ref().cloned().unwrap_or_else(Chain::hyperevm);
+                        self.execute_swap(&fc, &tc, from_token, to_token, input_amount)
                             .await
                     }
                 }
@@ -327,13 +343,3 @@ impl Venue for LiFiMovement {
     }
 }
 
-fn token_decimals(symbol: &str) -> i32 {
-    match symbol.to_uppercase().as_str() {
-        "USDC" | "USDT" => 6,
-        "WBTC" | "CBBTC" => 8,
-        "DAI" | "USDE" => 18,
-        "WETH" | "ETH" => 18,
-        "AERO" | "HYPE" | "WHYPE" | "OP" | "ARB" => 18,
-        _ => 18,
-    }
-}
