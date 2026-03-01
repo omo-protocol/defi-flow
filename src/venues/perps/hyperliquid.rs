@@ -767,11 +767,21 @@ impl Venue for HyperliquidPerp {
             return Ok(total.max(0.0));
         }
 
-        // Only report value for actual positions we hold — idle USDC on HyperCore
-        // should NOT count as venue value (the optimizer would think it's deployed).
-        // Spot and perp venues sharing the same HL wallet would double-count otherwise.
+        // When no positions exist:
+        // - Perp venue reports idle USDC on HyperCore (for accurate TVL/valuer)
+        // - Spot venue reports 0 (avoid double-counting with perp)
         if self.positions.is_empty() {
-            return Ok(0.0);
+            if self.is_spot {
+                return Ok(0.0);
+            }
+            // Perp: report idle HyperCore USDC so valuer includes it in TVL
+            let account_value: f64 = self
+                .info
+                .user_state(self.wallet_address)
+                .await
+                .map(|s| s.margin_summary.account_value.parse().unwrap_or(0.0))
+                .unwrap_or(0.0);
+            return Ok(account_value);
         }
 
 
