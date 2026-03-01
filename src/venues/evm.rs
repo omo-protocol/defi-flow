@@ -77,9 +77,18 @@ pub fn read_provider(rpc_url: &str) -> anyhow::Result<impl alloy::providers::Pro
     Ok(alloy::providers::ProviderBuilder::new().connect_http(rpc_url.parse()?))
 }
 
-/// Query ERC20 decimals on-chain.
+/// Query ERC20 decimals on-chain (from RPC URL).
 pub async fn query_decimals(rpc_url: &str, token_addr: Address) -> anyhow::Result<u8> {
     let rp = read_provider(rpc_url)?;
     let token = IERC20::new(token_addr, &rp);
+    Ok(token.decimals().call().await?)
+}
+
+/// Query ERC20 decimals on-chain (from an existing provider).
+pub async fn token_decimals<P: alloy::providers::Provider + Clone>(
+    provider: &P,
+    token_addr: Address,
+) -> anyhow::Result<u8> {
+    let token = IERC20::new(token_addr, provider);
     Ok(token.decimals().call().await?)
 }

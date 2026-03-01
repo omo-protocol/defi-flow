@@ -255,6 +255,26 @@ impl Engine {
                 .await;
         }
 
+        // Recovery: if a movement node receives its output token (e.g. after a
+        // partial failure where the swap succeeded but downstream failed), skip the
+        // swap and pass through. The tokens stay in the node's balance and flow
+        // downstream via edges normally.
+        if let Node::Movement {
+            from_token,
+            to_token,
+            ..
+        } = &node
+        {
+            if input_token == *to_token && input_token != *from_token && input_amount > 0.0 {
+                println!(
+                    "  [recovery] {} already holds {}, skipping swap",
+                    node_id, to_token
+                );
+                // Balance is already on this node from gather_inputs — just return
+                return Ok(());
+            }
+        }
+
         // Normal node: call venue (skip if no input — avoids pointless on-chain txns)
         if input_amount > 0.0 {
             if let Some(venue) = self.venues.get_mut(node_id) {

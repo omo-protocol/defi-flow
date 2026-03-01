@@ -140,7 +140,9 @@ impl PendleYield {
         self.input_token.clone().unwrap_or_else(|| "USDC".to_string())
     }
 
-    /// Query on-chain PT and YT token balances for a market.
+    /// Query on-chain PT, YT, and SY token balances for a market.
+    /// SY is included because a partial failure (deposit OK, mint failed) can
+    /// leave stranded SY tokens that should still count toward TVL.
     async fn query_onchain_value(&self, market_name: &str) -> Result<f64> {
         let chain = pendle_chain(&self.contracts, market_name)
             .context("Pendle market chain not found")?;
@@ -167,6 +169,19 @@ impl PendleYield {
             let yt_token = IERC20::new(yt_addr, &rp);
             if let Ok(balance) = yt_token.balanceOf(self.wallet_address).call().await {
                 total += evm::from_token_units(balance, 18);
+            }
+        }
+
+        // Query SY token balance (stranded after partial mint failure)
+        let sy_key = pendle_contract_key(market_name, "sy");
+        if let Some(sy_addr) = evm::resolve_contract(&self.contracts, &sy_key, &chain) {
+            let sy_token = IERC20::new(sy_addr, &rp);
+            if let Ok(balance) = sy_token.balanceOf(self.wallet_address).call().await {
+                let sy_val = evm::from_token_units(balance, 18);
+                if sy_val > 0.001 {
+                    println!("  PENDLE: stranded SY balance: {:.6} (will recover on next mint)", sy_val);
+                    total += sy_val;
+                }
             }
         }
 
@@ -200,6 +215,7 @@ impl PendleYield {
                 evm::from_token_units(amount_units, 18), input_tok);
             let receipt = sy.deposit(self.wallet_address, Address::ZERO, amount_units, U256::ZERO)
                 .value(amount_units)
+                .gas(500_000)
                 .send().await.context("SY deposit (native)")?
                 .get_receipt().await?;
             println!("  PENDLE: SY deposit tx: {:?}", receipt.transaction_hash);
@@ -216,14 +232,18 @@ impl PendleYield {
                 anyhow::bail!("No {} balance for SY deposit", input_tok);
             }
 
+            // Query actual token decimals for accurate logging
+            let decimals = evm::token_decimals(provider, addr).await.unwrap_or(18);
             println!("  PENDLE: approving {:.4} {} for SY",
-                evm::from_token_units(actual, 18), input_tok);
+                evm::from_token_units(actual, decimals), input_tok);
             erc20.approve(sy_addr, actual)
+                .gas(200_000)
                 .send().await.context("approve input for SY")?
                 .get_receipt().await?;
 
             let sy = IPendleSY::new(sy_addr, provider);
             let receipt = sy.deposit(self.wallet_address, addr, actual, U256::ZERO)
+                .gas(500_000)
                 .send().await.context("SY deposit (ERC20)")?
                 .get_receipt().await?;
             println!("  PENDLE: SY deposit tx: {:?}", receipt.transaction_hash);
@@ -308,26 +328,48 @@ impl PendleYield {
             .wallet(wallet)
             .connect_http(ch.rpc_url().expect("Pendle chain requires RPC").parse()?);
 
-        let amount_units = evm::to_token_units(input_amount, 1.0, 18);
+        // Recovery: check if wallet already has SY tokens from a previous partial
+        // failure (deposit succeeded but mintPyFromSy crashed). If so, skip deposit.
+        let sy_erc20 = IERC20::new(sy_addr, &provider);
+        let existing_sy = sy_erc20
+            .balanceOf(self.wallet_address)
+            .call()
+            .await
+            .unwrap_or(U256::ZERO);
 
-        // Step 1: Deposit input token into SY contract
-        let sy_balance = self.deposit_into_sy(&provider, sy_addr, &ch, amount_units).await?;
-        println!("  PENDLE: SY balance after deposit: {}", evm::from_token_units(sy_balance, 18));
+        let sy_balance = if existing_sy > U256::ZERO {
+            println!(
+                "  PENDLE: [recovery] wallet already has {} SY tokens, skipping deposit",
+                evm::from_token_units(existing_sy, 18),
+            );
+            existing_sy
+        } else {
+            // Step 1: Deposit input token into SY contract
+            let amount_units = evm::to_token_units(input_amount, 1.0, 18);
+            let bal = self.deposit_into_sy(&provider, sy_addr, &ch, amount_units).await?;
+            println!("  PENDLE: SY balance after deposit: {}", evm::from_token_units(bal, 18));
+            bal
+        };
+
+        if sy_balance.is_zero() {
+            anyhow::bail!("No SY tokens to mint PT from");
+        }
 
         // Step 2: Approve SY tokens for router
-        let erc20 = IERC20::new(sy_addr, &provider);
-        erc20
+        sy_erc20
             .approve(router_addr, sy_balance)
+            .gas(200_000)
             .send()
             .await
             .context("approve SY for router")?
             .get_receipt()
             .await?;
 
-        // Step 3: Mint PT+YT from SY
+        // Step 3: Mint PT+YT from SY (explicit gas to avoid HyperEVM eth_estimateGas issues)
         let router = IPendleRouter::new(router_addr, &provider);
         let result = router
             .mintPyFromSy(self.wallet_address, yt_addr, sy_balance, U256::ZERO)
+            .gas(1_000_000)
             .send()
             .await
             .context("mintPyFromSy")?;

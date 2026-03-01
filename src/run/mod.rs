@@ -171,7 +171,7 @@ async fn run_async(
     // ── On-chain reconciliation ──
     // Query actual on-chain state to detect stale/wrong state files.
     // Venues already query on-chain in total_value() — no execute() needed.
-    reconcile_onchain_state(&mut engine, &mut state, &config, &tokens, &wallet_tok).await?;
+    reconcile_onchain_state(&mut engine, &mut state, &config, &tokens).await?;
 
     // Push initial valuation to on-chain valuer immediately after reconciliation.
     // Must happen BEFORE deploy/allocator since totalAssets() needs a valuer report.
@@ -600,7 +600,6 @@ async fn reconcile_onchain_state(
     state: &mut RunState,
     config: &RuntimeConfig,
     tokens: &evm::TokenManifest,
-    wallet_tok: &str,
 ) -> Result<()> {
     println!("── Reconciling on-chain state ──");
 
@@ -614,8 +613,9 @@ async fn reconcile_onchain_state(
         venue_tvl += val;
     }
 
-    // 2. Query wallet ERC20 balance on-chain
-    let wallet_balance = query_wallet_erc20(&engine.workflow, config, tokens).await;
+    // 2. Query wallet balance for ALL manifest tokens on-chain
+    let wallet_tokens = query_wallet_all_tokens(&engine.workflow, config, tokens).await;
+    let wallet_balance: f64 = wallet_tokens.iter().map(|(_, b)| b).sum();
     let onchain_tvl = venue_tvl + wallet_balance;
 
     println!(
@@ -664,7 +664,9 @@ async fn reconcile_onchain_state(
                 wallet_balance,
             );
         }
-        engine.balances.add("wallet", &wallet_tok, wallet_balance);
+        for (tok, bal) in &wallet_tokens {
+            engine.balances.add("wallet", tok, *bal);
+        }
     } else if state.deploy_completed && onchain_tvl < 1.0 {
         // State says deployed but on-chain is empty — reset for re-deploy
         println!("[reconcile] State says deployed but on-chain TVL is $0 — resetting for re-deploy");
@@ -678,56 +680,68 @@ async fn reconcile_onchain_state(
     Ok(())
 }
 
-/// Query the wallet's ERC20 token balance on-chain.
-async fn query_wallet_erc20(
+/// Query the wallet's balance for ALL tokens in the manifest on-chain.
+/// Returns `(symbol, balance)` pairs for every token with balance > $0.01.
+/// This catches stranded intermediate tokens after partial deploy failures
+/// (e.g. swap succeeded but downstream venue failed → wallet holds output token).
+async fn query_wallet_all_tokens(
     workflow: &Workflow,
     config: &RuntimeConfig,
     tokens: &evm::TokenManifest,
-) -> f64 {
-    // Find the wallet node to get its token and chain
-    let (token_symbol, chain) = match workflow
+) -> Vec<(String, f64)> {
+    // Find the wallet node to get its chain
+    let chain = match workflow
         .nodes
         .iter()
-        .find(|n| matches!(n, Node::Wallet { .. }))
+        .find_map(|n| match n {
+            Node::Wallet { chain, .. } => Some(chain.clone()),
+            _ => None,
+        })
     {
-        Some(Node::Wallet { token, chain, .. }) => (token.clone(), chain.clone()),
-        _ => return 0.0,
+        Some(c) => c,
+        None => return vec![],
     };
 
     let rpc_url = match chain.rpc_url() {
         Some(url) => url,
-        None => return 0.0,
+        None => return vec![],
     };
 
-    let token_addr = match evm::resolve_token(tokens, &chain, &token_symbol) {
-        Some(addr) => addr,
-        None => {
-            eprintln!(
-                "[reconcile] Cannot resolve token address for {}",
-                token_symbol
-            );
-            return 0.0;
+    let mut results = Vec::new();
+
+    for (symbol, chain_map) in tokens.iter() {
+        // Resolve token address on the wallet's chain
+        let addr = match chain_map
+            .get(&chain.name)
+            .or_else(|| {
+                // Try case-insensitive match
+                chain_map
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(&chain.name))
+                    .map(|(_, v)| v)
+            })
+            .and_then(|a| a.parse::<alloy::primitives::Address>().ok())
+        {
+            Some(a) => a,
+            None => continue,
+        };
+
+        // Skip native token (address 0) — after LiFi swaps, intermediate
+        // tokens are always ERC20 (WHYPE, not native HYPE)
+        if addr == alloy::primitives::Address::ZERO {
+            continue;
         }
-    };
 
-    match query_erc20_balance(rpc_url, token_addr, config.wallet_address).await {
-        Ok(bal) => {
-            if bal > 0.01 {
-                println!(
-                    "  [reconcile] wallet ERC20 ({}) = ${:.2}",
-                    token_symbol, bal
-                );
+        match query_erc20_balance(rpc_url, addr, config.wallet_address).await {
+            Ok(bal) if bal > 0.01 => {
+                println!("  [reconcile] wallet {} = {:.2}", symbol, bal);
+                results.push((symbol.clone(), bal));
             }
-            bal
-        }
-        Err(e) => {
-            eprintln!(
-                "[reconcile] Failed to query wallet ERC20 balance: {:#}",
-                e
-            );
-            0.0
+            _ => {}
         }
     }
+
+    results
 }
 
 /// Query an ERC20 token balance for an address, fetching decimals on-chain.
@@ -747,8 +761,9 @@ async fn query_erc20_balance(
     Ok(evm::from_token_units(balance_raw, decimals))
 }
 
-/// Compute on-chain TVL: sum of venue positions + wallet ERC20 balance.
+/// Compute on-chain TVL: sum of venue positions + wallet token balances.
 /// Fully on-chain — no dependency on state.json or engine balances.
+/// Scans all manifest tokens so stranded intermediate tokens are included.
 async fn onchain_tvl(
     engine: &Engine,
     config: &RuntimeConfig,
@@ -758,7 +773,8 @@ async fn onchain_tvl(
     for v in engine.venues.values() {
         tvl += v.total_value().await.unwrap_or(0.0);
     }
-    tvl += query_wallet_erc20(&engine.workflow, config, tokens).await;
+    let wallet_tokens = query_wallet_all_tokens(&engine.workflow, config, tokens).await;
+    tvl += wallet_tokens.iter().map(|(_, b)| b).sum::<f64>();
     tvl
 }
 
