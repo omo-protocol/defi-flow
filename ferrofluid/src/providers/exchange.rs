@@ -758,13 +758,22 @@ impl<S: HyperliquidSigner> RawExchangeProvider<S> {
         amount_usd: f64,
         to_perp: bool,
     ) -> Result<ExchangeResponseStatus> {
+        let (chain_id, _) = self.infer_network();
+        let chain = if chain_id == CHAIN_ID_MAINNET {
+            "Mainnet"
+        } else {
+            "Testnet"
+        };
+
         let action = UsdClassTransfer {
+            signature_chain_id: chain_id,
+            hyperliquid_chain: chain.to_string(),
             amount: format!("{amount_usd}"),
             to_perp,
             nonce: Self::current_nonce(),
         };
 
-        self.send_l1_action("usdClassTransfer", &action).await
+        self.send_user_action(&action).await
     }
 
     // ==================== Helper Methods ====================
@@ -867,11 +876,19 @@ impl<S: HyperliquidSigner> RawExchangeProvider<S> {
         let signing_hash = agent.eip712_signing_hash(&domain);
         let signature = self.signer.sign_hash(signing_hash).await?;
 
-        // Build action value with type tag
-        let mut action_value = serde_json::to_value(action)?;
-        if let Value::Object(ref mut map) = action_value {
-            map.insert("type".to_string(), json!(action_type));
+        // Build action value with "type" as the FIRST key.
+        // HL re-computes the msgpack hash from the JSON action preserving key order.
+        // Our hash_action uses serde(tag="type") which puts "type" first in msgpack,
+        // so the JSON must also have "type" first for the hashes to match.
+        let action_json = serde_json::to_value(action)?;
+        let mut ordered_map = serde_json::Map::new();
+        ordered_map.insert("type".to_string(), json!(action_type));
+        if let Value::Object(map) = action_json {
+            for (k, v) in map {
+                ordered_map.insert(k, v);
+            }
         }
+        let action_value = Value::Object(ordered_map);
 
         // Wrap action if using agent
         let final_action = if let Some(agent_address) = &self.agent {
@@ -918,6 +935,7 @@ impl<S: HyperliquidSigner> RawExchangeProvider<S> {
             "UsdSend" => "usdSend",
             "Withdraw" => "withdraw3",
             "SpotSend" => "spotSend",
+            "UsdClassTransfer" => "usdClassTransfer",
             "ApproveBuilderFee" => "approveBuilderFee",
             _ => action_type,
         };

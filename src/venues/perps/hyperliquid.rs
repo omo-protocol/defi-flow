@@ -47,10 +47,18 @@ pub struct HyperliquidPerp {
     last_alpha_fetch: u64,
     /// Whether we've reconciled positions from HL on-chain state.
     reconciled: bool,
+    /// Intended leverage from the strategy node (e.g. 1.0 for 1x).
+    /// Used during reconciliation to correct HL's leverage if mismatched.
+    intended_leverage: Option<f64>,
 }
 
 impl HyperliquidPerp {
-    pub fn new(config: &RuntimeConfig, coin: Option<String>, is_spot: bool) -> Result<Self> {
+    pub fn new(
+        config: &RuntimeConfig,
+        coin: Option<String>,
+        is_spot: bool,
+        intended_leverage: Option<f64>,
+    ) -> Result<Self> {
         let signer: PrivateKeySigner = config
             .private_key
             .parse()
@@ -79,6 +87,7 @@ impl HyperliquidPerp {
             cached_alpha: None,
             last_alpha_fetch: 0,
             reconciled: false,
+            intended_leverage,
         })
     }
 
@@ -197,8 +206,12 @@ impl HyperliquidPerp {
                         let entry_price: f64 = pos.entry_px.as_deref()
                             .and_then(|s| s.parse().ok())
                             .unwrap_or(0.0);
-                        let leverage: f64 = pos.leverage.value as f64;
+                        let hl_leverage: f64 = pos.leverage.value as f64;
                         let margin_used: f64 = pos.margin_used.parse().unwrap_or(0.0);
+
+                        // Use intended leverage from the strategy node, not HL's reported leverage.
+                        // HL may report 20x default when we intended 1x.
+                        let leverage = self.intended_leverage.unwrap_or(hl_leverage);
 
                         self.positions.insert(
                             pos.coin.clone(),
@@ -211,11 +224,13 @@ impl HyperliquidPerp {
                         );
                         self.margin_deposited += margin_used;
                         eprintln!(
-                            "  [reconcile] HL perp: {} {} @ {:.2} (margin=${:.2})",
+                            "  [reconcile] HL perp: {} {} @ {:.2} (margin=${:.2}, lev={:.0}x→{:.0}x)",
                             if size > 0.0 { "LONG" } else { "SHORT" },
                             pos.coin,
                             entry_price,
                             margin_used,
+                            hl_leverage,
+                            leverage,
                         );
                     }
 
@@ -225,6 +240,42 @@ impl HyperliquidPerp {
                             "  [reconcile] HL perp: no positions, ${:.2} idle USDC on HyperCore",
                             account_value,
                         );
+                    }
+
+                    // Fix leverage on HL if mismatched from intended
+                    if let Some(intended) = self.intended_leverage {
+                        let coins: Vec<String> =
+                            self.positions.values().map(|p| p.coin.clone()).collect();
+                        if !coins.is_empty() {
+                            // Initialize asset indices if needed
+                            if self.asset_indices.is_empty() {
+                                if let Err(e) = self.init_metadata().await {
+                                    eprintln!("  [reconcile] HL metadata init failed: {e}");
+                                }
+                            }
+                            let lev_u32 = (intended as u32).max(1);
+                            for coin in &coins {
+                                if let Some(&asset) = self.asset_indices.get(coin.as_str()) {
+                                    if !self.dry_run {
+                                        match self
+                                            .exchange
+                                            .update_leverage(asset, true, lev_u32)
+                                            .await
+                                        {
+                                            Ok(ExchangeResponseStatus::Ok(_)) => eprintln!(
+                                                "  [reconcile] HL: set {coin} leverage to {lev_u32}x",
+                                            ),
+                                            Ok(ExchangeResponseStatus::Err(e)) => eprintln!(
+                                                "  [reconcile] HL: leverage API error: {e}",
+                                            ),
+                                            Err(e) => eprintln!(
+                                                "  [reconcile] HL: failed to set leverage: {e}",
+                                            ),
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 Err(e) => {
@@ -346,6 +397,18 @@ impl HyperliquidPerp {
                 consumed: input_amount,
                 output: None,
             });
+        }
+
+        // Set leverage on HL before placing the order.
+        // HL defaults to whatever was previously set (often 20x for ETH).
+        // leverage param is u32, so 1.0 → 1. Cross margin = true.
+        let lev_u32 = (leverage as u32).max(1);
+        match self.exchange.update_leverage(asset, true, lev_u32).await {
+            Ok(ExchangeResponseStatus::Ok(_)) => {}
+            Ok(ExchangeResponseStatus::Err(e)) => {
+                eprintln!("  HL: WARNING: update_leverage({lev_u32}x) API error: {e}")
+            }
+            Err(e) => eprintln!("  HL: WARNING: update_leverage({lev_u32}x) failed: {e}"),
         }
 
         let order = ferrofluid::types::OrderRequest::limit(
@@ -779,6 +842,38 @@ impl Venue for HyperliquidPerp {
     }
 
     async fn total_value(&self) -> Result<f64> {
+        // When no positions exist:
+        // - Perp venue reports idle USDC on HyperCore (for accurate TVL/valuer)
+        //   Checks BOTH perp sub-account (margin) and spot sub-account (USDC balance)
+        // - Spot venue reports 0 (avoid double-counting with perp)
+        if self.positions.is_empty() {
+            if self.is_spot {
+                return Ok(0.0);
+            }
+            // Always query HL API for idle balances (even in dry-run)
+            // Perp sub-account: margin + idle USDC
+            let perp_value: f64 = self
+                .info
+                .user_state(self.wallet_address)
+                .await
+                .map(|s| s.margin_summary.account_value.parse().unwrap_or(0.0))
+                .unwrap_or(0.0);
+            // Spot sub-account: USDC balance (can be transferred to perp for trading)
+            let spot_usdc: f64 = self
+                .info
+                .user_token_balances(self.wallet_address)
+                .await
+                .map(|r| {
+                    r.balances
+                        .iter()
+                        .find(|b| b.coin == "USDC")
+                        .and_then(|b| b.total.parse::<f64>().ok())
+                        .unwrap_or(0.0)
+                })
+                .unwrap_or(0.0);
+            return Ok(perp_value + spot_usdc);
+        }
+
         if self.dry_run {
             let mids = self.get_mids().await.unwrap_or_default();
             let mut total = 0.0;
@@ -789,23 +884,6 @@ impl Venue for HyperliquidPerp {
                 total += margin + pnl;
             }
             return Ok(total.max(0.0));
-        }
-
-        // When no positions exist:
-        // - Perp venue reports idle USDC on HyperCore (for accurate TVL/valuer)
-        // - Spot venue reports 0 (avoid double-counting with perp)
-        if self.positions.is_empty() {
-            if self.is_spot {
-                return Ok(0.0);
-            }
-            // Perp: report idle HyperCore USDC so valuer includes it in TVL
-            let account_value: f64 = self
-                .info
-                .user_state(self.wallet_address)
-                .await
-                .map(|s| s.margin_summary.account_value.parse().unwrap_or(0.0))
-                .unwrap_or(0.0);
-            return Ok(account_value);
         }
 
 
@@ -820,30 +898,17 @@ impl Venue for HyperliquidPerp {
             return Ok(total);
         }
 
-        // Perp: use HL's margin_used + unrealizedPnl per position
-        let state = self
+        // Perp: report full account equity (positions + idle USDC on HyperCore).
+        // This ensures TVL/valuer sees the correct total, and the optimizer can
+        // compute idle capital as total_value - deployed_value.
+        let account_value: f64 = self
             .info
             .user_state(self.wallet_address)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to fetch user state: {e}"))?;
+            .map(|s| s.margin_summary.account_value.parse().unwrap_or(0.0))
+            .unwrap_or(0.0);
 
-        let mut total = 0.0;
-        for ap in &state.asset_positions {
-            let pos = &ap.position;
-            let size: f64 = pos.szi.parse().unwrap_or(0.0);
-            if size.abs() < 1e-12 {
-                continue;
-            }
-            // Only count positions we're tracking
-            if !self.positions.contains_key(&pos.coin) {
-                continue;
-            }
-            let margin_used: f64 = pos.margin_used.parse().unwrap_or(0.0);
-            let upnl: f64 = pos.unrealized_pnl.parse().unwrap_or(0.0);
-            total += margin_used + upnl;
-        }
-
-        Ok(total.max(0.0))
+        Ok(account_value.max(0.0))
     }
 
     async fn deployed_value(&self) -> Result<f64> {
@@ -852,7 +917,21 @@ impl Venue for HyperliquidPerp {
         if self.positions.is_empty() {
             return Ok(0.0);
         }
-        self.total_value().await
+
+        // Deployed = initial margin per position = notional / leverage.
+        // We use entry_price * |size| / leverage (not margin_used, which is
+        // maintenance margin — much smaller and would make idle look huge).
+        let mids = self.get_mids().await.unwrap_or_default();
+        let mut total = 0.0;
+        for pos in self.positions.values() {
+            let current_price = mids.get(&pos.coin).copied().unwrap_or(pos.entry_price);
+            let notional = current_price * pos.size.abs();
+            let initial_margin = notional / pos.leverage.max(1.0);
+            let pnl = (current_price - pos.entry_price) * pos.size;
+            total += initial_margin + pnl;
+        }
+
+        Ok(total.max(0.0))
     }
 
     async fn tick(&mut self, now: u64, _dt_secs: f64) -> Result<()> {
@@ -914,13 +993,13 @@ impl Venue for HyperliquidPerp {
         }
 
         let f = fraction.min(1.0);
-        let freed = total * f;
 
         if self.asset_indices.is_empty() {
             self.init_metadata().await?;
         }
 
-        // Close fraction of each position
+        // Close fraction of each position, tracking actually freed capital
+        let mut actual_freed = 0.0;
         let coins: Vec<String> = self.positions.keys().cloned().collect();
         for coin in coins {
             let pos = match self.positions.get(&coin) {
@@ -974,6 +1053,10 @@ impl Venue for HyperliquidPerp {
                     let entry = self.positions.get_mut(&coin).unwrap();
                     entry.size = remaining_size * pos.size.signum();
                 }
+                // In dry-run, compute freed = margin released + PnL
+                let pnl = (mid_price - pos.entry_price) * pos.size.signum() * close_size;
+                let margin_returned = pos.entry_price * close_size / pos.leverage.max(1.0);
+                actual_freed += margin_returned + pnl;
                 continue;
             }
 
@@ -990,15 +1073,25 @@ impl Venue for HyperliquidPerp {
 
             match self.exchange.place_order(&order).await {
                 Ok(ExchangeResponseStatus::Ok(resp)) => {
+                    let mut filled = false;
                     if let Some(data) = &resp.data {
                         for status in &data.statuses {
                             match status {
                                 ExchangeDataStatus::Filled(fill) => {
                                     let fill_size: f64 = fill.total_sz.parse().unwrap_or(0.0);
+                                    let fill_price: f64 =
+                                        fill.avg_px.parse().unwrap_or(mid_price);
                                     println!(
-                                        "  HL: UNWIND FILLED {} {} (oid: {})",
-                                        fill_size, coin, fill.oid
+                                        "  HL: UNWIND FILLED {} {} @ {} (oid: {})",
+                                        fill_size, coin, fill_price, fill.oid
                                     );
+                                    // Compute actual freed capital from fill
+                                    let pnl =
+                                        (fill_price - pos.entry_price) * pos.size.signum() * fill_size;
+                                    let margin_returned =
+                                        pos.entry_price * fill_size / pos.leverage.max(1.0);
+                                    actual_freed += (margin_returned + pnl).max(0.0);
+                                    filled = true;
                                 }
                                 ExchangeDataStatus::Error(msg) => {
                                     eprintln!("  HL: UNWIND error for {}: {}", coin, msg);
@@ -1007,25 +1100,29 @@ impl Venue for HyperliquidPerp {
                             }
                         }
                     }
-                    let remaining_size = pos.size.abs() - close_size;
-                    if remaining_size < 1e-12 {
-                        self.positions.remove(&coin);
-                    } else {
-                        if let Some(entry) = self.positions.get_mut(&coin) {
-                            entry.size = remaining_size * pos.size.signum();
+                    if filled {
+                        let remaining_size = pos.size.abs() - close_size;
+                        if remaining_size < 1e-12 {
+                            self.positions.remove(&coin);
+                        } else {
+                            if let Some(entry) = self.positions.get_mut(&coin) {
+                                entry.size = remaining_size * pos.size.signum();
+                            }
                         }
                     }
                 }
                 Ok(ExchangeResponseStatus::Err(err)) => {
+                    // Order failed — no capital freed
                     eprintln!("  HL: UNWIND exchange error for {}: {}", coin, err);
                 }
                 Err(e) => {
+                    // Order failed — no capital freed
                     eprintln!("  HL: UNWIND failed for {}: {:#}", coin, e);
                 }
             }
         }
 
-        Ok(freed)
+        Ok(actual_freed)
     }
 
     fn metrics(&self) -> SimMetrics {

@@ -756,6 +756,143 @@ impl Engine {
             }
         }
 
+        // ── Phase 1.75: Intra-group rebalancing ──
+        // When a multi-leg group is imbalanced (e.g. perp has $40, spot has $0 in a DN pair),
+        // unwind the over-allocated leg and deploy freed capital to the under-allocated leg.
+        // This handles the case where a partial deploy left one leg funded and the other empty.
+        for group in &alloc_result.groups {
+            if group.targets.len() < 2 {
+                continue; // single-leg groups don't need intra-group rebalancing
+            }
+
+            // Compute per-leg deployed values
+            let mut leg_values: Vec<(String, f64)> = Vec::new();
+            let mut group_total = 0.0;
+            for target_id in &group.targets {
+                let v = self.effective_deployed_value(target_id).await;
+                leg_values.push((target_id.clone(), v));
+                group_total += v;
+            }
+
+            if group_total < 1.0 {
+                continue; // nothing deployed in this group
+            }
+
+            // Target: each leg gets equal share of group total
+            let target_per_leg = group_total / group.targets.len() as f64;
+
+            // Check if any leg is significantly imbalanced (>20% deviation)
+            let max_deviation = leg_values
+                .iter()
+                .map(|(_, v)| (v - target_per_leg).abs() / group_total)
+                .fold(0.0_f64, f64::max);
+
+            if max_deviation < 0.20 {
+                continue; // legs are reasonably balanced
+            }
+
+            println!(
+                "  [rebalance] intra-group rebalancing {} (target ${:.2}/leg)",
+                group.targets.join("+"),
+                target_per_leg,
+            );
+
+            // Unwind over-allocated legs
+            let mut freed_capital = 0.0;
+            for (target_id, value) in &leg_values {
+                if *value > target_per_leg + 1.0 {
+                    let excess = value - target_per_leg;
+                    let frac = excess / value;
+                    // Unwind the excess from this leg + downstream
+                    let freed = self.unwind_downstream(target_id, frac).await;
+                    if let Some(venue) = self.venues.get_mut(target_id.as_str()) {
+                        freed_capital += venue.unwind(frac).await.unwrap_or(0.0);
+                    }
+                    freed_capital += freed;
+                    println!(
+                        "    {} unwound ${:.2} (was ${:.2}, target ${:.2})",
+                        target_id, excess, value, target_per_leg,
+                    );
+                }
+            }
+
+            if freed_capital < 1.0 {
+                continue;
+            }
+
+            // Deploy freed capital to under-allocated legs
+            let under_allocated: Vec<_> = leg_values
+                .iter()
+                .filter(|(_, v)| *v < target_per_leg - 1.0)
+                .collect();
+
+            if under_allocated.is_empty() {
+                // No under-allocated legs — return freed capital to optimizer balance
+                self.balances.add(node_id, cash_token, freed_capital);
+                continue;
+            }
+
+            let total_deficit: f64 = under_allocated
+                .iter()
+                .map(|(_, v)| target_per_leg - v)
+                .sum();
+
+            for (target_id, value) in &under_allocated {
+                let deficit = target_per_leg - value;
+                let share = (deficit / total_deficit) * freed_capital;
+                if share < 1.0 {
+                    continue;
+                }
+
+                let target_node = self
+                    .workflow
+                    .nodes
+                    .iter()
+                    .find(|n| n.id() == *target_id)
+                    .cloned();
+                if let Some(ref tn) = target_node {
+                    if let Some(venue) = self.venues.get_mut(target_id.as_str()) {
+                        match venue.execute(tn, share).await {
+                            Ok(result) => {
+                                println!(
+                                    "    {} deployed ${:.2} (was ${:.2}, target ${:.2})",
+                                    target_id, share, value, target_per_leg,
+                                );
+                                self.distribute_result(target_id, "USDC", result)?;
+                                self.extract_spot_for_downstream(target_id, tn).await?;
+                                self.route_spot_downstream(target_id).await?;
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "  [rebalance] {} intra-group deploy failed: {:#}",
+                                    target_id, e,
+                                );
+                                // Return failed portion to optimizer balance
+                                self.balances.add(node_id, cash_token, share);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Recompute group values after intra-group rebalancing
+        group_values.clear();
+        venue_total = 0.0;
+        idle_venue_capital = 0.0;
+        for group in &alloc_result.groups {
+            let mut gv = 0.0;
+            for target_id in &group.targets {
+                let deployed = self.effective_deployed_value(target_id).await;
+                let total = self.effective_venue_value(target_id).await;
+                gv += deployed;
+                idle_venue_capital += total - deployed;
+            }
+            group_values.push(gv);
+            venue_total += gv;
+        }
+        let total_portfolio = venue_total + self.balances.get(node_id, cash_token) + idle_venue_capital;
+
         // ── Phase 2: Deploy to under-allocated GROUPS (all legs grow equally) ──
         // For targets reachable via intermediate nodes (swap→bridge→venue),
         // route through the full graph path so cross-chain bridging works.

@@ -248,13 +248,38 @@ pub struct ClassTransfer {
 }
 
 /// usdClassTransfer: move USDC between perp and spot sub-accounts.
+/// This is a USER action (not L1) — requires EIP-712 signing with chain fields.
 /// `amount` is a string in whole dollar units (e.g. "10" for $10).
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsdClassTransfer {
+    #[serde(serialize_with = "serialize_chain_id")]
+    pub signature_chain_id: u64,
+    pub hyperliquid_chain: String,
     pub amount: String,
     pub to_perp: bool,
     pub nonce: u64,
+}
+
+impl crate::types::eip712::HyperliquidAction for UsdClassTransfer {
+    const TYPE_STRING: &'static str =
+        "UsdClassTransfer(string hyperliquidChain,string amount,bool toPerp,uint64 nonce)";
+    const USE_PREFIX: bool = true;
+
+    fn chain_id(&self) -> Option<u64> {
+        Some(self.signature_chain_id)
+    }
+
+    fn encode_data(&self) -> Vec<u8> {
+        use crate::types::eip712::encode_value;
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&Self::type_hash()[..]);
+        encoded.extend_from_slice(&encode_value(&self.hyperliquid_chain)[..]);
+        encoded.extend_from_slice(&encode_value(&self.amount)[..]);
+        encoded.extend_from_slice(&encode_value(&self.to_perp)[..]);
+        encoded.extend_from_slice(&encode_value(&self.nonce)[..]);
+        encoded
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -336,5 +361,43 @@ mod tests {
 
         // Compare domain separators to verify they're the same
         assert_eq!(domain.separator(), expected_domain.separator());
+    }
+
+    #[test]
+    fn test_order_msgpack_matches_python() {
+        use crate::types::requests::{Limit, OrderRequest, OrderType};
+
+        // Reproduce the ActionWrapper from hash_action
+        #[derive(serde::Serialize)]
+        #[serde(tag = "type")]
+        #[serde(rename_all = "camelCase")]
+        enum ActionWrapper<'a, T: serde::Serialize> {
+            Order(&'a T),
+        }
+
+        let order = OrderRequest {
+            asset: 4,
+            is_buy: true,
+            limit_px: "1955.0".to_string(),
+            sz: "0.0088".to_string(),
+            reduce_only: true,
+            order_type: OrderType::Limit(Limit {
+                tif: "Ioc".to_string(),
+            }),
+            cloid: None,
+        };
+
+        let bulk = BulkOrder {
+            orders: vec![order],
+            grouping: "na".to_string(),
+            builder: None,
+        };
+
+        let wrapped = ActionWrapper::Order(&bulk);
+        let bytes = rmp_serde::to_vec_named(&wrapped).unwrap();
+
+        // Must match Python SDK's msgpack.packb({"type": "order", "orders": [...], "grouping": "na"})
+        let python_hex = "83a474797065a56f72646572a66f72646572739186a16104a162c3a170a6313935352e30a173a6302e30303838a172c3a17481a56c696d697481a3746966a3496f63a867726f7570696e67a26e61";
+        assert_eq!(hex::encode(&bytes), python_hex, "msgpack must match Python SDK");
     }
 }

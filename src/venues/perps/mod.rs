@@ -30,7 +30,7 @@ impl VenueCategory for PerpsCategory {
 
     fn build(node: &Node, mode: &BuildMode) -> Result<Option<Box<dyn Venue>>> {
         match node {
-            Node::Perp { venue, pair, .. } => match mode {
+            Node::Perp { venue, pair, leverage, .. } => match mode {
                 BuildMode::Backtest {
                     manifest,
                     data_dir,
@@ -62,6 +62,7 @@ impl VenueCategory for PerpsCategory {
                             config,
                             Some(coin),
                             false,
+                            *leverage,
                         )?)))
                     }
                 },
@@ -95,6 +96,7 @@ impl VenueCategory for PerpsCategory {
                         config,
                         Some(coin),
                         true,
+                        None, // spot nodes don't use leverage
                     )?)))
                 }
             },

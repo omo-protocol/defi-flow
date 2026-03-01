@@ -85,6 +85,12 @@ impl EncodeEip712 for u64 {
     }
 }
 
+impl EncodeEip712 for bool {
+    fn encode_eip712(&self) -> [u8; 32] {
+        U256::from(*self as u64).to_be_bytes::<32>()
+    }
+}
+
 impl EncodeEip712 for B256 {
     fn encode_eip712(&self) -> [u8; 32] {
         (*self).into()
