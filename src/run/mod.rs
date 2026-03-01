@@ -387,6 +387,24 @@ async fn run_async(
         state.save(&config.state_file)?;
         println!("\nTVL: ${:.2}", tvl);
 
+        // Recover stranded adapter funds before valuer push (reduces totalAllocations
+        // so refreshCachedValuation passes the 75% circuit breaker).
+        if let Some(rc) = engine.workflow.reserve.clone() {
+            match reserve::recover_adapter_balance(
+                &rc, engine.workflow.valuer.as_ref(),
+                &contracts, &tokens, &config.private_key, config.dry_run,
+            ).await {
+                Ok(Some(record)) => {
+                    println!(
+                        "[deallocate] Recovered ${:.2} from adapter (was ${:.2} stranded)",
+                        record.deallocated, record.adapter_balance,
+                    );
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("[deallocate] ERROR: {:#}", e),
+            }
+        }
+
         // Push TVL to onchain valuer (if configured)
         let push_tvl = tvl;
         if let Some(ref vc) = engine.workflow.valuer {
@@ -521,6 +539,23 @@ async fn run_async(
 
                     state.save(&config.state_file)?;
                     println!("[{}] TVL: ${:.2}\n", now.format("%H:%M:%S"), tvl);
+
+                    // Recover stranded adapter funds before valuer push
+                    if let Some(rc) = engine.workflow.reserve.clone() {
+                        match reserve::recover_adapter_balance(
+                            &rc, engine.workflow.valuer.as_ref(),
+                            &contracts, &tokens, &config.private_key, config.dry_run,
+                        ).await {
+                            Ok(Some(record)) => {
+                                println!(
+                                    "[deallocate] Recovered ${:.2} from adapter",
+                                    record.deallocated,
+                                );
+                            }
+                            Ok(None) => {}
+                            Err(e) => eprintln!("[deallocate] ERROR: {:#}", e),
+                        }
+                    }
 
                     // Push TVL to onchain valuer (if configured)
                     let push_tvl = tvl;

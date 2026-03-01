@@ -56,6 +56,7 @@ sol! {
     #[sol(rpc)]
     contract IVaultAllocate {
         function allocate(address adapter, bytes memory data, uint256 assets) external;
+        function deallocate(address adapter, bytes memory data, uint256 assets) external;
         function totalSupply() external view returns (uint256);
     }
 }
@@ -660,6 +661,146 @@ fn make_signer_provider(
     Ok(ProviderBuilder::new()
         .wallet(wallet)
         .connect_http(rpc_url.parse()?))
+}
+
+// ── Adapter balance recovery (deallocate stranded funds) ─────────────
+
+/// Record of a deallocate recovery action.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeallocateRecord {
+    pub timestamp: u64,
+    pub adapter_balance: f64,
+    pub deallocated: f64,
+}
+
+/// Check if the adapter has stranded USDT0 and deallocate it back to the vault.
+///
+/// When funds get stuck in the adapter (e.g. partial unwind, failed deploy),
+/// `totalAllocations` remains inflated. This causes `refreshCachedValuation()`
+/// to fail with "Valuation too low" because: `TVL < totalAllocations * 75%`.
+///
+/// Calling `vault.deallocate(adapter, data, balance)` returns the stranded
+/// funds to vault idle and reduces `totalAllocations` proportionally.
+///
+/// Returns `Some(DeallocateRecord)` if funds were recovered, `None` otherwise.
+pub async fn recover_adapter_balance(
+    config: &ReserveConfig,
+    valuer_config: Option<&ValuerConfig>,
+    contracts: &evm::ContractManifest,
+    tokens: &evm::TokenManifest,
+    private_key: &str,
+    dry_run: bool,
+) -> Result<Option<DeallocateRecord>> {
+    let adapter_key = match &config.adapter_address {
+        Some(k) => k,
+        None => return Ok(None),
+    };
+
+    let strategy_id_text = match valuer_config {
+        Some(vc) => &vc.strategy_id,
+        None => return Ok(None),
+    };
+
+    let rpc_url = config
+        .vault_chain
+        .rpc_url()
+        .context("vault chain requires RPC URL")?;
+
+    let adapter_addr =
+        evm::resolve_contract(contracts, adapter_key, &config.vault_chain).with_context(|| {
+            format!(
+                "Adapter '{}' on {} not in contracts manifest",
+                adapter_key, config.vault_chain,
+            )
+        })?;
+
+    let vault_addr = evm::resolve_contract(contracts, &config.vault_address, &config.vault_chain)
+        .context("vault address not in contracts manifest")?;
+
+    let token_addr = evm::resolve_token(tokens, &config.vault_chain, &config.vault_token)
+        .with_context(|| {
+            format!(
+                "Token '{}' on {} not in tokens manifest",
+                config.vault_token, config.vault_chain,
+            )
+        })?;
+
+    // Read adapter's token balance
+    let rp = evm::read_provider(rpc_url)?;
+    let erc20 = IErc20Read::new(token_addr, &rp);
+    let adapter_balance_raw = retry_rpc("adapter.balanceOf", || async {
+        erc20.balanceOf(adapter_addr).call().await
+    })
+    .await
+    .context("failed to read adapter token balance")?;
+
+    let decimals = retry_rpc("decimals()", || async { erc20.decimals().call().await })
+        .await
+        .context("decimals() failed")?;
+
+    let adapter_balance = evm::from_token_units(adapter_balance_raw, decimals);
+
+    // Skip dust (< $0.50)
+    if adapter_balance < 0.50 {
+        return Ok(None);
+    }
+
+    eprintln!(
+        "[deallocate] Adapter {} has ${:.2} stranded — deallocating back to vault",
+        evm::short_addr(&adapter_addr),
+        adapter_balance,
+    );
+
+    if dry_run {
+        eprintln!(
+            "[deallocate] [DRY RUN] would deallocate ${:.2} from adapter",
+            adapter_balance,
+        );
+        let now = chrono::Utc::now().timestamp() as u64;
+        return Ok(Some(DeallocateRecord {
+            timestamp: now,
+            adapter_balance,
+            deallocated: adapter_balance,
+        }));
+    }
+
+    let strategy_id = crate::run::valuer::strategy_id_from_text(strategy_id_text);
+    let allocation_data = encode_allocation_data(strategy_id);
+
+    let provider = make_signer_provider(private_key, rpc_url)?;
+    let vault = IVaultAllocate::new(vault_addr, &provider);
+
+    let pending = vault
+        .deallocate(adapter_addr, allocation_data, adapter_balance_raw)
+        .gas(500_000)
+        .send()
+        .await
+        .context("vault.deallocate() send failed")?;
+
+    let receipt = pending
+        .get_receipt()
+        .await
+        .context("vault.deallocate() receipt failed")?;
+
+    if !receipt.status() {
+        anyhow::bail!(
+            "vault.deallocate() reverted (tx: {:?})",
+            receipt.transaction_hash,
+        );
+    }
+
+    eprintln!(
+        "[deallocate] vault.deallocate() tx: {:?} — recovered ${:.2}",
+        receipt.transaction_hash,
+        adapter_balance,
+    );
+
+    let now = chrono::Utc::now().timestamp() as u64;
+    Ok(Some(DeallocateRecord {
+        timestamp: now,
+        adapter_balance,
+        deallocated: adapter_balance,
+    }))
 }
 
 /// Flat pro-rata unwind: same fraction from every venue.
