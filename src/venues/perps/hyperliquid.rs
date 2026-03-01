@@ -659,6 +659,30 @@ impl Venue for HyperliquidPerp {
                     });
                 }
 
+                // Transfer USDC from perp→spot account for buying.
+                // Bridge2 deposits land in the perp margin account; spot orders
+                // require USDC in the spot sub-account.
+                if is_buy {
+                    // Query how much USDC is in the perp account
+                    let perp_usd: f64 = self
+                        .info
+                        .user_state(self.wallet_address)
+                        .await
+                        .map(|s| s.margin_summary.account_value.parse().unwrap_or(0.0))
+                        .unwrap_or(0.0);
+                    // Transfer the amount we need (capped at what's available)
+                    let transfer_amount = input_amount.min(perp_usd).floor() as u64;
+                    if transfer_amount > 0 {
+                        println!("  HL SPOT: transferring ${} from perp→spot", transfer_amount);
+                        match self.exchange.spot_transfer_to_perp(transfer_amount, false).await {
+                            Ok(_) => {}
+                            Err(e) => {
+                                eprintln!("  HL SPOT: perp→spot transfer failed: {e}");
+                            }
+                        }
+                    }
+                }
+
                 // HL spot uses different token names (e.g. UETH instead of ETH)
                 let spot_coin = self.resolve_spot_coin(coin);
                 let spot_asset = *self

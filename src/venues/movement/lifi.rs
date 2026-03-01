@@ -1,3 +1,5 @@
+use alloy::hex;
+use alloy::primitives::{Bytes, U256};
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -49,6 +51,7 @@ struct TransactionRequest {
 pub struct LiFiMovement {
     client: reqwest::Client,
     wallet_address: String,
+    private_key: String,
     dry_run: bool,
     tokens: evm::TokenManifest,
     slippage_bps: f64,
@@ -67,6 +70,7 @@ impl LiFiMovement {
         Ok(LiFiMovement {
             client,
             wallet_address: format!("{:?}", config.wallet_address),
+            private_key: config.private_key.clone(),
             dry_run: config.dry_run,
             tokens: tokens.clone(),
             slippage_bps: config.slippage_bps,
@@ -87,6 +91,96 @@ impl LiFiMovement {
             .with_context(|| format!("decimals() call failed for {token} on {chain}"))?;
         self.decimals_cache.insert(key, d);
         Ok(d)
+    }
+
+    /// Submit the LiFi transactionRequest on-chain: approve input token then send tx.
+    async fn submit_lifi_tx(
+        &self,
+        chain: &Chain,
+        from_token: &str,
+        amount_raw: u128,
+        quote: &QuoteResponse,
+    ) -> Result<()> {
+        let rpc = chain.rpc_url().context("chain requires rpc_url")?;
+        let signer: alloy::signers::local::PrivateKeySigner = self
+            .private_key
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Invalid private key: {e}"))?;
+        let wallet = alloy::network::EthereumWallet::from(signer);
+        let provider = alloy::providers::ProviderBuilder::new()
+            .wallet(wallet)
+            .connect_http(rpc.parse().context("invalid rpc url")?);
+
+        // Approve the LiFi approval contract to spend input token
+        if let Some(ref approval_addr) = quote.estimate.approval_address {
+            let spender: alloy::primitives::Address = approval_addr
+                .parse()
+                .map_err(|e| anyhow::anyhow!("bad approval address: {e}"))?;
+            let token_addr = evm::resolve_token(&self.tokens, chain, from_token)
+                .with_context(|| format!("token '{from_token}' not in manifest for {chain}"))?;
+            let token_contract = evm::IERC20::new(token_addr, &provider);
+            println!(
+                "  LiFi: approving {} for {} ({})",
+                from_token,
+                evm::short_addr(&spender),
+                evm::short_addr(&token_addr),
+            );
+            token_contract
+                .approve(spender, U256::from(amount_raw))
+                .gas(200_000)
+                .send()
+                .await
+                .context("approve for LiFi")?
+                .get_receipt()
+                .await
+                .context("approve receipt")?;
+        }
+
+        let tx_req = quote
+            .transaction_request
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("LiFi missing transactionRequest"))?;
+
+        let to_addr: alloy::primitives::Address = tx_req
+            .to
+            .parse()
+            .map_err(|e| anyhow::anyhow!("bad tx.to: {e}"))?;
+        let data = Bytes::from(hex::decode(tx_req.data.trim_start_matches("0x"))?);
+        let value = if let Some(hex_str) = tx_req.value.strip_prefix("0x") {
+            U256::from_str_radix(hex_str, 16).unwrap_or(U256::ZERO)
+        } else {
+            tx_req.value.parse().unwrap_or(U256::ZERO)
+        };
+        let gas_limit: u64 = tx_req
+            .gas_limit
+            .as_ref()
+            .and_then(|s| {
+                s.parse().ok().or_else(|| {
+                    s.strip_prefix("0x")
+                        .and_then(|h| u64::from_str_radix(h, 16).ok())
+                })
+            })
+            .unwrap_or(500_000);
+
+        use alloy::network::TransactionBuilder;
+        use alloy::providers::Provider;
+        let tx = alloy::rpc::types::TransactionRequest::default()
+            .with_to(to_addr)
+            .with_input(data)
+            .with_value(value)
+            .with_gas_limit(gas_limit);
+
+        let pending = provider
+            .send_transaction(tx)
+            .await
+            .context("LiFi tx send")?;
+        let receipt = pending
+            .get_receipt()
+            .await
+            .context("LiFi tx receipt")?;
+
+        println!("  LiFi: tx {:?}", receipt.transaction_hash);
+        Ok(())
     }
 
     async fn get_quote(
@@ -187,23 +281,12 @@ impl LiFiMovement {
             });
         }
 
-        if let Some(tx) = &quote.transaction_request {
-            println!(
-                "  LiFi TX: to={}, value={}, data_len={}",
-                &tx.to[..10],
-                tx.value,
-                tx.data.len()
-            );
-
-            println!("  LiFi: submitting transaction...");
-            self.metrics.swap_costs += input_amount - output_amount;
-            Ok(ExecutionResult::TokenOutput {
-                token: to_token.to_string(),
-                amount: output_amount,
-            })
-        } else {
-            bail!("LiFi quote did not include transactionRequest");
-        }
+        self.submit_lifi_tx(from_chain, from_token, amount_raw, &quote).await?;
+        self.metrics.swap_costs += input_amount - output_amount;
+        Ok(ExecutionResult::TokenOutput {
+            token: to_token.to_string(),
+            amount: output_amount,
+        })
     }
 
     async fn execute_bridge(
@@ -255,23 +338,12 @@ impl LiFiMovement {
             });
         }
 
-        if let Some(tx) = &quote.transaction_request {
-            println!(
-                "  LiFi TX: to={}, value={}, data_len={}",
-                &tx.to[..10],
-                tx.value,
-                tx.data.len()
-            );
-
-            println!("  LiFi: submitting bridge transaction...");
-            self.metrics.swap_costs += bridge_fee;
-            Ok(ExecutionResult::TokenOutput {
-                token: token.to_string(),
-                amount: output_amount,
-            })
-        } else {
-            bail!("LiFi quote did not include transactionRequest for bridge");
-        }
+        self.submit_lifi_tx(from_chain, token, amount_raw, &quote).await?;
+        self.metrics.swap_costs += bridge_fee;
+        Ok(ExecutionResult::TokenOutput {
+            token: token.to_string(),
+            amount: output_amount,
+        })
     }
 }
 

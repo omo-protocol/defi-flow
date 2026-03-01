@@ -726,6 +726,12 @@ async fn reconcile_onchain_state(
                 onchain_tvl,
             );
         }
+        // Seed wallet balance so optimizer can deploy idle funds
+        for (tok, bal) in &wallet_tokens {
+            if *bal > 0.0 {
+                engine.balances.add("wallet", tok, *bal);
+            }
+        }
     } else if venue_tvl < 1.0 && wallet_balance > 1.0 {
         // Wallet has funds but no venue positions. Either:
         // - deploy_completed=false: allocator ran but deploy crashed
