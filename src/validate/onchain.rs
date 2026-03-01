@@ -603,17 +603,17 @@ async fn probe_interface(
             }
         }
         ContractRole::Vault => {
-            // ERC4626 vault must respond to asset() and totalAssets()
+            // ERC4626 vault must respond to asset(). totalAssets() may revert on
+            // unconfigured Morpho vaults (no markets allocated yet) — that's OK.
             let contract = IVaultProbe::new(address, provider);
             let asset_ok = tokio::time::timeout(timeout, contract.asset().call()).await;
-            let total_ok = tokio::time::timeout(timeout, contract.totalAssets().call()).await;
-            match (asset_ok, total_ok) {
-                (Ok(Ok(_)), Ok(Ok(_))) => None,
+            match asset_ok {
+                Ok(Ok(_)) => None,
                 _ => Some(ValidationError::WrongInterface {
                     contract: check.label.clone(),
                     chain: chain_name.to_string(),
                     address: format!("{address}"),
-                    expected: "ERC4626 vault — asset()/totalAssets() call failed".to_string(),
+                    expected: "ERC4626 vault — asset() call failed".to_string(),
                 }),
             }
         }

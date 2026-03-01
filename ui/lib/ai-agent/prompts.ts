@@ -144,7 +144,9 @@ ${chainList}
 - **Movement providers**:
   - \`LiFi\`: EVM↔EVM bridges/swaps (Base↔Arbitrum, Base↔HyperEVM). Supports \`swap\`, \`bridge\`, and \`swap_bridge\` (atomic swap+bridge in one node). NEVER chain two LiFi nodes — use \`swap_bridge\` instead.
   - \`HyperliquidNative\`: HyperCore↔HyperEVM only, bridge only (no swaps), uses native spotSend
-  - Base→Hyperliquid = two nodes: LiFi(Base→HyperEVM) + HyperliquidNative(HyperEVM→Hyperliquid). The LiFi node can be \`swap_bridge\` if tokens also need swapping.
+  - \`Bridge2\`: Arbitrum→HyperCore only, bridge only, USDC only. Deposits USDC to HyperCore via EIP-2612 permit. Required for perp margin and spot trading on Hyperliquid L1.
+  - **Perps/Spot on Hyperliquid**: Funds must reach HyperCore (chain "hyperliquid"). Route: LiFi swap_bridge(X→USDC, source→arbitrum) → Bridge2(USDC, arbitrum→hyperliquid) → perp/spot node.
+  - **HyperEVM↔HyperCore**: Use HyperliquidNative for tokens that exist on both chains.
 - **Lending**: archetype "aave_v3" for any Aave fork. Needs pool_address, rewards_controller, defillama_slug.
 - **Token manifests**: symbol→chain→address. Only for EVM chains with contracts. Hyperliquid L1 doesn't need entries.
 - **Contract manifests**: label→chain→address. For lending pool_address, rewards_controller, vault_address.

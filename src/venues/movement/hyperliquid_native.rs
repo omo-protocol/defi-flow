@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
-use alloy::primitives::Address;
+use alloy::primitives::{Address, U256};
+use alloy::providers::ProviderBuilder;
 use alloy::signers::local::PrivateKeySigner;
+use alloy::sol;
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use ferrofluid::{ExchangeProvider, InfoProvider, Network};
@@ -14,16 +16,28 @@ use crate::venues::{ExecutionResult, SimMetrics, Venue};
 /// System address = 0x20 + 00..00 + token_index (big-endian).
 /// Exception: HYPE uses 0x2222222222222222222222222222222222222222.
 const HYPE_SYSTEM_ADDRESS: &str = "0x2222222222222222222222222222222222222222";
+const HYPEREVM_RPC: &str = "https://rpc.hyperliquid.xyz/evm";
+
+sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    contract IERC20Transfer {
+        function transfer(address to, uint256 amount) external returns (bool);
+    }
+}
 
 /// Token metadata resolved from spot_meta at construction time.
 #[derive(Debug, Clone)]
 struct TokenInfo {
     /// The token index on HyperCore.
+    #[allow(dead_code)]
     index: u32,
     /// System address for HyperCore ↔ HyperEVM transfers.
     system_address: Address,
     /// Token's wei decimals on HyperCore.
     wei_decimals: u32,
+    /// ERC20 contract address on HyperEVM (if available).
+    evm_contract: Option<Address>,
 }
 
 /// Native HyperCore ↔ HyperEVM spot transfers via Hyperliquid's `spotSend` action.
@@ -33,6 +47,7 @@ struct TokenInfo {
 pub struct HyperliquidNativeMovement {
     exchange: ExchangeProvider<PrivateKeySigner>,
     info: InfoProvider,
+    signer: PrivateKeySigner,
     wallet_address: Address,
     dry_run: bool,
     /// symbol (uppercase) → token info
@@ -48,13 +63,18 @@ impl HyperliquidNativeMovement {
             .map_err(|e| anyhow::anyhow!("Invalid private key: {e}"))?;
 
         let (exchange, info) = match config.network {
-            Network::Mainnet => (ExchangeProvider::mainnet(signer), InfoProvider::mainnet()),
-            Network::Testnet => (ExchangeProvider::testnet(signer), InfoProvider::testnet()),
+            Network::Mainnet => {
+                (ExchangeProvider::mainnet(signer.clone()), InfoProvider::mainnet())
+            }
+            Network::Testnet => {
+                (ExchangeProvider::testnet(signer.clone()), InfoProvider::testnet())
+            }
         };
 
         Ok(HyperliquidNativeMovement {
             exchange,
             info,
+            signer,
             wallet_address: config.wallet_address,
             dry_run: config.dry_run,
             token_map: HashMap::new(),
@@ -79,12 +99,24 @@ impl HyperliquidNativeMovement {
                 token_index_to_system_address(token.index)
             };
 
+            // Resolve EVM contract address from spot_meta
+            let evm_contract = token.evm_contract.as_ref().and_then(|ec| {
+                let addr_str = match ec {
+                    ferrofluid::types::info_types::EvmContract::String(s) => s.as_str(),
+                    ferrofluid::types::info_types::EvmContract::Object { address, .. } => {
+                        address.as_str()
+                    }
+                };
+                addr_str.parse::<Address>().ok()
+            });
+
             self.token_map.insert(
                 token.name.to_uppercase(),
                 TokenInfo {
                     index: token.index,
                     system_address,
                     wei_decimals: token.wei_decimals,
+                    evm_contract,
                 },
             );
         }
@@ -142,15 +174,61 @@ impl HyperliquidNativeMovement {
     }
 
     /// Transfer spot tokens from HyperEVM → HyperCore via ERC20 transfer to system address.
-    async fn evm_to_core(&mut self, _token: &str, _amount: f64) -> Result<ExecutionResult> {
-        // TODO: ERC20 transfer to system address on HyperEVM.
-        // Requires: alloy provider + signer with HyperEVM RPC,
-        // resolve token symbol → ERC20 address from evm_contract in spot_meta,
-        // then call transfer(system_address, amount).
-        bail!(
-            "HyperEVM → HyperCore transfers not yet implemented. \
-             Use the Hyperliquid frontend for now."
-        )
+    async fn evm_to_core(&mut self, token: &str, amount: f64) -> Result<ExecutionResult> {
+        let info = self
+            .token_map
+            .get(&token.to_uppercase())
+            .ok_or_else(|| anyhow::anyhow!("Token '{token}' not found in HyperCore spot meta"))?
+            .clone();
+
+        let evm_addr = info.evm_contract.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Token '{token}' has no EVM contract in spot_meta — cannot bridge from HyperEVM"
+            )
+        })?;
+
+        let amount_raw = U256::from((amount * 10f64.powi(info.wei_decimals as i32)) as u128);
+
+        println!(
+            "  HyperliquidNative: EVM→Core {:.6} {} (erc20: {:?} → system: {:?})",
+            amount, token, evm_addr, info.system_address
+        );
+
+        if self.dry_run {
+            println!("  HyperliquidNative: [DRY RUN] ERC20 transfer would be executed");
+            return Ok(ExecutionResult::TokenOutput {
+                token: token.to_string(),
+                amount,
+            });
+        }
+
+        // Build HyperEVM provider with signer
+        let wallet = alloy::network::EthereumWallet::from(self.signer.clone());
+        let provider = ProviderBuilder::new()
+            .wallet(wallet)
+            .connect_http(HYPEREVM_RPC.parse().context("parse HyperEVM RPC URL")?);
+
+        // ERC20 transfer to system address — token arrives on HyperCore
+        let erc20 = IERC20Transfer::new(evm_addr, &provider);
+        let receipt = erc20
+            .transfer(info.system_address, amount_raw)
+            .gas(100_000)
+            .send()
+            .await
+            .context("ERC20 transfer to system address")?
+            .get_receipt()
+            .await
+            .context("ERC20 transfer receipt")?;
+
+        println!(
+            "  HyperliquidNative: EVM→Core tx {:?}",
+            receipt.transaction_hash
+        );
+
+        Ok(ExecutionResult::TokenOutput {
+            token: token.to_string(),
+            amount,
+        })
     }
 }
 

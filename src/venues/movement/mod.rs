@@ -1,3 +1,4 @@
+pub mod bridge2;
 pub mod hyperliquid_native;
 pub mod lifi;
 pub mod simulator;
@@ -78,6 +79,9 @@ impl VenueCategory for MovementCategory {
                         MovementProvider::HyperliquidNative => Ok(Some(Box::new(
                             hyperliquid_native::HyperliquidNativeMovement::new(config)?,
                         ))),
+                        MovementProvider::Bridge2 => {
+                            Ok(Some(Box::new(bridge2::Bridge2Movement::new(config)?)))
+                        }
                     }
                 }
             },

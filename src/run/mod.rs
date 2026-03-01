@@ -1,4 +1,5 @@
 pub mod config;
+pub mod hl_activation;
 pub mod registry;
 pub mod scheduler;
 pub mod state;
@@ -172,6 +173,14 @@ async fn run_async(
     // Query actual on-chain state to detect stale/wrong state files.
     // Venues already query on-chain in total_value() — no execute() needed.
     reconcile_onchain_state(&mut engine, &mut state, &config, &tokens).await?;
+
+    // ── HyperLiquid wallet activation ──
+    // If the strategy has HL perp/spot nodes and the wallet hasn't been activated
+    // on HyperCore yet, swap USDT0 → USDC and deposit via CoreDepositWallet.
+    if let Err(e) = hl_activation::ensure_hl_wallet(&engine.workflow, &config).await {
+        eprintln!("[hl-activate] WARNING: {:#}", e);
+        eprintln!("[hl-activate] Strategy may fail if HL wallet is not activated.");
+    }
 
     // Push initial valuation to on-chain valuer immediately after reconciliation.
     // Must happen BEFORE deploy/allocator since totalAssets() needs a valuer report.

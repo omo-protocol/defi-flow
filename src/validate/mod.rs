@@ -46,6 +46,29 @@ pub enum ValidationError {
     HyperliquidNativeSwapNotSupported { node_id: String },
 
     #[error(
+        "Movement `{node_id}`: Bridge2 only supports bridge transfers (Arbitrum USDC → HyperCore). Use movement_type: \"bridge\"."
+    )]
+    Bridge2OnlyBridge { node_id: String },
+
+    #[error(
+        "Movement `{node_id}`: Bridge2 only bridges from arbitrum to hyperliquid (HyperCore). Got {from_chain} → {to_chain}."
+    )]
+    Bridge2WrongChains {
+        node_id: String,
+        from_chain: String,
+        to_chain: String,
+    },
+
+    #[error(
+        "Movement `{node_id}`: Bridge2 only supports USDC. Got from_token: \"{from_token}\", to_token: \"{to_token}\"."
+    )]
+    Bridge2OnlyUsdc {
+        node_id: String,
+        from_token: String,
+        to_token: String,
+    },
+
+    #[error(
         "Movement `{node_id}`: HyperliquidNative bridges only work between hyperliquid (HyperCore) and hyperevm. Got {from_chain} → {to_chain}."
     )]
     HyperliquidNativeWrongChains {

@@ -388,14 +388,35 @@ fn build_flow_suggestion(
         );
     }
 
+    // Is the destination HyperCore? If so, the only bridge in is Bridge2 via Arbitrum.
+    let dest_is_hypercore = dc.eq_ignore_ascii_case("hyperliquid");
+
     match (chain_ok, token_ok) {
         (false, true) => {
-            // Chain mismatch only
-            format!(
-                "chain mismatch: '{}' outputs {} on {}, but '{}' expects it on {}. \
-                 Insert a Movement(bridge, from_chain: {}, to_chain: {}, token: {})",
-                from_id, source.token, sc, to_id, dc, sc, dc, source.token,
-            )
+            // Chain mismatch only (same token)
+            if dest_is_hypercore && source.token.eq_ignore_ascii_case("USDC") {
+                // USDC → HyperCore: may need LiFi to Arbitrum + Bridge2
+                if sc.eq_ignore_ascii_case("arbitrum") {
+                    format!(
+                        "chain mismatch: '{}' outputs USDC on arbitrum, but '{}' expects it on hyperliquid (HyperCore). \
+                         Insert a Movement(bridge, Bridge2, USDC, arbitrum → hyperliquid)",
+                        from_id, to_id,
+                    )
+                } else {
+                    format!(
+                        "chain mismatch: '{}' outputs USDC on {}, but '{}' expects it on hyperliquid (HyperCore). \
+                         Insert: (1) Movement(bridge, LiFi, USDC, {} → arbitrum), then \
+                         (2) Movement(bridge, Bridge2, USDC, arbitrum → hyperliquid)",
+                        from_id, sc, to_id, sc,
+                    )
+                }
+            } else {
+                format!(
+                    "chain mismatch: '{}' outputs {} on {}, but '{}' expects it on {}. \
+                     Insert a Movement(bridge, from_chain: {}, to_chain: {}, token: {})",
+                    from_id, source.token, sc, to_id, dc, sc, dc, source.token,
+                )
+            }
         }
         (true, false) => {
             // Token mismatch only (same chain)
@@ -408,31 +429,35 @@ fn build_flow_suggestion(
         }
         (false, false) => {
             // Both chain AND token mismatch
-            let bridge_tok = "USDC";
-
-            // If only token differs, can use a single swap_bridge Movement
-            if source.token.eq_ignore_ascii_case(bridge_tok)
-                || dest.token.eq_ignore_ascii_case(bridge_tok)
-            {
-                // One side is already USDC — suggest swap_bridge or bridge+swap
+            if dest_is_hypercore {
+                // Destination is HyperCore — must route through Arbitrum Bridge2
                 let mut steps = Vec::new();
 
-                if !source.token.eq_ignore_ascii_case(bridge_tok) {
+                if source.token.eq_ignore_ascii_case("USDC") {
+                    // Source is USDC but wrong chain → bridge to Arbitrum, then Bridge2
+                    if !sc.eq_ignore_ascii_case("arbitrum") {
+                        steps.push(format!(
+                            "Movement(bridge, LiFi, USDC, {} → arbitrum)",
+                            sc,
+                        ));
+                    }
+                } else {
+                    // Source is non-USDC → swap_bridge to USDC on Arbitrum
                     steps.push(format!(
-                        "Movement(swap, from_token: {}, to_token: {})",
-                        source.token, bridge_tok,
+                        "Movement(swap_bridge, LiFi, {} → USDC, {} → arbitrum)",
+                        source.token, sc,
                     ));
                 }
 
-                steps.push(format!(
-                    "Movement(bridge, from_chain: {}, to_chain: {}, token: {})",
-                    sc, dc, bridge_tok,
-                ));
+                steps.push(
+                    "Movement(bridge, Bridge2, USDC, arbitrum → hyperliquid)".to_string(),
+                );
 
-                if !dest.token.eq_ignore_ascii_case(bridge_tok) {
+                // If dest expects non-USDC on HyperCore (e.g. spot sell needs ETH)
+                if !dest.token.eq_ignore_ascii_case("USDC") {
                     steps.push(format!(
-                        "Movement(swap, from_token: {}, to_token: {})",
-                        bridge_tok, dest.token,
+                        "then buy {} on HyperCore spot with USDC",
+                        dest.token,
                     ));
                 }
 
@@ -443,32 +468,57 @@ fn build_flow_suggestion(
                     .collect();
 
                 format!(
-                    "chain+token mismatch: '{}' outputs {} on {}, but '{}' expects {} on {}. \
+                    "chain+token mismatch: '{}' outputs {} on {}, but '{}' expects {} on hyperliquid (HyperCore). \
                      Insert: {}",
-                    from_id,
-                    source.token,
-                    sc,
-                    to_id,
-                    dest.token,
-                    dc,
-                    numbered.join(", then "),
+                    from_id, source.token, sc, to_id, dest.token, numbered.join(", then "),
                 )
             } else {
-                // Both tokens differ from USDC — suggest swap_bridge (atomic)
-                format!(
-                    "chain+token mismatch: '{}' outputs {} on {}, but '{}' expects {} on {}. \
-                     Insert a Movement(swap_bridge, from_token: {}, to_token: {}, from_chain: {}, to_chain: {})",
-                    from_id,
-                    source.token,
-                    sc,
-                    to_id,
-                    dest.token,
-                    dc,
-                    source.token,
-                    dest.token,
-                    sc,
-                    dc,
-                )
+                let bridge_tok = "USDC";
+
+                if source.token.eq_ignore_ascii_case(bridge_tok)
+                    || dest.token.eq_ignore_ascii_case(bridge_tok)
+                {
+                    let mut steps = Vec::new();
+
+                    if !source.token.eq_ignore_ascii_case(bridge_tok) {
+                        steps.push(format!(
+                            "Movement(swap, from_token: {}, to_token: {})",
+                            source.token, bridge_tok,
+                        ));
+                    }
+
+                    steps.push(format!(
+                        "Movement(bridge, from_chain: {}, to_chain: {}, token: {})",
+                        sc, dc, bridge_tok,
+                    ));
+
+                    if !dest.token.eq_ignore_ascii_case(bridge_tok) {
+                        steps.push(format!(
+                            "Movement(swap, from_token: {}, to_token: {})",
+                            bridge_tok, dest.token,
+                        ));
+                    }
+
+                    let numbered: Vec<String> = steps
+                        .iter()
+                        .enumerate()
+                        .map(|(i, s)| format!("({}) {s}", i + 1))
+                        .collect();
+
+                    format!(
+                        "chain+token mismatch: '{}' outputs {} on {}, but '{}' expects {} on {}. \
+                         Insert: {}",
+                        from_id, source.token, sc, to_id, dest.token, dc,
+                        numbered.join(", then "),
+                    )
+                } else {
+                    format!(
+                        "chain+token mismatch: '{}' outputs {} on {}, but '{}' expects {} on {}. \
+                         Insert a Movement(swap_bridge, from_token: {}, to_token: {}, from_chain: {}, to_chain: {})",
+                        from_id, source.token, sc, to_id, dest.token, dc,
+                        source.token, dest.token, sc, dc,
+                    )
+                }
             }
         }
         (true, true) => unreachable!(),
@@ -640,6 +690,55 @@ fn check_movement_nodes(workflow: &Workflow) -> Vec<ValidationError> {
                     }
                 }
                 MovementType::Swap => {}
+            }
+
+            // Bridge2 provider constraints
+            if matches!(provider, MovementProvider::Bridge2) {
+                // Only bridge type (not swap or swap_bridge)
+                if !matches!(movement_type, MovementType::Bridge) {
+                    errors.push(ValidationError::Bridge2OnlyBridge {
+                        node_id: id.clone(),
+                    });
+                }
+
+                // Only from arbitrum to hyperliquid
+                let fc = from_chain.as_ref().map(|c| c.name.to_lowercase());
+                let tc = to_chain.as_ref().map(|c| c.name.to_lowercase());
+                let valid_chains = matches!(
+                    (fc.as_deref(), tc.as_deref()),
+                    (Some("arbitrum"), Some("hyperliquid"))
+                );
+                if !valid_chains {
+                    errors.push(ValidationError::Bridge2WrongChains {
+                        node_id: id.clone(),
+                        from_chain: from_chain
+                            .as_ref()
+                            .map(|c| c.name.clone())
+                            .unwrap_or_else(|| "?".into()),
+                        to_chain: to_chain
+                            .as_ref()
+                            .map(|c| c.name.clone())
+                            .unwrap_or_else(|| "?".into()),
+                    });
+                }
+
+                // Only USDC
+                if let Node::Movement {
+                    from_token,
+                    to_token,
+                    ..
+                } = node
+                {
+                    if !from_token.eq_ignore_ascii_case("USDC")
+                        || !to_token.eq_ignore_ascii_case("USDC")
+                    {
+                        errors.push(ValidationError::Bridge2OnlyUsdc {
+                            node_id: id.clone(),
+                            from_token: from_token.clone(),
+                            to_token: to_token.clone(),
+                        });
+                    }
+                }
             }
 
             // HyperliquidNative provider constraints

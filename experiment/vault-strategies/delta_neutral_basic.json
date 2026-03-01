@@ -1,12 +1,13 @@
 {
   "name": "Basic Delta Neutral",
-  "description": "Spot buy ETH + short ETH perp for funding income. Idle USDT0 to HyperLend lending. Kelly splits between hedged pair and lending. Weekly rebalance on 5% drift.",
+  "description": "Spot buy ETH + short ETH perp for funding income. Idle USDT0 to HyperLend lending. Kelly splits between hedged pair and lending. Weekly rebalance on 5% drift. Funds route: USDT0 (HyperEVM) → USDC (Arbitrum) via LiFi → HyperCore via Bridge2.",
   "tokens": {
     "USDT0": {
       "hyperevm": "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb"
     },
     "USDC": {
-      "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f"
+      "hyperevm": "0xb88339CB7199b77E23DB6E890353E22632Ba630f",
+      "arbitrum": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
     },
     "ETH": {
       "hyperevm": "0xbe6727b535545c67d5caa73dea54865b92cf7907"
@@ -77,22 +78,42 @@
     {
       "type": "movement",
       "id": "swap_to_usdc_spot",
-      "movement_type": "swap",
+      "movement_type": "swap_bridge",
       "provider": "LiFi",
       "from_token": "USDT0",
       "to_token": "USDC",
       "from_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
-      "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
+      "to_chain": { "name": "arbitrum", "chain_id": 42161, "rpc_url": "https://arb1.arbitrum.io/rpc" }
+    },
+    {
+      "type": "movement",
+      "id": "bridge2_spot",
+      "movement_type": "bridge",
+      "provider": "Bridge2",
+      "from_token": "USDC",
+      "to_token": "USDC",
+      "from_chain": { "name": "arbitrum", "chain_id": 42161, "rpc_url": "https://arb1.arbitrum.io/rpc" },
+      "to_chain": { "name": "hyperliquid" }
     },
     {
       "type": "movement",
       "id": "swap_to_usdc_perp",
-      "movement_type": "swap",
+      "movement_type": "swap_bridge",
       "provider": "LiFi",
       "from_token": "USDT0",
       "to_token": "USDC",
       "from_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" },
-      "to_chain": { "name": "hyperevm", "chain_id": 999, "rpc_url": "https://rpc.hyperliquid.xyz/evm" }
+      "to_chain": { "name": "arbitrum", "chain_id": 42161, "rpc_url": "https://arb1.arbitrum.io/rpc" }
+    },
+    {
+      "type": "movement",
+      "id": "bridge2_perp",
+      "movement_type": "bridge",
+      "provider": "Bridge2",
+      "from_token": "USDC",
+      "to_token": "USDC",
+      "from_chain": { "name": "arbitrum", "chain_id": 42161, "rpc_url": "https://arb1.arbitrum.io/rpc" },
+      "to_chain": { "name": "hyperliquid" }
     },
     {
       "type": "spot",
@@ -137,6 +158,12 @@
     },
     {
       "from_node": "swap_to_usdc_spot",
+      "to_node": "bridge2_spot",
+      "token": "USDC",
+      "amount": { "type": "all" }
+    },
+    {
+      "from_node": "bridge2_spot",
       "to_node": "buy_eth",
       "token": "USDC",
       "amount": { "type": "all" }
@@ -149,6 +176,12 @@
     },
     {
       "from_node": "swap_to_usdc_perp",
+      "to_node": "bridge2_perp",
+      "token": "USDC",
+      "amount": { "type": "all" }
+    },
+    {
+      "from_node": "bridge2_perp",
       "to_node": "short_eth",
       "token": "USDC",
       "amount": { "type": "all" }

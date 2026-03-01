@@ -48,6 +48,9 @@ pub enum MovementProvider {
     LiFi,
     /// Native HyperCore ↔ HyperEVM spot transfers via `spotSend` / ERC20 system address.
     HyperliquidNative,
+    /// Bridge2 on Arbitrum — deposit USDC to HyperCore via EIP-2612 permit.
+    /// Only supports bridge (USDC, arbitrum → hyperliquid).
+    Bridge2,
 }
 
 /// Vault protocol interface archetypes.
@@ -982,12 +985,9 @@ impl Node {
                     let tok = margin_token
                         .as_deref()
                         .unwrap_or(perp_venue_default_margin(venue));
-                    // Both Hyperliquid and Hyena margin goes via HyperCore API
-                    // (non-EVM), so skip chain validation but still validate the token.
-                    let chain: Option<Chain> = None;
                     Some(TokenFlow {
                         token: tok.to_string(),
-                        chain,
+                        chain: Some(perp_venue_chain(venue)),
                     })
                 }
                 _ => None,
@@ -1060,14 +1060,9 @@ impl Node {
                         SpotSide::Buy => parts[1],
                         SpotSide::Sell => parts[0],
                     };
-                    // Hyperliquid spot: margin flows via HyperCore (non-EVM),
-                    // so skip chain validation but still validate the token.
-                    let chain = match venue {
-                        SpotVenue::Hyperliquid => None,
-                    };
                     Some(TokenFlow {
                         token: tok.to_string(),
-                        chain,
+                        chain: Some(spot_venue_chain(venue)),
                     })
                 } else {
                     None

@@ -65,7 +65,7 @@ export type RyskAsset = "ETH" | "BTC" | "HYPE" | "SOL";
 export type PendleAction = "mint_pt" | "redeem_pt" | "mint_yt" | "redeem_yt" | "claim_rewards";
 
 export type MovementType = "swap" | "bridge" | "swap_bridge";
-export type MovementProvider = "LiFi" | "HyperliquidNative";
+export type MovementProvider = "LiFi" | "HyperliquidNative" | "Bridge2";
 
 export type OptimizerStrategy = "kelly";
 
