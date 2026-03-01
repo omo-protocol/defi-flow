@@ -302,6 +302,12 @@ impl HyperliquidPerp {
             .get(coin)
             .with_context(|| format!("No mid price for '{coin}'"))?;
 
+        let notional = input_amount * leverage;
+        if notional < 10.0 && !self.dry_run {
+            println!("  HL: skipping perp order — notional ${:.2} below $10 minimum", notional);
+            return Ok(ExecutionResult::Noop);
+        }
+
         let is_buy = matches!(direction, PerpDirection::Long);
         let slippage_mult = self.slippage_bps / 10000.0;
         let limit_price = if is_buy {
@@ -309,8 +315,6 @@ impl HyperliquidPerp {
         } else {
             mid_price * (1.0 - slippage_mult)
         };
-
-        let notional = input_amount * leverage;
         let size = notional / mid_price;
 
         let formatted_size = self.format_size(coin, size);
@@ -631,6 +635,11 @@ impl Venue for HyperliquidPerp {
 
                 if mid_price <= 0.0 {
                     bail!("No mid price for spot asset '{coin}'");
+                }
+
+                if input_amount < 10.0 && !self.dry_run {
+                    println!("  HL SPOT: skipping — ${:.2} below $10 minimum", input_amount);
+                    return Ok(ExecutionResult::Noop);
                 }
 
                 if self.dry_run {
