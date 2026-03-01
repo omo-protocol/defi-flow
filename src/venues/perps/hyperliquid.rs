@@ -891,15 +891,26 @@ impl Venue for HyperliquidPerp {
                 mid_price * (1.0 - slippage_mult)
             };
 
-            let formatted_size = self.format_size(&coin, close_size);
+            let (asset, formatted_size) = if self.is_spot {
+                let spot_coin = self.resolve_spot_coin(&coin);
+                let a = *self.spot_indices.get(&spot_coin)
+                    .with_context(|| format!("Unknown spot asset '{coin}' (tried '{spot_coin}')"))?;
+                let dec = self.spot_sz_decimals.get(&spot_coin).copied().unwrap_or(4);
+                (a, format!("{:.prec$}", close_size, prec = dec as usize))
+            } else {
+                let a = *self.asset_indices.get(&coin)
+                    .with_context(|| format!("Unknown asset '{coin}'"))?;
+                (a, self.format_size(&coin, close_size))
+            };
             let formatted_price = Self::format_price(limit_price);
 
             println!(
-                "  HL: UNWIND {:.1}% {} {} @ {} (reduce_only)",
+                "  HL: UNWIND {:.1}% {} {} @ {}{}",
                 f * 100.0,
                 formatted_size,
                 coin,
                 formatted_price,
+                if self.is_spot { "" } else { " (reduce_only)" },
             );
 
             if self.dry_run {
@@ -914,19 +925,16 @@ impl Venue for HyperliquidPerp {
                 continue;
             }
 
-            let asset = *self
-                .asset_indices
-                .get(&coin)
-                .with_context(|| format!("Unknown asset '{coin}'"))?;
-
-            let order = ferrofluid::types::OrderRequest::limit(
+            let mut order = ferrofluid::types::OrderRequest::limit(
                 asset,
                 is_buy,
                 &formatted_price,
                 &formatted_size,
                 "Ioc",
-            )
-            .reduce_only(true);
+            );
+            if !self.is_spot {
+                order = order.reduce_only(true);
+            }
 
             match self.exchange.place_order(&order).await {
                 Ok(ExchangeResponseStatus::Ok(resp)) => {
