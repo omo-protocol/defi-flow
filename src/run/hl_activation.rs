@@ -277,7 +277,7 @@ pub async fn ensure_hl_wallet(
         );
     }
 
-    // ── Step 3: Check Arbitrum ETH for gas ──
+    // ── Step 3: Ensure Arbitrum ETH for gas ──
 
     use alloy::providers::Provider;
     let eth_balance = arb_provider
@@ -287,12 +287,50 @@ pub async fn ensure_hl_wallet(
     let eth_f = evm::from_token_units(eth_balance, 18);
 
     if eth_f < 0.0001 {
-        anyhow::bail!(
-            "[hl-activate] Need ETH on Arbitrum for Bridge2 gas but have {:.6} ETH. \
-             Send ~0.001 ETH to {:?} on Arbitrum.",
+        println!(
+            "[hl-activate] Need ETH on Arbitrum for Bridge2 gas (have {:.6} ETH)",
             eth_f,
-            config.wallet_address,
         );
+
+        // Swap a small amount of USDT0 (HyperEVM) → ETH (Arbitrum) via LiFi
+        let hyperevm_wallet = alloy::network::EthereumWallet::from(signer.clone());
+        let hyperevm_provider = ProviderBuilder::new()
+            .wallet(hyperevm_wallet)
+            .connect_http(HYPEREVM_RPC.parse()?);
+
+        lifi_swap_for_arb_gas(&hyperevm_provider, config.wallet_address).await?;
+
+        // Wait for ETH to arrive on Arbitrum
+        println!("[hl-activate] Waiting for ETH on Arbitrum...");
+        let poll_timeout = std::time::Duration::from_secs(180);
+        let poll_start = std::time::Instant::now();
+        let poll_interval = std::time::Duration::from_secs(10);
+
+        loop {
+            tokio::time::sleep(poll_interval).await;
+            let bal = arb_provider
+                .get_balance(config.wallet_address)
+                .await
+                .unwrap_or(U256::ZERO);
+            if bal > eth_balance {
+                println!(
+                    "[hl-activate] ETH arrived on Arbitrum: {:.6}",
+                    evm::from_token_units(bal, 18),
+                );
+                break;
+            }
+            if poll_start.elapsed() > poll_timeout {
+                anyhow::bail!(
+                    "[hl-activate] Timeout waiting for ETH on Arbitrum. \
+                     Send ~0.001 ETH to {:?} on Arbitrum manually.",
+                    config.wallet_address,
+                );
+            }
+            println!(
+                "[hl-activate]   polling ETH... ({:.0}s elapsed)",
+                poll_start.elapsed().as_secs_f64(),
+            );
+        }
     }
 
     // ── Step 4: Bridge2 deposit via EIP-2612 permit ──
@@ -539,6 +577,127 @@ async fn bridge2_deposit<P: alloy::providers::Provider + Clone>(
         receipt.transaction_hash,
         evm::from_token_units(amount, 6),
         evm::short_addr(&wallet_address),
+    );
+    Ok(())
+}
+
+/// LiFi cross-chain swap: small amount of USDT0 (HyperEVM) → native ETH (Arbitrum)
+/// to pay for Bridge2 gas. Swaps ~$2 of USDT0 → ETH.
+async fn lifi_swap_for_arb_gas<P: alloy::providers::Provider + Clone>(
+    provider: &P,
+    wallet_address: Address,
+) -> Result<()> {
+    /// 2 USDT0 (6 decimals) — enough to get ~0.001 ETH for gas on Arbitrum
+    const GAS_SWAP_AMOUNT: u64 = 2_000_000;
+    /// LiFi uses zero address for native gas tokens
+    const ETH_NATIVE: &str = "0x0000000000000000000000000000000000000000";
+
+    let usdt0 = IERC20::new(USDT0_HYPEREVM, provider);
+    let usdt0_bal = usdt0
+        .balanceOf(wallet_address)
+        .call()
+        .await
+        .context("USDT0 balanceOf")?;
+
+    let swap_amount = U256::from(GAS_SWAP_AMOUNT);
+    if usdt0_bal < swap_amount {
+        anyhow::bail!(
+            "[hl-activate] Need {} USDT0 on HyperEVM for gas swap but have {}",
+            evm::from_token_units(swap_amount, 6),
+            evm::from_token_units(usdt0_bal, 6),
+        );
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("defi-flow/0.1")
+        .build()?;
+
+    let url = format!(
+        "{LIFI_API_BASE}/quote?\
+         fromChain={HYPEREVM_CHAIN_ID}&\
+         toChain={ARBITRUM_CHAIN_ID}&\
+         fromToken={USDT0_HYPEREVM:?}&\
+         toToken={ETH_NATIVE}&\
+         fromAmount={GAS_SWAP_AMOUNT}&\
+         fromAddress={wallet_address:?}&\
+         slippage=0.05"
+    );
+
+    println!(
+        "[hl-activate] Getting LiFi quote: {} USDT0 (HyperEVM) -> ETH (Arbitrum)...",
+        evm::from_token_units(swap_amount, 6),
+    );
+
+    let resp = client.get(&url).send().await.context("LiFi gas quote")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("[hl-activate] LiFi gas swap API error {status}: {body}");
+    }
+
+    let quote: LiFiQuote = resp.json().await.context("parsing LiFi gas quote")?;
+    let to_amount: f64 = quote.estimate.to_amount.parse().unwrap_or(0.0);
+    let to_eth = to_amount / 1e18;
+
+    println!(
+        "[hl-activate] LiFi gas swap: {} USDT0 -> {:.6} ETH",
+        evm::from_token_units(swap_amount, 6),
+        to_eth,
+    );
+
+    let tx_req = quote
+        .transaction_request
+        .ok_or_else(|| anyhow::anyhow!("[hl-activate] LiFi gas swap missing transactionRequest"))?;
+
+    // Approve USDT0 for LiFi
+    if let Some(ref approval_addr) = quote.estimate.approval_address {
+        let spender: Address = approval_addr
+            .parse()
+            .map_err(|e| anyhow::anyhow!("bad approval address: {e}"))?;
+        usdt0
+            .approve(spender, swap_amount)
+            .gas(200_000)
+            .send()
+            .await
+            .context("approve USDT0 for LiFi gas swap")?
+            .get_receipt()
+            .await?;
+    }
+
+    // Execute LiFi tx on HyperEVM
+    let to_addr: Address = tx_req
+        .to
+        .parse()
+        .map_err(|e| anyhow::anyhow!("bad tx.to: {e}"))?;
+    let data = Bytes::from(hex::decode(tx_req.data.trim_start_matches("0x"))?);
+    let value = parse_u256_maybe_hex(&tx_req.value);
+    let gas_limit: u64 = tx_req
+        .gas_limit
+        .as_ref()
+        .and_then(|s| parse_u64_maybe_hex(s))
+        .unwrap_or(500_000);
+
+    println!("[hl-activate] Submitting LiFi gas swap tx on HyperEVM...");
+
+    use alloy::network::TransactionBuilder;
+    let tx = alloy::rpc::types::TransactionRequest::default()
+        .with_to(to_addr)
+        .with_input(data)
+        .with_value(value)
+        .with_gas_limit(gas_limit);
+
+    let receipt = provider
+        .send_transaction(tx)
+        .await
+        .context("LiFi gas swap tx send")?
+        .get_receipt()
+        .await
+        .context("LiFi gas swap tx receipt")?;
+
+    println!(
+        "[hl-activate] LiFi gas swap tx: {:?}",
+        receipt.transaction_hash,
     );
     Ok(())
 }

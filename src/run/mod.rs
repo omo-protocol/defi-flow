@@ -186,7 +186,26 @@ async fn run_async(
     // Must happen BEFORE deploy/allocator since totalAssets() needs a valuer report.
     // Prevents chicken-and-egg: totalAssets() needs valuer → valuer push needs tick → tick needs cron.
     if let Some(ref vc) = engine.workflow.valuer {
-        let push_tvl = onchain_tvl(&engine, &config, &tokens).await;
+        let mut push_tvl = onchain_tvl(&engine, &config, &tokens).await;
+
+        // Fallback: if TVL is 0 but adapter has allocations, use that as initial value.
+        // This bootstraps the valuer when totalAssets() reverts because the valuer has
+        // no reports yet (chicken-and-egg between vault ↔ valuer).
+        if push_tvl <= 0.0 {
+            if let Some(ref rc) = engine.workflow.reserve {
+                match reserve::read_adapter_allocations(rc, &contracts).await {
+                    Ok(alloc) if alloc > 0.0 => {
+                        eprintln!(
+                            "[valuer] TVL=0 but adapter has ${:.2} allocated — using as bootstrap value",
+                            alloc,
+                        );
+                        push_tvl = alloc;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         if push_tvl > 0.0 {
             match valuer::maybe_push_value(
                 vc, &contracts, &config.private_key, push_tvl,

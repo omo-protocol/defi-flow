@@ -53,7 +53,8 @@ const VAULTS = [
 // keccak256 function selectors
 const SEL = {
   balanceOf: "0x70a08231", // balanceOf(address)
-  totalAssets: "0x01e1d114", // totalAssets()
+  totalAssets: "0x01e1d114", // totalAssets() — standard ERC4626
+  _totalAssets: "0xce04bebb", // _totalAssets() — Morpho vaults on HyperEVM
   totalSupply: "0x18160ddd", // totalSupply()
   convertToAssets: "0x07a2d13a", // convertToAssets(uint256)
 };
@@ -95,25 +96,36 @@ function toUsdt(raw) {
 async function queryVault(vault, wallet) {
   const walletEnc = encodeAddress(wallet);
 
-  // Parallel RPC calls
-  const [sharesHex, totalAssetsHex, totalSupplyHex] = await Promise.all([
-    ethCall(vault.address, SEL.balanceOf + walletEnc),
-    ethCall(vault.address, SEL.totalAssets),
-    ethCall(vault.address, SEL.totalSupply),
-  ]);
+  // Parallel RPC calls — use _totalAssets (Morpho HyperEVM) with fallback
+  const [sharesHex, _totalAssetsHex, totalAssetsHex, totalSupplyHex] =
+    await Promise.all([
+      ethCall(vault.address, SEL.balanceOf + walletEnc),
+      ethCall(vault.address, SEL._totalAssets).catch(() => "0x"),
+      ethCall(vault.address, SEL.totalAssets).catch(() => "0x"),
+      ethCall(vault.address, SEL.totalSupply).catch(() => "0x"),
+    ]);
 
   const shares = decodeUint256(sharesHex);
-  const totalAssets = decodeUint256(totalAssetsHex);
+  const _totalAssets = decodeUint256(_totalAssetsHex);
+  const stdTotalAssets = decodeUint256(totalAssetsHex);
+  const totalAssets = _totalAssets > 0n ? _totalAssets : stdTotalAssets;
   const totalSupply = decodeUint256(totalSupplyHex);
 
   // Convert our shares to underlying assets
   let assetsValue = 0n;
   if (shares > 0n) {
-    const assetsHex = await ethCall(
-      vault.address,
-      SEL.convertToAssets + encodeUint256("0x" + shares.toString(16))
-    );
-    assetsValue = decodeUint256(assetsHex);
+    try {
+      const assetsHex = await ethCall(
+        vault.address,
+        SEL.convertToAssets + encodeUint256("0x" + shares.toString(16))
+      );
+      assetsValue = decodeUint256(assetsHex);
+    } catch {
+      // convertToAssets reverted — compute manually: shares * totalAssets / totalSupply
+      if (totalSupply > 0n) {
+        assetsValue = (shares * totalAssets) / totalSupply;
+      }
+    }
   }
 
   // Share price: USDT per share (shares=18 decimals, assets=6 decimals)

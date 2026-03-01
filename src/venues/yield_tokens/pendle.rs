@@ -47,6 +47,7 @@ sol! {
     contract IERC20 {
         function approve(address spender, uint256 amount) external returns (bool);
         function balanceOf(address account) external view returns (uint256);
+        function decimals() external view returns (uint8);
     }
 }
 
@@ -158,8 +159,8 @@ impl PendleYield {
         if let Some(pt_addr) = evm::resolve_contract(&self.contracts, &pt_key, &chain) {
             let pt_token = IERC20::new(pt_addr, &rp);
             if let Ok(balance) = pt_token.balanceOf(self.wallet_address).call().await {
-                // PT tokens are 18 decimals, approximately 1:1 with underlying at maturity
-                total += evm::from_token_units(balance, 18);
+                let decimals = pt_token.decimals().call().await.unwrap_or(18);
+                total += evm::from_token_units(balance, decimals);
             }
         }
 
@@ -168,7 +169,8 @@ impl PendleYield {
         if let Some(yt_addr) = evm::resolve_contract(&self.contracts, &yt_key, &chain) {
             let yt_token = IERC20::new(yt_addr, &rp);
             if let Ok(balance) = yt_token.balanceOf(self.wallet_address).call().await {
-                total += evm::from_token_units(balance, 18);
+                let decimals = yt_token.decimals().call().await.unwrap_or(18);
+                total += evm::from_token_units(balance, decimals);
             }
         }
 
@@ -177,7 +179,8 @@ impl PendleYield {
         if let Some(sy_addr) = evm::resolve_contract(&self.contracts, &sy_key, &chain) {
             let sy_token = IERC20::new(sy_addr, &rp);
             if let Ok(balance) = sy_token.balanceOf(self.wallet_address).call().await {
-                let sy_val = evm::from_token_units(balance, 18);
+                let decimals = sy_token.decimals().call().await.unwrap_or(18);
+                let sy_val = evm::from_token_units(balance, decimals);
                 if sy_val > 0.001 {
                     println!("  PENDLE: stranded SY balance: {:.6} (will recover on next mint)", sy_val);
                     total += sy_val;
@@ -337,18 +340,27 @@ impl PendleYield {
             .await
             .unwrap_or(U256::ZERO);
 
+        let sy_decimals = IERC20::new(sy_addr, &provider)
+            .decimals()
+            .call()
+            .await
+            .unwrap_or(18);
+
         let sy_balance = if existing_sy > U256::ZERO {
             println!(
                 "  PENDLE: [recovery] wallet already has {} SY tokens, skipping deposit",
-                evm::from_token_units(existing_sy, 18),
+                evm::from_token_units(existing_sy, sy_decimals),
             );
             existing_sy
-        } else {
+        } else if input_amount > 0.0 {
             // Step 1: Deposit input token into SY contract
-            let amount_units = evm::to_token_units(input_amount, 1.0, 18);
+            let amount_units = evm::to_token_units(input_amount, 1.0, sy_decimals);
             let bal = self.deposit_into_sy(&provider, sy_addr, &ch, amount_units).await?;
-            println!("  PENDLE: SY balance after deposit: {}", evm::from_token_units(bal, 18));
+            println!("  PENDLE: SY balance after deposit: {}", evm::from_token_units(bal, sy_decimals));
             bal
+        } else {
+            // No stranded SY and no new input — nothing to do
+            return Ok(ExecutionResult::Noop);
         };
 
         if sy_balance.is_zero() {

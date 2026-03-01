@@ -208,46 +208,47 @@ fn resolve_valuer(config: &ValuerConfig, contracts: &evm::ContractManifest) -> R
     })
 }
 
-/// Push value using emergency mode (3-step: enable → update → disable).
+/// Push value using emergency mode.
+///
+/// Emergency mode must stay ON — the vault's `totalAssets()` calls
+/// adapter `realAssets()` → valuer `getValue()`, which only works
+/// when the valuer is in emergency mode (returns cached value).
 async fn push_emergency<P: alloy::providers::Provider>(
     valuer: &IValuer::IValuerInstance<P>,
     strategy_id: FixedBytes<32>,
     value: U256,
 ) -> Result<()> {
-    // Step 1: Enable emergency mode
-    let pending = valuer
-        .setEmergencyMode(true)
-        .send()
-        .await
-        .context("setEmergencyMode(true) failed")?;
-    let receipt = pending.get_receipt().await?;
-    if !receipt.status() {
-        anyhow::bail!("setEmergencyMode(true) reverted");
+    // Enable emergency mode (idempotent if already on).
+    // Non-fatal: if it fails (e.g. RPC flake) but emergency mode is already on,
+    // we can still push the value via emergencyUpdate.
+    match valuer.setEmergencyMode(true).send().await {
+        Ok(pending) => match pending.get_receipt().await {
+            Ok(receipt) if !receipt.status() => {
+                eprintln!("[valuer] WARNING: setEmergencyMode(true) reverted, continuing anyway");
+            }
+            Err(e) => {
+                eprintln!("[valuer] WARNING: setEmergencyMode(true) receipt failed: {e:#}, continuing anyway");
+            }
+            _ => {}
+        },
+        Err(e) => {
+            eprintln!("[valuer] WARNING: setEmergencyMode(true) send failed: {e:#}, continuing anyway");
+        }
     }
 
-    // Step 2: Emergency update
+    // Push the value
     let pending = valuer
         .emergencyUpdate(strategy_id, value)
         .send()
         .await
         .context("emergencyUpdate failed")?;
     let receipt = pending.get_receipt().await?;
-    let update_ok = receipt.status();
-
-    // Step 3: Disable emergency mode (ALWAYS, even if update failed)
-    let pending = valuer
-        .setEmergencyMode(false)
-        .send()
-        .await
-        .context("setEmergencyMode(false) failed")?;
-    let receipt = pending.get_receipt().await?;
     if !receipt.status() {
-        eprintln!("[valuer] WARNING: setEmergencyMode(false) reverted — valuer may still be in emergency mode");
-    }
-
-    if !update_ok {
         anyhow::bail!("emergencyUpdate reverted");
     }
+
+    // NOTE: Do NOT disable emergency mode. The vault depends on it to
+    // resolve totalAssets() → adapter.realAssets() → valuer.getValue().
 
     Ok(())
 }

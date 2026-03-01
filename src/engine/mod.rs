@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, Result};
 
 use crate::model::amount::Amount;
-use crate::model::node::{CronInterval, Node, NodeId, SpotSide, Trigger};
+use crate::model::node::{CronInterval, Node, NodeId, PendleAction, SpotSide, Trigger};
 use crate::model::workflow::Workflow;
 use crate::venues::{ExecutionResult, RiskParams, SimMetrics, Venue};
 
@@ -275,8 +275,10 @@ impl Engine {
             }
         }
 
-        // Normal node: call venue (skip if no input — avoids pointless on-chain txns)
-        if input_amount > 0.0 {
+        // Normal node: call venue (skip if no input — avoids pointless on-chain txns).
+        // Exception: Pendle mint_pt may have stranded SY tokens to recover even with 0 new input.
+        let force_execute = matches!(&node, Node::Pendle { action, .. } if *action == PendleAction::MintPt);
+        if input_amount > 0.0 || force_execute {
             if let Some(venue) = self.venues.get_mut(node_id) {
                 let result = venue.execute(&node, input_amount).await?;
                 self.distribute_result(node_id, &input_token, result)?;

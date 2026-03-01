@@ -1,7 +1,6 @@
 use alloy::primitives::{Address, Bytes, FixedBytes, U256};
 use alloy::providers::ProviderBuilder;
 use alloy::sol;
-use alloy::sol_types::SolValue;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +18,17 @@ sol! {
     contract IErc4626Read {
         function totalAssets() external view returns (uint256);
         function asset() external view returns (address);
+    }
+}
+
+sol! {
+    /// Morpho vaults on HyperEVM use _totalAssets()(uint128) as the real
+    /// source of truth (selector 0xce04bebb). Standard totalAssets() may
+    /// return 0 or revert.
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    contract IMorphoVaultRead {
+        function _totalAssets() external view returns (uint128);
     }
 }
 
@@ -64,6 +74,7 @@ sol! {
             Call[] calls
         ) external;
         function refreshCachedValuation() external;
+        function totalAllocations() external view returns (uint256);
     }
 }
 
@@ -119,13 +130,25 @@ pub async fn read_vault_state(
 
     let rp = evm::read_provider(rpc_url)?;
 
-    // Read totalAssets from the ERC4626 vault
+    // Read totalAssets from the vault.
+    // Morpho vaults on HyperEVM use _totalAssets()(uint128) instead of the
+    // standard ERC4626 totalAssets()(uint256). Try _totalAssets first, then
+    // fall back to totalAssets, then treat as empty.
+    // Morpho vaults on HyperEVM use _totalAssets()(uint128) as the real
+    // source of truth. Standard totalAssets() may return 0 or revert.
+    // Try _totalAssets first, then fall back to totalAssets.
+    let morpho = IMorphoVaultRead::new(vault_addr, &rp);
     let vault = IErc4626Read::new(vault_addr, &rp);
-    let total_assets_raw = vault
-        .totalAssets()
-        .call()
-        .await
-        .context("vault.totalAssets() call failed")?;
+    let total_assets_raw = match morpho._totalAssets().call().await {
+        Ok(v) => U256::from(v),
+        Err(_) => match vault.totalAssets().call().await {
+            Ok(v) if v > U256::ZERO => v,
+            _ => {
+                eprintln!("[reserve] WARNING: vault totalAssets unavailable, treating as empty");
+                U256::ZERO
+            }
+        },
+    };
 
     // Get underlying token address and decimals
     let underlying = vault
@@ -162,6 +185,50 @@ pub async fn read_vault_state(
         idle_balance,
         reserve_ratio,
     })
+}
+
+/// Read adapter's totalAllocations() — the amount of underlying allocated to
+/// strategies. Used as a fallback TVL estimate when vault.totalAssets() reverts
+/// (e.g. unconfigured valuer) to bootstrap the initial valuation push.
+pub async fn read_adapter_allocations(
+    config: &ReserveConfig,
+    contracts: &evm::ContractManifest,
+) -> Result<f64> {
+    let adapter_key = config
+        .adapter_address
+        .as_ref()
+        .context("no adapter_address in reserve config")?;
+
+    let adapter_addr =
+        evm::resolve_contract(contracts, adapter_key, &config.vault_chain).with_context(|| {
+            format!(
+                "Adapter '{}' on {} not in contracts manifest",
+                adapter_key, config.vault_chain,
+            )
+        })?;
+
+    let rpc_url = config
+        .vault_chain
+        .rpc_url()
+        .context("vault chain requires RPC URL")?;
+    let rp = evm::read_provider(rpc_url)?;
+
+    let adapter = IAdapter::new(adapter_addr, &rp);
+    let total = adapter
+        .totalAllocations()
+        .call()
+        .await
+        .context("adapter.totalAllocations() failed")?;
+
+    // Resolve decimals from the vault's underlying token
+    let vault_addr = evm::resolve_contract(contracts, &config.vault_address, &config.vault_chain)
+        .context("vault address not in contracts manifest")?;
+    let vault = IErc4626Read::new(vault_addr, &rp);
+    let underlying = vault.asset().call().await.context("vault.asset()")?;
+    let erc20 = IErc20Read::new(underlying, &rp);
+    let decimals = erc20.decimals().call().await.context("decimals()")?;
+
+    Ok(evm::from_token_units(total, decimals))
 }
 
 // ── Allocation: pull excess funds from vault ─────────────────────────
