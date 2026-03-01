@@ -474,6 +474,14 @@ impl Engine {
             venue_total += gv;
         }
 
+        // Safety: if all groups got 0% allocation (cold start, no alpha data yet),
+        // skip rebalancing entirely to avoid unwinding existing positions.
+        let total_fraction: f64 = alloc_result.groups.iter().map(|g| g.fraction).sum();
+        if total_fraction <= 0.0 && venue_total > 1.0 {
+            eprintln!("  [kelly] WARNING: all allocations are 0% (cold alpha?) — skipping rebalance to protect positions");
+            return Ok(());
+        }
+
         let total_portfolio = venue_total + optimizer_balance;
         if total_portfolio <= 0.0 {
             return Ok(());

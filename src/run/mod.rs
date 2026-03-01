@@ -322,6 +322,11 @@ async fn run_async(
             }
         }
 
+        // Tick venues BEFORE executing cron nodes so alpha stats are warm.
+        let tick_now = chrono::Utc::now().timestamp() as u64;
+        let tick_dt = tick_now.saturating_sub(state.last_tick) as f64;
+        engine.tick_venues(tick_now, tick_dt).await?;
+
         // Recovery pass: check for stranded funds (Bridge2 USDC on Arb, Pendle SY, etc.)
         if let Ok(true) = engine.recovery_pass().await {
             sync_balances(&engine, &mut state);
@@ -461,6 +466,14 @@ async fn run_async(
                         }
                     }
 
+                    // Tick venues BEFORE executing cron nodes so alpha stats are warm.
+                    // Without this, the optimizer sees 0% return on first tick and unwinds.
+                    let now_ts = now.timestamp() as u64;
+                    let dt = now_ts.saturating_sub(state.last_tick) as f64;
+                    if let Err(e) = engine.tick_venues(now_ts, dt).await {
+                        eprintln!("  ERROR ticking venues: {:#}", e);
+                    }
+
                     // Recovery pass: check for stranded funds before executing cron nodes
                     if let Ok(true) = engine.recovery_pass().await {
                         sync_balances(&engine, &mut state);
@@ -470,13 +483,6 @@ async fn run_async(
                         if let Err(e) = engine.execute_node(node_id).await {
                             eprintln!("  ERROR executing node '{}': {:#}", node_id, e);
                         }
-                    }
-
-                    // Tick all venues (accrue interest, update positions, etc.)
-                    let now_ts = now.timestamp() as u64;
-                    let dt = now_ts.saturating_sub(state.last_tick) as f64;
-                    if let Err(e) = engine.tick_venues(now_ts, dt).await {
-                        eprintln!("  ERROR ticking venues: {:#}", e);
                     }
 
                     state.last_tick = now_ts;
@@ -722,7 +728,7 @@ async fn reconcile_onchain_state(
 /// Returns `(symbol, balance)` pairs for every token with balance > $0.01.
 /// This catches stranded intermediate tokens after partial deploy failures
 /// (e.g. swap succeeded but downstream venue failed → wallet holds output token).
-async fn query_wallet_all_tokens(
+pub(crate) async fn query_wallet_all_tokens(
     workflow: &Workflow,
     config: &RuntimeConfig,
     tokens: &evm::TokenManifest,
@@ -772,7 +778,7 @@ async fn query_wallet_all_tokens(
 
         match query_erc20_balance(rpc_url, addr, config.wallet_address).await {
             Ok(bal) if bal > 0.01 => {
-                println!("  [reconcile] wallet {} = {:.2}", symbol, bal);
+                eprintln!("  [reconcile] wallet {} = {:.2}", symbol, bal);
                 results.push((symbol.clone(), bal));
             }
             _ => {}
@@ -783,7 +789,7 @@ async fn query_wallet_all_tokens(
 }
 
 /// Query an ERC20 token balance for an address, fetching decimals on-chain.
-async fn query_erc20_balance(
+pub(crate) async fn query_erc20_balance(
     rpc_url: &str,
     token_addr: alloy::primitives::Address,
     wallet_addr: alloy::primitives::Address,

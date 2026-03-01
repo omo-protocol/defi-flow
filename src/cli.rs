@@ -174,6 +174,16 @@ pub enum Command {
         registry_dir: Option<PathBuf>,
     },
 
+    /// Query on-chain TVL for a strategy (per-venue breakdown, wallet tokens)
+    Query {
+        /// Path to the workflow JSON file
+        file: PathBuf,
+
+        /// Optional state file for cumulative metrics (funding, interest, etc.)
+        #[arg(long)]
+        state_file: Option<PathBuf>,
+    },
+
     /// Fetch historical data from venue APIs for backtesting
     FetchData {
         /// Path to the workflow JSON file

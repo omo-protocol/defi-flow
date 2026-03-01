@@ -11,6 +11,7 @@ mod list_nodes;
 mod logs;
 mod model;
 mod ps;
+mod query;
 mod resume;
 mod run;
 mod schema;
@@ -93,6 +94,9 @@ fn main() -> anyhow::Result<()> {
             follow,
             registry_dir,
         } => logs::run(&name, lines, follow, registry_dir.as_deref()),
+        cli::Command::Query { file, state_file } => {
+            query::run(&file, state_file.as_deref())
+        }
         cli::Command::FetchData {
             file,
             output_dir,

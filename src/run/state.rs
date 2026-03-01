@@ -52,7 +52,7 @@ impl RunState {
         if path.exists() {
             let contents = std::fs::read_to_string(path).context("reading state file")?;
             let state: RunState = serde_json::from_str(&contents).context("parsing state file")?;
-            println!(
+            eprintln!(
                 "Loaded state from {} (deploy_completed={})",
                 path.display(),
                 state.deploy_completed
