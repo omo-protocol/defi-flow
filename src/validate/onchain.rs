@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use alloy::primitives::Address;
+use alloy::primitives::{Address, U256};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::sol;
 use ferrofluid::InfoProvider;
@@ -38,6 +38,18 @@ sol! {
         );
     }
 
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    contract IERC20Balance {
+        function balanceOf(address account) external view returns (uint256);
+        function decimals() external view returns (uint8);
+    }
+
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    contract IPendleSYProbe {
+        function previewDeposit(address tokenIn, uint256 amountTokenToDeposit) external view returns (uint256);
+    }
 }
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -125,6 +137,9 @@ pub async fn validate_onchain(workflow: &Workflow) -> Vec<ValidationError> {
 
     // Movement node quote checks (LiFi)
     errors.extend(check_movement_quotes(workflow).await);
+
+    // Pendle balance / minimum warnings (informational)
+    check_pendle_balance_warnings(workflow, &chain_map).await;
 
     errors
 }
@@ -734,4 +749,147 @@ async fn check_hyperliquid_universe(workflow: &Workflow) -> Vec<ValidationError>
     }
 
     errors
+}
+
+// ── Pendle balance warnings ──────────────────────────────────────────
+
+/// Print informational warnings about wallet balance vs Pendle SY deposit.
+/// Not a hard error — just tells the agent how much is available and what to expect.
+async fn check_pendle_balance_warnings(
+    workflow: &Workflow,
+    chain_map: &HashMap<String, Chain>,
+) {
+    let token_manifest = workflow.tokens.clone().unwrap_or_default();
+    let contract_manifest = workflow.contracts.clone().unwrap_or_default();
+
+    // Find wallet address + token
+    let wallet_addr = match workflow.nodes.iter().find_map(|n| {
+        if let Node::Wallet { address, .. } = n {
+            address.parse::<Address>().ok()
+        } else {
+            None
+        }
+    }) {
+        Some(a) => a,
+        None => return,
+    };
+
+    // Find Pendle nodes
+    for node in &workflow.nodes {
+        let (node_id, market, input_token) = match node {
+            Node::Pendle { id, market, input_token, .. } => {
+                (id, market, input_token.as_deref().unwrap_or("USDC"))
+            }
+            _ => continue,
+        };
+
+        // Resolve SY address from contracts manifest
+        let sy_key = format!(
+            "pendle_{}_sy",
+            market.to_lowercase().replace('-', "_")
+        );
+        let sy_chain = chain_map
+            .values()
+            .find(|c| c.rpc_url().is_some())
+            .cloned()
+            .unwrap_or_else(Chain::hyperevm);
+        let sy_addr = contract_manifest
+            .get(&sy_key)
+            .and_then(|m| m.values().next())
+            .and_then(|a| a.parse::<Address>().ok());
+
+        let sy_addr = match sy_addr {
+            Some(a) => a,
+            None => continue,
+        };
+
+        let rpc_url = match sy_chain.rpc_url() {
+            Some(u) => u.to_string(),
+            None => continue,
+        };
+
+        let provider = ProviderBuilder::new().connect_http(match rpc_url.parse() {
+            Ok(u) => u,
+            Err(_) => continue,
+        });
+
+        // Resolve input token address
+        let token_addr = token_manifest
+            .get(input_token)
+            .and_then(|m| m.values().next())
+            .and_then(|a| a.parse::<Address>().ok());
+
+        let token_addr = match token_addr {
+            Some(a) => a,
+            None => continue,
+        };
+
+        // Check wallet balance of the input token
+        let is_native = token_addr == Address::ZERO;
+        let balance = if is_native {
+            match tokio::time::timeout(
+                Duration::from_secs(10),
+                provider.get_balance(wallet_addr),
+            ).await {
+                Ok(Ok(b)) => b,
+                _ => continue,
+            }
+        } else {
+            let erc20 = IERC20Balance::new(token_addr, &provider);
+            match tokio::time::timeout(
+                Duration::from_secs(10),
+                erc20.balanceOf(wallet_addr).call(),
+            ).await {
+                Ok(Ok(b)) => b,
+                _ => continue,
+            }
+        };
+
+        // Get decimals
+        let decimals: u8 = if is_native {
+            18
+        } else {
+            let erc20 = IERC20Balance::new(token_addr, &provider);
+            match tokio::time::timeout(
+                Duration::from_secs(10),
+                erc20.decimals().call(),
+            ).await {
+                Ok(Ok(d)) => d,
+                _ => 18,
+            }
+        };
+
+        let human_balance = balance.to::<u128>() as f64 / 10f64.powi(decimals as i32);
+
+        // Preview deposit to check if it works
+        let sy = IPendleSYProbe::new(sy_addr, &provider);
+        let preview = tokio::time::timeout(
+            Duration::from_secs(10),
+            sy.previewDeposit(token_addr, balance).call(),
+        ).await;
+
+        match preview {
+            Ok(Ok(shares)) if shares > U256::ZERO => {
+                println!(
+                    "  Pendle {node_id}: wallet has {human_balance:.2} {input_token} → \
+                     previewDeposit OK ({shares} SY shares)"
+                );
+            }
+            Ok(Ok(_)) => {
+                eprintln!(
+                    "  warning: Pendle {node_id}: wallet has {human_balance:.2} {input_token} \
+                     but previewDeposit returns 0 shares — amount may be below SY minimum"
+                );
+            }
+            Ok(Err(e)) => {
+                eprintln!(
+                    "  warning: Pendle {node_id}: wallet has {human_balance:.2} {input_token} \
+                     but previewDeposit reverted — deposit may be below SY minimum ({e})"
+                );
+            }
+            Err(_) => {
+                eprintln!("  warning: Pendle {node_id}: previewDeposit timed out");
+            }
+        }
+    }
 }

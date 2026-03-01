@@ -1,6 +1,6 @@
 mod anvil_common;
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::{address, Address, U256};
 use alloy::sol;
 
 use anvil_common::*;
@@ -10,13 +10,13 @@ use anvil_common::*;
 const HYPEREVM_RPC: &str = "https://rpc.hyperliquid.xyz/evm";
 const HYPEREVM_CHAIN_ID: u64 = 999;
 
-// PT-kHYPE contracts
+// PT-hwHLP contracts (accepts USDT0 directly, expiry 2026-06-25)
 const PENDLE_ROUTER: &str = "0x888888888889758F76e7103c6CbF23ABbF58F946";
-const PT_KHYPE_SY: &str = "0x57fc55dff8ceca86ee94a6bf255af2f0ed90eb9e";
-const PT_KHYPE_YT: &str = "0x8e8df024cf6d3e916be0821ff3177db6981fcad2";
-const PT_KHYPE_MARKET: &str = "0x31104779b2a07a273d6c662419377773083d0b2e";
+const PT_HWHLP_SY: &str = "0xc3bc221de037908fd24c79602b731df848b12157";
+const PT_HWHLP_YT: &str = "0x7a2c73b4dd114ada21674312160ab27a10ce9e4c";
 
-const WHYPE: &str = "0x5555555555555555555555555555555555555555";
+const USDT0_ADDR: Address = address!("B8CE59FC3717ada4C02eaDF9682A9e934F625ebb");
+const USDT0_WHALE: Address = address!("2222222222222222222222222222222222222222");
 
 // ── ABIs ─────────────────────────────────────────────────────────────
 
@@ -25,13 +25,6 @@ sol! {
     contract IERC20 {
         function approve(address spender, uint256 amount) external returns (bool);
         function balanceOf(address account) external view returns (uint256);
-    }
-}
-
-sol! {
-    #[sol(rpc)]
-    contract IWETH9 {
-        function withdraw(uint256 amount) external;
     }
 }
 
@@ -61,29 +54,24 @@ sol! {
 
 // ── Test ──────────────────────────────────────────────────────────────
 
-/// Full E2E: fund HYPE → wrap to WHYPE (simulating LiFi swap output) →
-/// unwrap → deposit native HYPE into SY → approve → mintPyFromSy → verify PT/YT
+/// Full E2E: fund USDT0 → approve SY → deposit ERC20 into SY → approve router → mintPyFromSy → verify PT/YT
 ///
-/// This is the exact flow the PendleYield venue executes.
+/// This is the exact flow the PendleYield venue executes for PT-hwHLP.
+/// No swap needed — SY accepts USDT0 directly.
+///
+/// WARNING: Agents must use this test as a harness. Minimum deposit amounts vary
+/// by SY contract (e.g. kHYPE SY requires ~100+ HYPE due to staking minimums).
+/// Always check `previewDeposit` or test with small amounts before deploying.
 #[tokio::test]
 #[ignore] // Requires Anvil + network access
 async fn test_pendle_pt_mint_e2e() {
     // 1. Fork HyperEVM
     let ctx = spawn_fork(HYPEREVM_RPC, HYPEREVM_CHAIN_ID);
 
-    // 2. Fund wallet with native HYPE (200 HYPE — kHYPE has min stake)
-    let hype_amount = U256::from(500u128 * 10u128.pow(18));
-    fund_eth(&ctx.rpc_url, ctx.wallet_address, hype_amount).await;
-    println!("  Funded 500 HYPE to test wallet");
-
-    // 3. Wrap 200 HYPE → WHYPE (simulating what LiFi swap outputs)
-    let whype_addr: Address = WHYPE.parse().unwrap();
-    let mint_amount = U256::from(200u128 * 10u128.pow(18));
-    wrap_eth(&ctx.rpc_url, &ctx.private_key, whype_addr, mint_amount).await;
-
-    let whype_bal = balance_of(&ctx.rpc_url, whype_addr, ctx.wallet_address).await;
-    println!("  WHYPE balance: {} (should be 200e18)", whype_bal);
-    assert!(whype_bal >= mint_amount, "WHYPE wrap failed");
+    // 2. Fund wallet with USDT0 (ERC20, 6 decimals) via whale
+    let deposit_amount = U256::from(100u128 * 10u128.pow(6)); // 100 USDT0
+    fund_erc20(&ctx.rpc_url, USDT0_ADDR, USDT0_WHALE, ctx.wallet_address, deposit_amount).await;
+    println!("  Funded 100 USDT0 to test wallet");
 
     // Build provider with test wallet
     let signer: alloy::signers::local::PrivateKeySigner = ctx.private_key.parse().unwrap();
@@ -92,31 +80,28 @@ async fn test_pendle_pt_mint_e2e() {
         .wallet(wallet)
         .connect_http(ctx.rpc_url.parse().unwrap());
 
-    let sy_addr: Address = PT_KHYPE_SY.parse().unwrap();
-    let yt_addr: Address = PT_KHYPE_YT.parse().unwrap();
+    let sy_addr: Address = PT_HWHLP_SY.parse().unwrap();
+    let yt_addr: Address = PT_HWHLP_YT.parse().unwrap();
     let router_addr: Address = PENDLE_ROUTER.parse().unwrap();
-    let deposit_amount = U256::from(100u128 * 10u128.pow(18)); // 100 HYPE
 
-    // 4. Unwrap WHYPE → native HYPE (venue does this for HYPE input)
-    println!("  Step 1: Unwrap WHYPE → native HYPE");
-    let whype = IWETH9::new(whype_addr, &provider);
-    whype
-        .withdraw(deposit_amount)
-        .send().await.expect("WHYPE withdraw failed")
-        .get_receipt().await.expect("WHYPE withdraw receipt");
-    println!("  Unwrapped 1 WHYPE → 1 native HYPE");
+    // 3. Approve USDT0 for SY contract
+    println!("  Step 1: Approve USDT0 for SY");
+    let usdt0 = IERC20::new(USDT0_ADDR, &provider);
+    usdt0
+        .approve(sy_addr, deposit_amount)
+        .send().await.expect("USDT0 approve failed")
+        .get_receipt().await.expect("USDT0 approve receipt");
 
-    // 5. Deposit native HYPE into SY contract
-    println!("  Step 2: Deposit native HYPE into SY");
+    // 4. Deposit USDT0 into SY contract (ERC20 path, no msg.value)
+    println!("  Step 2: Deposit USDT0 into SY");
     let sy = IPendleSY::new(sy_addr, &provider);
     let receipt = sy
-        .deposit(ctx.wallet_address, Address::ZERO, deposit_amount, U256::ZERO)
-        .value(deposit_amount)
+        .deposit(ctx.wallet_address, USDT0_ADDR, deposit_amount, U256::ZERO)
         .send().await.expect("SY deposit failed")
         .get_receipt().await.expect("SY deposit receipt");
     println!("  SY deposit tx: {:?}", receipt.transaction_hash);
 
-    // 6. Check SY balance
+    // 5. Check SY balance
     let sy_erc20 = IERC20::new(sy_addr, &provider);
     let sy_bal = sy_erc20
         .balanceOf(ctx.wallet_address)
@@ -124,14 +109,14 @@ async fn test_pendle_pt_mint_e2e() {
     println!("  SY balance after deposit: {}", sy_bal);
     assert!(sy_bal > U256::ZERO, "SY balance should be > 0 after deposit");
 
-    // 7. Approve SY for Pendle router
+    // 6. Approve SY for Pendle router
     println!("  Step 3: Approve SY for router");
     sy_erc20
         .approve(router_addr, sy_bal)
         .send().await.expect("approve SY failed")
         .get_receipt().await.expect("approve SY receipt");
 
-    // 8. Mint PT+YT from SY
+    // 7. Mint PT+YT from SY
     println!("  Step 4: mintPyFromSy");
     let router = IPendleRouter::new(router_addr, &provider);
     let mint_receipt = router
@@ -140,7 +125,7 @@ async fn test_pendle_pt_mint_e2e() {
         .get_receipt().await.expect("mintPyFromSy receipt");
     println!("  mintPyFromSy tx: {:?}", mint_receipt.transaction_hash);
 
-    // 9. Verify YT balance > 0 (mintPyFromSy mints equal PT + YT)
+    // 8. Verify YT balance > 0 (mintPyFromSy mints equal PT + YT)
     let yt_erc20 = IERC20::new(yt_addr, &provider);
     let yt_bal = yt_erc20
         .balanceOf(ctx.wallet_address)
@@ -148,28 +133,32 @@ async fn test_pendle_pt_mint_e2e() {
     println!("  YT balance after mint: {}", yt_bal);
     assert!(yt_bal > U256::ZERO, "Should have YT tokens after mint");
 
-    // 10. Verify SY was fully consumed
+    // 9. Verify SY was fully consumed
     let sy_bal_after = sy_erc20
         .balanceOf(ctx.wallet_address)
         .call().await.expect("SY balanceOf after");
     println!("  SY balance after mint: {} (should be 0)", sy_bal_after);
     assert_eq!(sy_bal_after, U256::ZERO, "SY should be fully consumed");
 
+    // 10. Verify USDT0 was consumed
+    let usdt0_bal_after = usdt0
+        .balanceOf(ctx.wallet_address)
+        .call().await.expect("USDT0 balanceOf after");
+    println!("  USDT0 balance after: {} (should be 0)", usdt0_bal_after);
+
     println!("\n  === test_pendle_pt_mint_e2e PASSED ===");
-    println!("  Flow: WHYPE → unwrap → native HYPE → SY deposit → mintPyFromSy → PT+YT");
+    println!("  Flow: USDT0 → approve → SY deposit → mintPyFromSy → PT+YT");
 }
 
-/// Test: deposit native HYPE directly into SY (no WHYPE unwrap step).
-/// This is what happens when the venue receives native HYPE from LiFi.
+/// Test: deposit USDT0 directly into SY (just the deposit step).
 #[tokio::test]
 #[ignore]
-async fn test_pendle_sy_deposit_native_hype() {
+async fn test_pendle_sy_deposit_usdt0() {
     let ctx = spawn_fork(HYPEREVM_RPC, HYPEREVM_CHAIN_ID);
 
-    // Fund with native HYPE only (200 — kHYPE has min stake)
-    let hype_amount = U256::from(500u128 * 10u128.pow(18));
-    fund_eth(&ctx.rpc_url, ctx.wallet_address, hype_amount).await;
-    println!("  Funded 500 HYPE (native)");
+    let deposit_amount = U256::from(50u128 * 10u128.pow(6)); // 50 USDT0
+    fund_erc20(&ctx.rpc_url, USDT0_ADDR, USDT0_WHALE, ctx.wallet_address, deposit_amount).await;
+    println!("  Funded 50 USDT0");
 
     let signer: alloy::signers::local::PrivateKeySigner = ctx.private_key.parse().unwrap();
     let wallet = alloy::network::EthereumWallet::from(signer);
@@ -177,14 +166,18 @@ async fn test_pendle_sy_deposit_native_hype() {
         .wallet(wallet)
         .connect_http(ctx.rpc_url.parse().unwrap());
 
-    let sy_addr: Address = PT_KHYPE_SY.parse().unwrap();
-    let deposit_amount = U256::from(200u128 * 10u128.pow(18)); // 200 HYPE (kHYPE has min stake)
+    let sy_addr: Address = PT_HWHLP_SY.parse().unwrap();
 
-    // Deposit native HYPE into SY directly
+    // Approve + deposit
+    let usdt0 = IERC20::new(USDT0_ADDR, &provider);
+    usdt0
+        .approve(sy_addr, deposit_amount)
+        .send().await.expect("approve failed")
+        .get_receipt().await.expect("approve receipt");
+
     let sy = IPendleSY::new(sy_addr, &provider);
     let receipt = sy
-        .deposit(ctx.wallet_address, Address::ZERO, deposit_amount, U256::ZERO)
-        .value(deposit_amount)
+        .deposit(ctx.wallet_address, USDT0_ADDR, deposit_amount, U256::ZERO)
         .send().await.expect("SY deposit failed")
         .get_receipt().await.expect("SY deposit receipt");
     println!("  SY deposit tx: {:?}", receipt.transaction_hash);
@@ -196,5 +189,5 @@ async fn test_pendle_sy_deposit_native_hype() {
     println!("  SY balance: {} (should be > 0)", sy_bal);
     assert!(sy_bal > U256::ZERO, "SY deposit should produce shares");
 
-    println!("  test_pendle_sy_deposit_native_hype PASSED");
+    println!("  test_pendle_sy_deposit_usdt0 PASSED");
 }
