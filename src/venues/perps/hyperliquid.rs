@@ -30,6 +30,9 @@ pub struct HyperliquidPerp {
     slippage_bps: f64,
     asset_indices: HashMap<String, u32>,
     sz_decimals: HashMap<String, u32>,
+    /// Spot pair indices (e.g. "ETH" → 10000 + pair_index)
+    spot_indices: HashMap<String, u32>,
+    spot_sz_decimals: HashMap<String, u32>,
     positions: HashMap<String, PositionState>,
     metrics: SimMetrics,
     /// The coin this venue trades (e.g. "ETH"). Set at build time.
@@ -66,6 +69,8 @@ impl HyperliquidPerp {
             slippage_bps: config.slippage_bps,
             asset_indices: HashMap::new(),
             sz_decimals: HashMap::new(),
+            spot_indices: HashMap::new(),
+            spot_sz_decimals: HashMap::new(),
             positions: HashMap::new(),
             metrics: SimMetrics::default(),
             coin,
@@ -91,6 +96,22 @@ impl HyperliquidPerp {
         }
 
         println!("  HL: loaded {} asset indices", self.asset_indices.len());
+
+        // Load spot meta for spot order asset indices
+        if self.is_spot {
+            if let Ok(spot_meta) = self.info.spot_meta().await {
+                for pair in &spot_meta.universe {
+                    // Spot pair name is e.g. "ETH/USDC" — extract base token
+                    let base = pair.name.split('/').next().unwrap_or(&pair.name);
+                    // Spot asset index = 10000 + pair index
+                    self.spot_indices.insert(base.to_string(), 10000 + pair.index);
+                }
+                for token in &spot_meta.tokens {
+                    self.spot_sz_decimals.insert(token.name.clone(), token.sz_decimals);
+                }
+                println!("  HL: loaded {} spot pairs", self.spot_indices.len());
+            }
+        }
         Ok(())
     }
 
@@ -221,20 +242,14 @@ impl HyperliquidPerp {
         format!("{:.prec$}", size, prec = decimals as usize)
     }
 
+    /// Round price to 5 significant figures (Hyperliquid requirement).
     fn format_price(price: f64) -> String {
-        if price >= 10000.0 {
-            format!("{:.1}", price)
-        } else if price >= 1000.0 {
-            format!("{:.2}", price)
-        } else if price >= 100.0 {
-            format!("{:.3}", price)
-        } else if price >= 10.0 {
-            format!("{:.4}", price)
-        } else if price >= 1.0 {
-            format!("{:.5}", price)
-        } else {
-            format!("{:.6}", price)
+        if price == 0.0 {
+            return "0".to_string();
         }
+        let magnitude = price.abs().log10().floor() as i32;
+        let decimals = (4 - magnitude).max(0) as usize;
+        format!("{:.prec$}", price, prec = decimals)
     }
 
     async fn execute_perp_open(
@@ -602,8 +617,88 @@ impl Venue for HyperliquidPerp {
                     });
                 }
 
-                println!("  HL SPOT: full spot execution TBD — treating as price lookup");
-                Ok(ExecutionResult::Noop)
+                let spot_asset = *self
+                    .spot_indices
+                    .get(coin)
+                    .with_context(|| format!("Unknown spot asset '{coin}' — not in HL spot meta"))?;
+
+                let spot_decimals = self.spot_sz_decimals.get(coin).copied().unwrap_or(4);
+                let slippage_mult = self.slippage_bps / 10000.0;
+                let limit_price = if is_buy {
+                    mid_price * (1.0 + slippage_mult)
+                } else {
+                    mid_price * (1.0 - slippage_mult)
+                };
+
+                // For spot buy: size = USDC amount / price (in base token units)
+                // For spot sell: size = input_amount (already in base token units)
+                let size = if is_buy {
+                    input_amount / mid_price
+                } else {
+                    input_amount
+                };
+
+                let formatted_size = format!("{:.prec$}", size, prec = spot_decimals as usize);
+                let formatted_price = Self::format_price(limit_price);
+
+                println!(
+                    "  HL SPOT: {} {} {} @ {} (${:.2})",
+                    if is_buy { "BUY" } else { "SELL" },
+                    formatted_size, coin, formatted_price, input_amount,
+                );
+
+                let order = ferrofluid::types::OrderRequest::limit(
+                    spot_asset,
+                    is_buy,
+                    &formatted_price,
+                    &formatted_size,
+                    "Ioc",
+                );
+
+                let response = self
+                    .exchange
+                    .place_order(&order)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Spot order failed: {e}"))?;
+
+                match response {
+                    ExchangeResponseStatus::Ok(resp) => {
+                        if let Some(data) = &resp.data {
+                            for status in &data.statuses {
+                                match status {
+                                    ExchangeDataStatus::Filled(fill) => {
+                                        let fill_size: f64 = fill.total_sz.parse().unwrap_or(0.0);
+                                        let fill_price: f64 = fill.avg_px.parse().unwrap_or(mid_price);
+                                        println!(
+                                            "  HL SPOT: FILLED {} {} @ {} (oid: {})",
+                                            fill_size, coin, fill_price, fill.oid
+                                        );
+                                        self.positions.insert(
+                                            coin.to_string(),
+                                            PositionState {
+                                                coin: coin.to_string(),
+                                                size: fill_size,
+                                                entry_price: fill_price,
+                                                leverage: 1.0,
+                                            },
+                                        );
+                                    }
+                                    ExchangeDataStatus::Error(msg) => {
+                                        bail!("HL spot order error: {msg}");
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        Ok(ExecutionResult::PositionUpdate {
+                            consumed: input_amount,
+                            output: None,
+                        })
+                    }
+                    ExchangeResponseStatus::Err(err) => {
+                        bail!("HL spot exchange error: {err}");
+                    }
+                }
             }
             _ => {
                 println!(
