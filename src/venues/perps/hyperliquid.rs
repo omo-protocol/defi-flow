@@ -42,6 +42,8 @@ pub struct HyperliquidPerp {
     cached_alpha: Option<(f64, f64)>,
     /// Timestamp of last funding history fetch (avoid hammering API).
     last_alpha_fetch: u64,
+    /// Whether we've reconciled positions from HL on-chain state.
+    reconciled: bool,
 }
 
 impl HyperliquidPerp {
@@ -71,6 +73,7 @@ impl HyperliquidPerp {
             margin_deposited: 0.0,
             cached_alpha: None,
             last_alpha_fetch: 0,
+            reconciled: false,
         })
     }
 
@@ -88,6 +91,108 @@ impl HyperliquidPerp {
         }
 
         println!("  HL: loaded {} asset indices", self.asset_indices.len());
+        Ok(())
+    }
+
+    /// Reconcile in-memory positions from on-chain HL clearinghouse state.
+    /// Called on startup so restarted daemons know about existing positions.
+    async fn reconcile_positions(&mut self) -> Result<()> {
+        if self.dry_run {
+            return Ok(());
+        }
+
+        if self.is_spot {
+            // Spot: query spot clearinghouse for token balances
+            match self.info.user_token_balances(self.wallet_address).await {
+                Ok(state) => {
+                    for bal in &state.balances {
+                        let total: f64 = bal.total.parse().unwrap_or(0.0);
+                        if total.abs() > 1e-12 && bal.coin != "USDC" {
+                            // Check if this is the coin we trade
+                            if let Some(ref our_coin) = self.coin {
+                                if bal.coin == *our_coin {
+                                    let mids = self.get_mids().await.unwrap_or_default();
+                                    let price = mids.get(&bal.coin).copied().unwrap_or(1.0);
+                                    self.positions.insert(
+                                        bal.coin.clone(),
+                                        PositionState {
+                                            coin: bal.coin.clone(),
+                                            size: total,
+                                            entry_price: price,
+                                            leverage: 1.0,
+                                        },
+                                    );
+                                    eprintln!(
+                                        "  [reconcile] HL spot: {} {} (${:.2})",
+                                        total, bal.coin, total * price,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("  [reconcile] HL spot state unavailable: {e}");
+                }
+            }
+        } else {
+            // Perp: query clearinghouse for open positions
+            match self.info.user_state(self.wallet_address).await {
+                Ok(state) => {
+                    let account_value: f64 =
+                        state.margin_summary.account_value.parse().unwrap_or(0.0);
+
+                    for ap in &state.asset_positions {
+                        let pos = &ap.position;
+                        let size: f64 = pos.szi.parse().unwrap_or(0.0);
+                        if size.abs() < 1e-12 {
+                            continue;
+                        }
+                        // Check if this is the coin we trade
+                        if let Some(ref our_coin) = self.coin {
+                            if pos.coin != *our_coin {
+                                continue;
+                            }
+                        }
+                        let entry_price: f64 = pos.entry_px.as_deref()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        let leverage: f64 = pos.leverage.value as f64;
+                        let margin_used: f64 = pos.margin_used.parse().unwrap_or(0.0);
+
+                        self.positions.insert(
+                            pos.coin.clone(),
+                            PositionState {
+                                coin: pos.coin.clone(),
+                                size,
+                                entry_price,
+                                leverage,
+                            },
+                        );
+                        self.margin_deposited += margin_used;
+                        eprintln!(
+                            "  [reconcile] HL perp: {} {} @ {:.2} (margin=${:.2})",
+                            if size > 0.0 { "LONG" } else { "SHORT" },
+                            pos.coin,
+                            entry_price,
+                            margin_used,
+                        );
+                    }
+
+                    // Track idle USDC on HyperCore (for reporting, not as position value)
+                    if self.positions.is_empty() && account_value > 0.5 {
+                        eprintln!(
+                            "  [reconcile] HL perp: no positions, ${:.2} idle USDC on HyperCore",
+                            account_value,
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("  [reconcile] HL perp state unavailable: {e}");
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -523,18 +628,61 @@ impl Venue for HyperliquidPerp {
             return Ok(total.max(0.0));
         }
 
+        // Only report value for actual positions we hold — idle USDC on HyperCore
+        // should NOT count as venue value (the optimizer would think it's deployed).
+        // Spot and perp venues sharing the same HL wallet would double-count otherwise.
+        if self.positions.is_empty() {
+            return Ok(0.0);
+        }
+
+
+        if self.is_spot {
+            // Spot: value = quantity * mid price
+            let mids = self.get_mids().await.unwrap_or_default();
+            let mut total = 0.0;
+            for pos in self.positions.values() {
+                let price = mids.get(&pos.coin).copied().unwrap_or(pos.entry_price);
+                total += pos.size.abs() * price;
+            }
+            return Ok(total);
+        }
+
+        // Perp: use HL's margin_used + unrealizedPnl per position
         let state = self
             .info
             .user_state(self.wallet_address)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to fetch user state: {e}"))?;
 
-        let account_value: f64 = state.margin_summary.account_value.parse().unwrap_or(0.0);
+        let mut total = 0.0;
+        for ap in &state.asset_positions {
+            let pos = &ap.position;
+            let size: f64 = pos.szi.parse().unwrap_or(0.0);
+            if size.abs() < 1e-12 {
+                continue;
+            }
+            // Only count positions we're tracking
+            if !self.positions.contains_key(&pos.coin) {
+                continue;
+            }
+            let margin_used: f64 = pos.margin_used.parse().unwrap_or(0.0);
+            let upnl: f64 = pos.unrealized_pnl.parse().unwrap_or(0.0);
+            total += margin_used + upnl;
+        }
 
-        Ok(account_value)
+        Ok(total.max(0.0))
     }
 
     async fn tick(&mut self, now: u64, _dt_secs: f64) -> Result<()> {
+        // Reconcile positions from HL on first tick (populates self.positions
+        // so total_value() and unwind() work correctly after restart).
+        if !self.reconciled {
+            self.reconciled = true;
+            if let Err(e) = self.reconcile_positions().await {
+                eprintln!("  [reconcile] HL reconcile failed: {e}");
+            }
+        }
+
         // Track total PnL (funding + unrealized) for perp positions
         if !self.is_spot && !self.dry_run && self.margin_deposited > 0.0 {
             if let Ok(account_value) = self.total_value().await {
@@ -577,6 +725,12 @@ impl Venue for HyperliquidPerp {
         if total <= 0.0 || fraction <= 0.0 {
             return Ok(0.0);
         }
+
+        // No positions to close → nothing to unwind (don't return phantom freed)
+        if self.positions.is_empty() {
+            return Ok(0.0);
+        }
+
         let f = fraction.min(1.0);
         let freed = total * f;
 
