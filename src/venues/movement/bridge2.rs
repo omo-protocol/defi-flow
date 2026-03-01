@@ -98,6 +98,18 @@ impl Bridge2Movement {
         })
     }
 
+    /// Check if there's stranded USDC on Arbitrum from a previous partial execution.
+    async fn check_stranded_usdc(&self) -> f64 {
+        let Ok(rp) = evm::read_provider(ARBITRUM_RPC) else {
+            return 0.0;
+        };
+        let usdc = IERC20::new(USDC_ARBITRUM, &rp);
+        match usdc.balanceOf(self.wallet_address).call().await {
+            Ok(balance) => evm::from_token_units(balance, 6),
+            Err(_) => 0.0,
+        }
+    }
+
     /// Execute USDC deposit from Arbitrum to HyperCore via Bridge2.
     async fn deposit(&self, amount_usd: f64) -> Result<f64> {
         let wallet = alloy::network::EthereumWallet::from(self.signer.clone());
@@ -197,22 +209,35 @@ impl Venue for Bridge2Movement {
     async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult> {
         match node {
             Node::Movement { .. } => {
-                if input_amount <= 0.0 {
-                    return Ok(ExecutionResult::Noop);
-                }
+                // Recovery: check for stranded USDC on Arbitrum from a previous
+                // partial execution (upstream LiFi succeeded but Bridge2 failed).
+                let effective_amount = if input_amount <= 0.0 {
+                    let stranded = self.check_stranded_usdc().await;
+                    if stranded > 0.50 {
+                        println!(
+                            "  Bridge2: [recovery] found {:.2} stranded USDC on Arbitrum",
+                            stranded
+                        );
+                        stranded
+                    } else {
+                        return Ok(ExecutionResult::Noop);
+                    }
+                } else {
+                    input_amount
+                };
 
                 if self.dry_run {
                     println!(
                         "  Bridge2: [DRY RUN] would deposit {:.2} USDC to HyperCore",
-                        input_amount
+                        effective_amount
                     );
                     return Ok(ExecutionResult::TokenOutput {
                         token: "USDC".to_string(),
-                        amount: input_amount,
+                        amount: effective_amount,
                     });
                 }
 
-                let deposited = self.deposit(input_amount).await?;
+                let deposited = self.deposit(effective_amount).await?;
                 Ok(ExecutionResult::TokenOutput {
                     token: "USDC".to_string(),
                     amount: deposited,

@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, Result};
 
 use crate::model::amount::Amount;
-use crate::model::node::{CronInterval, Node, NodeId, PendleAction, SpotSide, Trigger};
+use crate::model::node::{CronInterval, MovementProvider, Node, NodeId, PendleAction, SpotSide, Trigger};
 use crate::model::workflow::Workflow;
 use crate::venues::{ExecutionResult, RiskParams, SimMetrics, Venue};
 
@@ -73,6 +73,45 @@ impl Engine {
         }
         self.edge_balance_snapshots.clear();
         Ok(())
+    }
+
+    /// Recovery pass: re-execute movement nodes (Bridge2) and Pendle mint_pt
+    /// that may have stranded funds from a partial previous execution.
+    /// Runs in topological order so recovered funds route downstream correctly
+    /// (e.g. Bridge2 USDC → perp/spot on HyperCore).
+    pub async fn recovery_pass(&mut self) -> Result<bool> {
+        let mut recovered = false;
+        let order = self.deploy_order.clone();
+        for node_id in &order {
+            let node = match self.workflow.nodes.iter().find(|n| n.id() == node_id) {
+                Some(n) => n.clone(),
+                None => continue,
+            };
+            let should_check = matches!(&node, Node::Movement { provider, .. } if *provider == MovementProvider::Bridge2)
+                || matches!(&node, Node::Pendle { action, .. } if *action == PendleAction::MintPt);
+            if !should_check {
+                continue;
+            }
+            // Only attempt recovery if the node has no pending input from upstream
+            let (_, input_amount) = self.gather_inputs(node_id);
+            if input_amount > 0.0 {
+                continue; // has fresh input, will be handled normally
+            }
+            if let Some(venue) = self.venues.get_mut(node_id.as_str()) {
+                match venue.execute(&node, 0.0).await {
+                    Ok(ExecutionResult::Noop) => {} // nothing stranded
+                    Ok(result) => {
+                        println!("  [recovery] {} recovered funds", node_id);
+                        self.distribute_result(node_id, &"USDC".to_string(), result)?;
+                        recovered = true;
+                    }
+                    Err(e) => {
+                        eprintln!("  [recovery] {} failed: {:#}", node_id, e);
+                    }
+                }
+            }
+        }
+        Ok(recovered)
     }
 
     /// Snapshot balances for all source nodes that have outgoing percentage edges.
@@ -276,8 +315,11 @@ impl Engine {
         }
 
         // Normal node: call venue (skip if no input — avoids pointless on-chain txns).
-        // Exception: Pendle mint_pt may have stranded SY tokens to recover even with 0 new input.
-        let force_execute = matches!(&node, Node::Pendle { action, .. } if *action == PendleAction::MintPt);
+        // Exceptions — venues that may have stranded funds to recover with 0 new input:
+        //   - Pendle mint_pt: stranded SY tokens from partial deposit
+        //   - Bridge2: stranded USDC on Arbitrum from failed bridge
+        let force_execute = matches!(&node, Node::Pendle { action, .. } if *action == PendleAction::MintPt)
+            || matches!(&node, Node::Movement { provider, .. } if *provider == MovementProvider::Bridge2);
         if input_amount > 0.0 || force_execute {
             if let Some(venue) = self.venues.get_mut(node_id) {
                 let result = venue.execute(&node, input_amount).await?;

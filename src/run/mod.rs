@@ -322,6 +322,11 @@ async fn run_async(
             }
         }
 
+        // Recovery pass: check for stranded funds (Bridge2 USDC on Arb, Pendle SY, etc.)
+        if let Ok(true) = engine.recovery_pass().await {
+            sync_balances(&engine, &mut state);
+        }
+
         let mut scheduler = CronScheduler::new(&engine.workflow);
         let triggered = scheduler.get_all_due();
         if triggered.is_empty() {
@@ -453,6 +458,11 @@ async fn run_async(
                             Ok(None) => {}
                             Err(e) => eprintln!("[allocator] ERROR: {:#}", e),
                         }
+                    }
+
+                    // Recovery pass: check for stranded funds before executing cron nodes
+                    if let Ok(true) = engine.recovery_pass().await {
+                        sync_balances(&engine, &mut state);
                     }
 
                     for node_id in &triggered {
