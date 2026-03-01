@@ -100,14 +100,27 @@ impl HyperliquidPerp {
         // Load spot meta for spot order asset indices
         if self.is_spot {
             if let Ok(spot_meta) = self.info.spot_meta().await {
+                // Build token index → name map
+                let token_names: HashMap<u32, &str> = spot_meta
+                    .tokens
+                    .iter()
+                    .map(|t| (t.index, t.name.as_str()))
+                    .collect();
+
                 for pair in &spot_meta.universe {
-                    // Spot pair name is e.g. "ETH/USDC" — extract base token
-                    let base = pair.name.split('/').next().unwrap_or(&pair.name);
-                    // Spot asset index = 10000 + pair index
-                    self.spot_indices.insert(base.to_string(), 10000 + pair.index);
+                    // Resolve base token name from token indices
+                    if let Some(base_name) = token_names.get(&pair.tokens[0]) {
+                        // Spot asset index = 10000 + pair index
+                        let quote = token_names.get(&pair.tokens[1]).copied().unwrap_or("?");
+                        if quote == "USDC" {
+                            self.spot_indices
+                                .insert(base_name.to_string(), 10000 + pair.index);
+                        }
+                    }
                 }
                 for token in &spot_meta.tokens {
-                    self.spot_sz_decimals.insert(token.name.clone(), token.sz_decimals);
+                    self.spot_sz_decimals
+                        .insert(token.name.clone(), token.sz_decimals);
                 }
                 println!("  HL: loaded {} spot pairs", self.spot_indices.len());
             }
@@ -129,9 +142,10 @@ impl HyperliquidPerp {
                     for bal in &state.balances {
                         let total: f64 = bal.total.parse().unwrap_or(0.0);
                         if total.abs() > 1e-12 && bal.coin != "USDC" {
-                            // Check if this is the coin we trade
+                            // Check if this is the coin we trade (handle aliases like ETH↔UETH)
                             if let Some(ref our_coin) = self.coin {
-                                if bal.coin == *our_coin {
+                                let spot_name = self.resolve_spot_coin(our_coin);
+                                if bal.coin == *our_coin || bal.coin == spot_name {
                                     let mids = self.get_mids().await.unwrap_or_default();
                                     let price = mids.get(&bal.coin).copied().unwrap_or(1.0);
                                     self.positions.insert(
@@ -215,6 +229,20 @@ impl HyperliquidPerp {
         }
 
         Ok(())
+    }
+
+    /// Resolve perp coin name to HL spot token name.
+    fn resolve_spot_coin(&self, coin: &str) -> String {
+        // Try exact match first
+        if self.spot_indices.contains_key(coin) {
+            return coin.to_string();
+        }
+        // Common aliases: ETH→UETH, BTC→UBTC, etc.
+        let prefixed = format!("U{coin}");
+        if self.spot_indices.contains_key(&prefixed) {
+            return prefixed;
+        }
+        coin.to_string()
     }
 
     async fn get_mids(&self) -> Result<HashMap<String, f64>> {
@@ -617,12 +645,14 @@ impl Venue for HyperliquidPerp {
                     });
                 }
 
+                // HL spot uses different token names (e.g. UETH instead of ETH)
+                let spot_coin = self.resolve_spot_coin(coin);
                 let spot_asset = *self
                     .spot_indices
-                    .get(coin)
-                    .with_context(|| format!("Unknown spot asset '{coin}' — not in HL spot meta"))?;
+                    .get(&spot_coin)
+                    .with_context(|| format!("Unknown spot asset '{coin}' (tried '{spot_coin}') — not in HL spot meta"))?;
 
-                let spot_decimals = self.spot_sz_decimals.get(coin).copied().unwrap_or(4);
+                let spot_decimals = self.spot_sz_decimals.get(&spot_coin).copied().unwrap_or(4);
                 let slippage_mult = self.slippage_bps / 10000.0;
                 let limit_price = if is_buy {
                     mid_price * (1.0 + slippage_mult)
