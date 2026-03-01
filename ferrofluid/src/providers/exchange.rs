@@ -755,16 +755,16 @@ impl<S: HyperliquidSigner> RawExchangeProvider<S> {
 
     pub async fn spot_transfer_to_perp(
         &self,
-        usd_size: u64,
+        amount_usd: f64,
         to_perp: bool,
     ) -> Result<ExchangeResponseStatus> {
-        let transfer = ClassTransfer { usd_size, to_perp };
-
-        let spot_user = SpotUser {
-            class_transfer: transfer,
+        let action = UsdClassTransfer {
+            amount: format!("{amount_usd}"),
+            to_perp,
+            nonce: Self::current_nonce(),
         };
 
-        self.send_l1_action("spotUser", &spot_user).await
+        self.send_l1_action("usdClassTransfer", &action).await
     }
 
     // ==================== Helper Methods ====================
@@ -798,6 +798,7 @@ impl<S: HyperliquidSigner> RawExchangeProvider<S> {
             UsdSend(&'a T),
             SpotSend(&'a T),
             SpotUser(&'a T),
+            UsdClassTransfer(&'a T),
             VaultTransfer(&'a T),
             SetReferrer(&'a T),
             ApproveAgent(&'a T),
@@ -816,6 +817,7 @@ impl<S: HyperliquidSigner> RawExchangeProvider<S> {
             "usdSend" => ActionWrapper::UsdSend(action),
             "spotSend" => ActionWrapper::SpotSend(action),
             "spotUser" => ActionWrapper::SpotUser(action),
+            "usdClassTransfer" => ActionWrapper::UsdClassTransfer(action),
             "vaultTransfer" => ActionWrapper::VaultTransfer(action),
             "setReferrer" => ActionWrapper::SetReferrer(action),
             "approveAgent" => ActionWrapper::ApproveAgent(action),

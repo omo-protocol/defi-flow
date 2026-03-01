@@ -72,7 +72,16 @@ pub trait Venue: Send + Sync {
     async fn execute(&mut self, node: &Node, input_amount: f64) -> Result<ExecutionResult>;
 
     /// Current total value of positions held at this venue (USD terms).
+    /// Includes idle capital (e.g. undeployed USDC on HyperCore).
     async fn total_value(&self) -> Result<f64>;
+
+    /// Value of actual deployed positions only. Used by the optimizer to
+    /// determine allocation — idle capital at a venue doesn't count as
+    /// "deployed" and should be available for the optimizer to route.
+    /// Default: same as total_value().
+    async fn deployed_value(&self) -> Result<f64> {
+        self.total_value().await
+    }
 
     /// Advance internal state by one tick.
     /// `now` is the unix timestamp, `dt_secs` is seconds since the previous tick.

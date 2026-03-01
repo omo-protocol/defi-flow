@@ -671,11 +671,11 @@ impl Venue for HyperliquidPerp {
                         .map(|s| s.margin_summary.account_value.parse().unwrap_or(0.0))
                         .unwrap_or(0.0);
                     // Transfer the amount we need (capped at what's available)
-                    let transfer_amount = input_amount.min(perp_usd).floor() as u64;
-                    if transfer_amount > 0 {
-                        println!("  HL SPOT: transferring ${} from perp→spot", transfer_amount);
+                    let transfer_amount = input_amount.min(perp_usd);
+                    if transfer_amount > 1.0 {
+                        println!("  HL SPOT: transferring ${:.2} from perp→spot", transfer_amount);
                         match self.exchange.spot_transfer_to_perp(transfer_amount, false).await {
-                            Ok(_) => {}
+                            Ok(_) => println!("  HL SPOT: perp→spot transfer OK"),
                             Err(e) => {
                                 eprintln!("  HL SPOT: perp→spot transfer failed: {e}");
                             }
@@ -844,6 +844,15 @@ impl Venue for HyperliquidPerp {
         }
 
         Ok(total.max(0.0))
+    }
+
+    async fn deployed_value(&self) -> Result<f64> {
+        // Only count actual positions as "deployed" — idle USDC on HyperCore
+        // is NOT deployed and should be available for the optimizer to route.
+        if self.positions.is_empty() {
+            return Ok(0.0);
+        }
+        self.total_value().await
     }
 
     async fn tick(&mut self, now: u64, _dt_secs: f64) -> Result<()> {

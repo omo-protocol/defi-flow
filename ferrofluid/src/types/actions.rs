@@ -247,6 +247,16 @@ pub struct ClassTransfer {
     pub to_perp: bool,
 }
 
+/// usdClassTransfer: move USDC between perp and spot sub-accounts.
+/// `amount` is a string in whole dollar units (e.g. "10" for $10).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsdClassTransfer {
+    pub amount: String,
+    pub to_perp: bool,
+    pub nonce: u64,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetReferrer {

@@ -497,16 +497,30 @@ impl Engine {
         let alloc_result =
             optimizer::compute_kelly_allocations(node, 0.0, &venue_stats, &venue_risks)?;
 
-        // Compute current GROUP values
+        // Compute current GROUP values using deployed capital only.
+        // Idle capital at venues (e.g. undeployed USDC on HyperCore) doesn't
+        // count as "allocated" — it's treated as available cash for the optimizer.
         let mut group_values: Vec<f64> = Vec::new();
         let mut venue_total = 0.0;
+        let mut idle_venue_capital = 0.0;
         for group in &alloc_result.groups {
             let mut gv = 0.0;
             for target_id in &group.targets {
-                gv += self.effective_venue_value(target_id).await;
+                let deployed = self.effective_deployed_value(target_id).await;
+                let total = self.effective_venue_value(target_id).await;
+                gv += deployed;
+                idle_venue_capital += total - deployed;
             }
             group_values.push(gv);
             venue_total += gv;
+        }
+
+        // Idle venue capital is available for the optimizer to deploy
+        if idle_venue_capital > 0.5 {
+            println!(
+                "  [kelly] ${:.2} idle venue capital available for deployment",
+                idle_venue_capital,
+            );
         }
 
         // Safety: if all groups got 0% allocation (cold start, no alpha data yet),
@@ -517,7 +531,7 @@ impl Engine {
             return Ok(());
         }
 
-        let total_portfolio = venue_total + optimizer_balance;
+        let total_portfolio = venue_total + optimizer_balance + idle_venue_capital;
         if total_portfolio <= 0.0 {
             return Ok(());
         }
@@ -609,10 +623,14 @@ impl Engine {
         if margin_topped_up {
             group_values.clear();
             venue_total = 0.0;
+            idle_venue_capital = 0.0;
             for group in &alloc_result.groups {
                 let mut gv = 0.0;
                 for target_id in &group.targets {
-                    gv += self.effective_venue_value(target_id).await;
+                    let deployed = self.effective_deployed_value(target_id).await;
+                    let total = self.effective_venue_value(target_id).await;
+                    gv += deployed;
+                    idle_venue_capital += total - deployed;
                 }
                 group_values.push(gv);
                 venue_total += gv;
@@ -620,7 +638,7 @@ impl Engine {
         }
 
         // ── Drift check at GROUP level ──
-        let total_portfolio = venue_total + self.balances.get(node_id, cash_token);
+        let total_portfolio = venue_total + self.balances.get(node_id, cash_token) + idle_venue_capital;
         if total_portfolio <= 0.0 {
             return Ok(());
         }
@@ -665,6 +683,76 @@ impl Engine {
                     group.targets.join("+"),
                     excess,
                 );
+            }
+        }
+
+        // ── Phase 1.5: Deploy idle venue capital directly ──
+        // Capital already at a venue (e.g. idle USDC on HyperCore from a partial
+        // deploy) doesn't need swap→bridge again. Split evenly across all legs
+        // in the group (spot + perp share the same HyperCore USDC pool).
+        if idle_venue_capital > 1.0 {
+            for group in &alloc_result.groups {
+                // Sum idle capital across all venues in this group
+                let mut group_idle = 0.0;
+                for target_id in &group.targets {
+                    if let Some(venue) = self.venues.get(target_id.as_str()) {
+                        let total = venue.total_value().await.unwrap_or(0.0);
+                        let deployed = venue.deployed_value().await.unwrap_or(0.0);
+                        group_idle += total - deployed;
+                    }
+                }
+                if group_idle < 1.0 {
+                    continue;
+                }
+
+                let n_legs = group.targets.len().max(1);
+                let per_leg = group_idle / n_legs as f64;
+                println!(
+                    "  [rebalance] ${:.2} idle at {} — deploying ${:.2}/leg",
+                    group_idle, group.targets.join("+"), per_leg,
+                );
+
+                for target_id in &group.targets {
+                    if per_leg < 1.0 {
+                        continue;
+                    }
+                    let target_node = self
+                        .workflow
+                        .nodes
+                        .iter()
+                        .find(|n| n.id() == target_id)
+                        .cloned();
+                    if let Some(ref tn) = target_node {
+                        if let Some(venue) = self.venues.get_mut(target_id.as_str()) {
+                            match venue.execute(tn, per_leg).await {
+                                Ok(result) => {
+                                    self.distribute_result(target_id, "USDC", result)?;
+                                    self.extract_spot_for_downstream(target_id, tn).await?;
+                                    self.route_spot_downstream(target_id).await?;
+                                }
+                                Err(e) => {
+                                    eprintln!("  [rebalance] {} idle deploy failed: {:#}", target_id, e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Recompute group values after deploying idle capital
+            group_values.clear();
+            venue_total = 0.0;
+            idle_venue_capital = 0.0;
+            for group in &alloc_result.groups {
+                let mut gv = 0.0;
+                for target_id in &group.targets {
+                    let deployed = self.effective_deployed_value(target_id).await;
+                    let total = self.effective_venue_value(target_id).await;
+                    gv += deployed;
+                    idle_venue_capital += total - deployed;
+                }
+                group_values.push(gv);
+                venue_total += gv;
             }
         }
 
@@ -809,17 +897,28 @@ impl Engine {
     /// This ensures the optimizer sees buy_eth's value as including lend_eth's value
     /// after extraction routes ETH downstream.
     pub async fn effective_venue_value(&self, node_id: &str) -> f64 {
+        self.effective_venue_value_inner(node_id, false).await
+    }
+
+    /// Like effective_venue_value but only counts deployed positions, not idle
+    /// capital sitting at venues. Used by the optimizer so idle HyperCore USDC
+    /// doesn't count as "allocated".
+    pub async fn effective_deployed_value(&self, node_id: &str) -> f64 {
+        self.effective_venue_value_inner(node_id, true).await
+    }
+
+    async fn effective_venue_value_inner(&self, node_id: &str, deployed_only: bool) -> f64 {
         let mut value = if let Some(venue) = self.venues.get(node_id) {
-            venue.total_value().await.unwrap_or(0.0)
+            if deployed_only {
+                venue.deployed_value().await.unwrap_or(0.0)
+            } else {
+                venue.total_value().await.unwrap_or(0.0)
+            }
         } else {
             0.0
         };
 
         // Walk ALL downstream edges, adding venue values along the way.
-        // Always continue walking — bridge/movement venues exist but are
-        // pass-through (value=0), and we need to reach venues behind them.
-        // No token filter: USDC is just another token, and optimizer edges
-        // originate FROM the optimizer node (not from targets).
         let mut frontier: Vec<String> = vec![node_id.to_string()];
         let mut visited: HashSet<String> = HashSet::new();
         visited.insert(node_id.to_string());
@@ -828,9 +927,13 @@ impl Engine {
                 if edge.from_node == current && !visited.contains(&edge.to_node) {
                     visited.insert(edge.to_node.clone());
                     if let Some(downstream) = self.venues.get(edge.to_node.as_str()) {
-                        value += downstream.total_value().await.unwrap_or(0.0);
+                        let v = if deployed_only {
+                            downstream.deployed_value().await.unwrap_or(0.0)
+                        } else {
+                            downstream.total_value().await.unwrap_or(0.0)
+                        };
+                        value += v;
                     }
-                    // Always continue walking downstream
                     frontier.push(edge.to_node.clone());
                 }
             }
