@@ -166,6 +166,41 @@ impl Engine {
         Ok(())
     }
 
+    /// Find the path of intermediate node IDs from `source` to `target` through edges.
+    /// Returns the ordered list of intermediate nodes (excluding source, including target).
+    /// Uses BFS. Returns empty vec if there's a direct edge or no path.
+    fn find_edge_path(&self, source: &str, target: &str) -> Vec<NodeId> {
+        // BFS from source
+        let mut queue = std::collections::VecDeque::new();
+        let mut visited = std::collections::HashSet::new();
+        let mut parent: HashMap<String, String> = HashMap::new();
+
+        queue.push_back(source.to_string());
+        visited.insert(source.to_string());
+
+        while let Some(current) = queue.pop_front() {
+            for edge in &self.workflow.edges {
+                if edge.from_node == current && !visited.contains(&edge.to_node) {
+                    parent.insert(edge.to_node.clone(), current.clone());
+                    if edge.to_node == target {
+                        // Reconstruct path (excluding source)
+                        let mut path = Vec::new();
+                        let mut node = target.to_string();
+                        while node != source {
+                            path.push(node.clone());
+                            node = parent[&node].clone();
+                        }
+                        path.reverse();
+                        return path;
+                    }
+                    visited.insert(edge.to_node.clone());
+                    queue.push_back(edge.to_node.clone());
+                }
+            }
+        }
+        Vec::new()
+    }
+
     /// Current total value of the portfolio (all venue positions + undeployed balances).
     pub async fn total_tvl(&self) -> f64 {
         let mut venue_value = 0.0;
@@ -634,6 +669,8 @@ impl Engine {
         }
 
         // ── Phase 2: Deploy to under-allocated GROUPS (all legs grow equally) ──
+        // For targets reachable via intermediate nodes (swap→bridge→venue),
+        // route through the full graph path so cross-chain bridging works.
         for (group, &group_value) in alloc_result.groups.iter().zip(group_values.iter()) {
             let target_value = total_portfolio * group.fraction;
 
@@ -654,32 +691,59 @@ impl Engine {
                         continue;
                     }
 
-                    let token = outgoing_edges
+                    // Find the first outgoing edge from the optimizer toward this target
+                    let first_edge = outgoing_edges
                         .iter()
-                        .find(|e| e.to_node == *target_id)
-                        .map(|e| e.token.clone())
-                        .unwrap_or_else(|| cash_token.to_string());
+                        .find(|e| e.to_node == *target_id);
 
-                    self.balances.deduct(node_id, cash_token, leg_amount);
-                    self.balances.add(target_id, &token, leg_amount);
+                    if first_edge.is_some() {
+                        // Direct edge: deploy straight to the target (e.g. lending)
+                        let token = first_edge.unwrap().token.clone();
+                        self.balances.deduct(node_id, cash_token, leg_amount);
+                        self.balances.add(target_id, &token, leg_amount);
 
-                    let target_node = self
-                        .workflow
-                        .nodes
-                        .iter()
-                        .find(|n| n.id() == target_id)
-                        .cloned();
+                        let target_node = self
+                            .workflow
+                            .nodes
+                            .iter()
+                            .find(|n| n.id() == target_id)
+                            .cloned();
 
-                    if let Some(ref target_node) = target_node {
-                        if let Some(venue) = self.venues.get_mut(target_id.as_str()) {
-                            let result = venue.execute(target_node, leg_amount).await?;
-                            self.distribute_result(target_id, &token, result)?;
+                        if let Some(ref target_node) = target_node {
+                            if let Some(venue) = self.venues.get_mut(target_id.as_str()) {
+                                let result = venue.execute(target_node, leg_amount).await?;
+                                self.distribute_result(target_id, &token, result)?;
+                            }
+                            self.extract_spot_for_downstream(target_id, target_node)
+                                .await?;
+                            self.route_spot_downstream(target_id).await?;
+                        }
+                    } else {
+                        // No direct edge: route through intermediate nodes (swap→bridge→venue)
+                        let path = self.find_edge_path(node_id, target_id);
+                        if path.is_empty() {
+                            eprintln!(
+                                "  [rebalance] WARNING: no path from {} to {} — skipping",
+                                node_id, target_id,
+                            );
+                            continue;
                         }
 
-                        // Extract spot holdings and route downstream
-                        self.extract_spot_for_downstream(target_id, target_node)
-                            .await?;
-                        self.route_spot_downstream(target_id).await?;
+                        // Seed the first intermediate node with capital
+                        let first_hop = &path[0];
+                        let token = outgoing_edges
+                            .iter()
+                            .find(|e| e.to_node == *first_hop)
+                            .map(|e| e.token.clone())
+                            .unwrap_or_else(|| cash_token.to_string());
+
+                        self.balances.deduct(node_id, cash_token, leg_amount);
+                        self.balances.add(first_hop, &token, leg_amount);
+
+                        // Execute each node along the path (intermediate + target)
+                        for step_id in &path {
+                            Box::pin(self.execute_node(step_id)).await?;
+                        }
                     }
                 }
             }
