@@ -21,14 +21,17 @@ RUN cargo build --release --bin defi-flow
 # Stage 2: OpenClaw + defi-flow
 FROM node:22-bookworm-slim
 
-# Install system deps
+# Install system deps + Foundry (cast)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
       git \
       jq \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -L https://foundry.paradigm.xyz | bash \
+    && /root/.foundry/bin/foundryup \
+    && ln -s /root/.foundry/bin/cast /usr/local/bin/cast
 
 # Install OpenClaw
 RUN npm install -g openclaw@latest

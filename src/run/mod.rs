@@ -712,10 +712,20 @@ async fn reconcile_onchain_state(
             engine.balances.add("wallet", tok, *bal);
         }
     } else if state.deploy_completed && onchain_tvl < 1.0 {
-        // State says deployed but on-chain is empty — reset for re-deploy
-        println!("[reconcile] State says deployed but on-chain TVL is $0 — resetting for re-deploy");
-        state.deploy_completed = false;
-        state.balances.clear();
+        // State says deployed but on-chain reads as empty.
+        // If we had significant TVL previously, this is likely an RPC failure
+        // (rate limiting, timeout) rather than genuine liquidation — don't reset.
+        if state.last_tvl > 5.0 {
+            eprintln!(
+                "[reconcile] WARNING: on-chain TVL=$0 but state.last_tvl=${:.2} — \
+                 likely RPC failure, keeping deploy state",
+                state.last_tvl,
+            );
+        } else {
+            println!("[reconcile] State says deployed but on-chain TVL is $0 — resetting for re-deploy");
+            state.deploy_completed = false;
+            state.balances.clear();
+        }
     }
 
     // Save reconciled state

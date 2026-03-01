@@ -185,6 +185,16 @@ async function takeSnapshot(db) {
       ? ((doc.total_portfolio_value - INITIAL_DEPOSIT) / INITIAL_DEPOSIT) * 100
       : 0;
 
+  // Max drawdown: track peak portfolio value
+  const prevSnapshot = await collection.findOne(
+    { wallet: WALLET },
+    { sort: { timestamp: -1 } }
+  );
+  doc.peak_value = Math.max(prevSnapshot?.peak_value || 0, doc.total_portfolio_value);
+  doc.max_drawdown = doc.peak_value > 0
+    ? Math.max(0, 1 - doc.total_portfolio_value / doc.peak_value)
+    : 0;
+
   // Time-weighted APR: use first snapshot timestamp as start time
   const firstSnapshot = await collection.findOne(
     { wallet: WALLET },

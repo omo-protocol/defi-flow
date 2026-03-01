@@ -29,11 +29,11 @@ const REGISTRY_PATH = join(REGISTRY_DIR, "registry.json");
 const STRATEGIES_DIR = process.env.STRATEGIES_DIR || "/app/strategies";
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 const MIN_SHIP_INTERVAL_MS = 30_000;
-const INITIAL_CAPITAL = 90; // Each agent started with $90
 
 const HYPEREVM_RPC = "https://rpc.hyperliquid.xyz/evm";
 const BASE_RPC = "https://mainnet.base.org";
 const USDT0 = "0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb";
+const HL_INFO_URL = "https://api.hyperliquid.xyz/info";
 
 if (!MONGODB_URI) {
   console.log("[stats] MONGODB_URI not set — skipping.");
@@ -82,6 +82,22 @@ function decode(hex) {
 
 function encodeAddress(addr) {
   return addr.toLowerCase().replace("0x", "").padStart(64, "0");
+}
+
+// ── Price helpers ───────────────────────────────────────
+
+async function getEthPrice() {
+  try {
+    const resp = await fetch(HL_INFO_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "allMids" }),
+    });
+    const mids = await resp.json();
+    return parseFloat(mids["ETH"] || "0");
+  } catch {
+    return 0;
+  }
 }
 
 // ── JSON helpers ────────────────────────────────────────
@@ -278,40 +294,56 @@ async function shipStats(db, wallet) {
   // Agent-level portfolio snapshot
   if (wallet) {
     const walletEnc = encodeAddress(wallet);
-    const usdt0Hex = await ethCall(
-      HYPEREVM_RPC,
-      USDT0,
-      "0x70a08231" + walletEnc
-    );
+    const [usdt0Hex, baseEthHex, evmEthHex, ethPrice] = await Promise.all([
+      ethCall(HYPEREVM_RPC, USDT0, "0x70a08231" + walletEnc),
+      ethBalance(BASE_RPC, wallet),
+      ethBalance(HYPEREVM_RPC, wallet),
+      getEthPrice(),
+    ]);
     const walletBalance = Number(decode(usdt0Hex)) / 1e6;
-
-    const baseEthHex = await ethBalance(BASE_RPC, wallet);
     const baseEthBalance = Number(decode(baseEthHex)) / 1e18;
+    const evmEthBalance = Number(decode(evmEthHex)) / 1e18;
+    const totalEthValue = (baseEthBalance + evmEthBalance) * ethPrice;
 
     const strategyTvl = strategyDocs.reduce((s, d) => s + d.tvl, 0);
-    const portfolioTvl = walletBalance + strategyTvl;
+    // Portfolio = idle USDT0 + deployed strategy TVL + all ETH (gas) at market price
+    const portfolioTvl = walletBalance + strategyTvl + totalEthValue;
+
+    // Fetch previous peak + initial_capital from MongoDB (first snapshot)
+    const prev = await portfolioCol
+      .find({ wallet })
+      .sort({ timestamp: -1 })
+      .limit(1)
+      .toArray();
+    const prevDoc = prev[0];
+    const initialCapital = prevDoc?.initial_capital || portfolioTvl;
+    const peakTvl = Math.max(prevDoc?.peak_tvl || 0, portfolioTvl);
+    const maxDrawdown = peakTvl > 0 ? Math.max(0, 1 - portfolioTvl / peakTvl) : 0;
+    const pnl = portfolioTvl - initialCapital;
 
     const portfolioDoc = {
       timestamp: new Date(),
       wallet,
       chain: "hyperevm",
       model: process.env.MODEL_NAME || "unknown",
-      initial_capital: INITIAL_CAPITAL,
+      initial_capital: initialCapital,
       portfolio_tvl: portfolioTvl,
       wallet_balance: walletBalance,
       strategy_tvl: strategyTvl,
       base_eth_balance: baseEthBalance,
+      evm_eth_balance: evmEthBalance,
+      total_eth_value: totalEthValue,
+      eth_price: ethPrice,
+      peak_tvl: peakTvl,
+      max_drawdown: maxDrawdown,
       strategies_count: strategyDocs.length,
-      pnl: portfolioTvl - INITIAL_CAPITAL,
-      pnl_percent:
-        INITIAL_CAPITAL > 0
-          ? ((portfolioTvl - INITIAL_CAPITAL) / INITIAL_CAPITAL) * 100
-          : 0,
+      pnl,
+      pnl_percent: initialCapital > 0 ? (pnl / initialCapital) * 100 : 0,
     };
 
     await portfolioCol.insertOne(portfolioDoc);
     console.log(
-      `[stats] Portfolio: TVL=$${portfolioTvl.toFixed(2)} (wallet=$${walletBalance.toFixed(2)} strats=$${strategyTvl.toFixed(2)} base=${baseEthBalance.toFixed(4)}ETH)`
+      `[stats] Portfolio: TVL=$${portfolioTvl.toFixed(2)} (wallet=$${walletBalance.toFixed(2)} strats=$${strategyTvl.toFixed(2)} eth=$${totalEthValue.toFixed(2)}) PnL=$${pnl.toFixed(2)} DD=${(maxDrawdown * 100).toFixed(1)}%`
     );
   }
 

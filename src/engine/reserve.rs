@@ -108,9 +108,46 @@ pub struct AllocationRecord {
     pub pulled: f64,
 }
 
+// ── Retry helper ─────────────────────────────────────────────────────
+
+const MAX_RETRIES: u32 = 3;
+const BASE_DELAY_MS: u64 = 500;
+
+/// Retry an async RPC call with exponential backoff (500ms, 1s, 2s).
+async fn retry_rpc<F, Fut, T>(label: &str, f: F) -> Result<T>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<T, alloy::contract::Error>>,
+{
+    let mut last_err = None;
+    for attempt in 0..=MAX_RETRIES {
+        match f().await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                last_err = Some(e);
+                if attempt < MAX_RETRIES {
+                    let delay = BASE_DELAY_MS * (1 << attempt);
+                    eprintln!(
+                        "[reserve] {} failed (attempt {}/{}), retrying in {}ms...",
+                        label,
+                        attempt + 1,
+                        MAX_RETRIES + 1,
+                        delay,
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                }
+            }
+        }
+    }
+    Err(last_err
+        .map(|e| anyhow::anyhow!("{}: {}", label, e))
+        .unwrap_or_else(|| anyhow::anyhow!("{}: unknown error", label)))
+}
+
 // ── Read vault state ─────────────────────────────────────────────────
 
 /// Read on-chain vault state: totalAssets, idle balance, reserve ratio.
+/// Uses exponential backoff (3 retries) for RPC resilience.
 pub async fn read_vault_state(
     config: &ReserveConfig,
     contracts: &evm::ContractManifest,
@@ -130,46 +167,61 @@ pub async fn read_vault_state(
 
     let rp = evm::read_provider(rpc_url)?;
 
-    // Read totalAssets from the vault.
-    // Morpho vaults on HyperEVM use _totalAssets()(uint128) instead of the
-    // standard ERC4626 totalAssets()(uint256). Try _totalAssets first, then
-    // fall back to totalAssets, then treat as empty.
+    // Read totalAssets with retry + backoff.
     // Morpho vaults on HyperEVM use _totalAssets()(uint128) as the real
     // source of truth. Standard totalAssets() may return 0 or revert.
     // Try _totalAssets first, then fall back to totalAssets.
     let morpho = IMorphoVaultRead::new(vault_addr, &rp);
     let vault = IErc4626Read::new(vault_addr, &rp);
-    let total_assets_raw = match morpho._totalAssets().call().await {
+
+    let total_assets_raw = match retry_rpc("_totalAssets()", || async {
+        morpho._totalAssets().call().await
+    })
+    .await
+    {
         Ok(v) => U256::from(v),
-        Err(_) => match vault.totalAssets().call().await {
-            Ok(v) if v > U256::ZERO => v,
-            _ => {
-                eprintln!("[reserve] WARNING: vault totalAssets unavailable, treating as empty");
-                U256::ZERO
+        Err(_) => {
+            // Morpho selector not available — try standard ERC4626
+            match retry_rpc("totalAssets()", || async {
+                vault.totalAssets().call().await
+            })
+            .await
+            {
+                Ok(v) if v > U256::ZERO => v,
+                Ok(_) => {
+                    anyhow::bail!(
+                        "vault totalAssets returned 0 — vault may be misconfigured"
+                    );
+                }
+                Err(e) => {
+                    anyhow::bail!(
+                        "vault totalAssets unavailable after {} retries (RPC rate-limited?) — \
+                         skipping allocator/reserve this tick: {:#}",
+                        MAX_RETRIES + 1,
+                        e,
+                    );
+                }
             }
-        },
+        }
     };
 
-    // Get underlying token address and decimals
-    let underlying = vault
-        .asset()
-        .call()
+    // Get underlying token address and decimals (with retry)
+    let underlying = retry_rpc("vault.asset()", || async { vault.asset().call().await })
         .await
-        .context("vault.asset() call failed")?;
+        .context("vault.asset() call failed after retries")?;
 
     let erc20 = IErc20Read::new(underlying, &rp);
-    let decimals = erc20
-        .decimals()
-        .call()
+    let decimals = retry_rpc("decimals()", || async { erc20.decimals().call().await })
         .await
-        .context("underlying.decimals() call failed")?;
+        .context("underlying.decimals() call failed after retries")?;
 
     // Read idle balance (vault's underlying token balance = reserve)
-    let idle_raw = erc20
-        .balanceOf(vault_addr)
-        .call()
+    let idle_raw =
+        retry_rpc("balanceOf(vault)", || async {
+            erc20.balanceOf(vault_addr).call().await
+        })
         .await
-        .context("underlying.balanceOf(vault) call failed")?;
+        .context("underlying.balanceOf(vault) call failed after retries")?;
 
     let total_assets = evm::from_token_units(total_assets_raw, decimals);
     let idle_balance = evm::from_token_units(idle_raw, decimals);
@@ -214,11 +266,11 @@ pub async fn read_adapter_allocations(
     let rp = evm::read_provider(rpc_url)?;
 
     let adapter = IAdapter::new(adapter_addr, &rp);
-    let total = adapter
-        .totalAllocations()
-        .call()
-        .await
-        .context("adapter.totalAllocations() failed")?;
+    let total = retry_rpc("totalAllocations()", || async {
+        adapter.totalAllocations().call().await
+    })
+    .await
+    .context("adapter.totalAllocations() failed after retries")?;
 
     // Resolve decimals from the vault's underlying token
     let vault_addr = evm::resolve_contract(contracts, &config.vault_address, &config.vault_chain)
