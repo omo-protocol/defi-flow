@@ -238,8 +238,20 @@ impl Engine {
             ..
         } = node
         {
+            // Resolve cash token: use input_token if available, else derive from
+            // the incoming edge definition (optimizer may fire on cron with 0 input).
+            let cash_tok = if !input_token.is_empty() {
+                input_token.clone()
+            } else {
+                self.workflow
+                    .edges
+                    .iter()
+                    .find(|e| e.to_node == node_id)
+                    .map(|e| e.token.clone())
+                    .unwrap_or_else(|| "USDC".to_string())
+            };
             return self
-                .execute_optimizer(&node, id, input_amount, drift_threshold)
+                .execute_optimizer(&node, id, input_amount, drift_threshold, &cash_tok)
                 .await;
         }
 
@@ -373,13 +385,14 @@ impl Engine {
         node_id: &str,
         _input_amount: f64,
         drift_threshold: f64,
+        cash_token: &str,
     ) -> Result<()> {
         // Gather adaptive stats and risk params
         let venue_stats = self.gather_venue_stats();
         let venue_risks = self.gather_venue_risks();
 
-        // Optimizer's available cash
-        let optimizer_balance = self.balances.get(node_id, "USDC");
+        // Optimizer's available cash (uses wallet token, e.g. "USDT0")
+        let optimizer_balance = self.balances.get(node_id, cash_token);
 
         // Compute group-level Kelly allocations
         let alloc_result =
@@ -500,7 +513,7 @@ impl Engine {
         }
 
         // ── Drift check at GROUP level ──
-        let total_portfolio = venue_total + self.balances.get(node_id, "USDC");
+        let total_portfolio = venue_total + self.balances.get(node_id, cash_token);
         if total_portfolio <= 0.0 {
             return Ok(());
         }
@@ -538,7 +551,7 @@ impl Engine {
 
                 let freed = self.unwind_group(&group.targets, unwind_frac).await;
                 if freed > 0.0 {
-                    self.balances.add(node_id, "USDC", freed);
+                    self.balances.add(node_id, cash_token, freed);
                 }
                 eprintln!(
                     "  [rebalance] {} over-allocated by ${:.2}, unwound proportionally",
@@ -554,7 +567,7 @@ impl Engine {
 
             if group_value < target_value {
                 let deficit = target_value - group_value;
-                let available = self.balances.get(node_id, "USDC");
+                let available = self.balances.get(node_id, cash_token);
                 let amount = deficit.min(available);
                 if amount <= 0.0 {
                     continue;
@@ -564,7 +577,7 @@ impl Engine {
                 let per_leg = amount / group.targets.len().max(1) as f64;
 
                 for target_id in &group.targets {
-                    let leg_amount = per_leg.min(self.balances.get(node_id, "USDC"));
+                    let leg_amount = per_leg.min(self.balances.get(node_id, cash_token));
                     if leg_amount <= 0.0 {
                         continue;
                     }
@@ -573,9 +586,9 @@ impl Engine {
                         .iter()
                         .find(|e| e.to_node == *target_id)
                         .map(|e| e.token.clone())
-                        .unwrap_or_else(|| "USDC".to_string());
+                        .unwrap_or_else(|| cash_token.to_string());
 
-                    self.balances.deduct(node_id, "USDC", leg_amount);
+                    self.balances.deduct(node_id, cash_token, leg_amount);
                     self.balances.add(target_id, &token, leg_amount);
 
                     let target_node = self
