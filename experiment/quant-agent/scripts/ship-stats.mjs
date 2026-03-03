@@ -21,6 +21,17 @@ import { readFile, watch, readdir } from "fs/promises";
 import { join } from "path";
 import { execSync } from "child_process";
 
+// ── Singleton: ensure only one ship-stats process runs ──
+try {
+  const myPid = process.pid;
+  const pids = execSync('pgrep -f "node.*ship-stats"', { encoding: "utf-8" })
+    .trim().split("\n").map(Number).filter((p) => p !== myPid && p > 0);
+  for (const pid of pids) {
+    try { process.kill(pid, "SIGKILL"); } catch {}
+  }
+  if (pids.length > 0) console.log(`[stats] Singleton: killed ${pids.length} other ship-stats processes`);
+} catch {}
+
 // ── Config ──────────────────────────────────────────────
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = process.env.MONGODB_DB || "agent-logs";
@@ -30,7 +41,8 @@ const STRATEGIES_DIR = process.env.STRATEGIES_DIR || "/app/strategies";
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 const MIN_SHIP_INTERVAL_MS = 30_000;
 
-const INITIAL_CAPITAL = parseFloat(process.env.INITIAL_CAPITAL || "90");
+// Auto-detect initial capital from first portfolio snapshot (set on first ship)
+let INITIAL_CAPITAL = null;
 const HYPEREVM_RPC = "https://rpc.hyperliquid.xyz/evm";
 const BASE_RPC = "https://mainnet.base.org";
 const USDT0 = "0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb";
@@ -43,6 +55,9 @@ if (!MONGODB_URI) {
 
 // ── Throttle map ────────────────────────────────────────
 const lastShipped = new Map();
+const lastKnownTvl = new Map();
+// Carry forward last known portfolio components to filter RPC glitches (returns 0)
+let lastKnownPortfolio = null;
 
 // ── EVM helpers (raw eth_call) ──────────────────────────
 
@@ -200,7 +215,13 @@ async function discoverStrategies() {
 
 function computeMetrics(name, entry, queryResult, state) {
   // Prefer defi-flow query TVL (fully on-chain) → state.last_tvl → 0
-  const tvl = queryResult?.total_tvl || state?.last_tvl || 0;
+  // Carry forward last known TVL if current reading is 0 (state file mid-write)
+  let tvl = queryResult?.total_tvl || state?.last_tvl || 0;
+  if (tvl === 0 && lastKnownTvl.has(name)) {
+    tvl = lastKnownTvl.get(name);
+  } else if (tvl > 0) {
+    lastKnownTvl.set(name, tvl);
+  }
   const initialCapital = state?.initial_capital || 0;
   const peakTvl = state?.peak_tvl || tvl;
   const startedAt = entry.started_at ? new Date(entry.started_at) : null;
@@ -258,6 +279,19 @@ async function shipStats(db, wallet) {
   const portfolioCol = db.collection("portfolio_stats");
   let shipped = 0;
 
+  // Auto-detect initial capital from first portfolio snapshot
+  if (INITIAL_CAPITAL === null && wallet) {
+    const first = await portfolioCol
+      .find({ wallet })
+      .sort({ timestamp: 1 })
+      .limit(1)
+      .toArray();
+    if (first.length > 0) {
+      INITIAL_CAPITAL = first[0].portfolio_tvl;
+      console.log(`[stats] Auto-detected initial capital: $${INITIAL_CAPITAL.toFixed(2)}`);
+    }
+  }
+
   // Per-strategy stats
   const strategyDocs = [];
   for (const entry of strategies) {
@@ -304,24 +338,62 @@ async function shipStats(db, wallet) {
       ethBalance(HYPEREVM_RPC, wallet),
       getPrices(),
     ]);
-    const walletBalance = Number(decode(usdt0Hex)) / 1e6;
-    const baseEthBalance = Number(decode(baseEthHex)) / 1e18;
-    const evmHypeBalance = Number(decode(evmEthHex)) / 1e18;
-    const baseEthValue = baseEthBalance * prices.eth;
-    const evmHypeValue = evmHypeBalance * prices.hype; // HyperEVM native = HYPE, not ETH
-    const totalGasValue = baseEthValue + evmHypeValue;
+    let walletBalance = Number(decode(usdt0Hex)) / 1e6;
+    let baseEthBalance = Number(decode(baseEthHex)) / 1e18;
+    let evmHypeBalance = Number(decode(evmEthHex)) / 1e18;
+    let baseEthValue = baseEthBalance * prices.eth;
+    let evmHypeValue = evmHypeBalance * prices.hype; // HyperEVM native = HYPE, not ETH
+    let totalGasValue = baseEthValue + evmHypeValue;
 
-    const strategyTvl = strategyDocs.reduce((s, d) => s + d.tvl, 0);
-    // Portfolio = idle USDT0 + deployed strategy TVL + gas tokens at market price
-    const portfolioTvl = walletBalance + strategyTvl + totalGasValue;
-
-    // Fetch previous peak from MongoDB for drawdown tracking
+    // Fetch previous record from MongoDB for carry-forward and peak tracking
     const prev = await portfolioCol
       .find({ wallet })
       .sort({ timestamp: -1 })
       .limit(1)
       .toArray();
     const prevDoc = prev[0];
+
+    // Only count live (registry) strategies in portfolio — discovered strategies
+    // may duplicate the same on-chain positions under different names
+    let strategyTvl = strategyDocs
+      .filter((d) => d.mode === "live")
+      .reduce((s, d) => s + d.tvl, 0);
+
+    // Carry forward from in-memory state OR previous MongoDB record
+    const ref = lastKnownPortfolio || (prevDoc ? {
+      baseEthBalance: prevDoc.base_eth_balance || 0,
+      baseEthValue: prevDoc.base_eth_value || 0,
+      evmHypeBalance: prevDoc.evm_hype_balance || 0,
+      evmHypeValue: prevDoc.evm_hype_value || 0,
+      strategyTvl: prevDoc.strategy_tvl || 0,
+    } : null);
+
+    if (ref) {
+      if (baseEthBalance === 0 && ref.baseEthBalance > 0) {
+        console.log(`[stats] Base RPC glitch — carrying forward ETH=${ref.baseEthBalance.toFixed(4)}`);
+        baseEthBalance = ref.baseEthBalance;
+        baseEthValue = ref.baseEthValue;
+      }
+      if (evmHypeBalance === 0 && ref.evmHypeBalance > 0) {
+        console.log(`[stats] HyperEVM RPC glitch — carrying forward HYPE=${ref.evmHypeBalance.toFixed(4)}`);
+        evmHypeBalance = ref.evmHypeBalance;
+        evmHypeValue = ref.evmHypeValue;
+      }
+      if (strategyTvl === 0 && (ref.strategyTvl || 0) > 0) {
+        console.log(`[stats] Strategy TVL=0 — carrying forward strat=$${ref.strategyTvl.toFixed(2)}`);
+        strategyTvl = ref.strategyTvl;
+      }
+      totalGasValue = baseEthValue + evmHypeValue;
+    }
+
+    // Portfolio = idle USDT0 + deployed strategy TVL + gas tokens at market price
+    let portfolioTvl = walletBalance + strategyTvl + totalGasValue;
+    lastKnownPortfolio = { tvl: portfolioTvl, walletBalance, baseEthBalance, evmHypeBalance, baseEthValue, evmHypeValue, totalGasValue, strategyTvl };
+    // On very first ship, set initial capital to current TVL
+    if (INITIAL_CAPITAL === null) {
+      INITIAL_CAPITAL = portfolioTvl;
+      console.log(`[stats] First ship — setting initial capital: $${INITIAL_CAPITAL.toFixed(2)}`);
+    }
     const initialCapital = INITIAL_CAPITAL;
     // Reset peak if previous was from inflated data (HYPE-as-ETH bug)
     const prevPeak = prevDoc?.peak_tvl || 0;

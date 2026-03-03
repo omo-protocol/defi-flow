@@ -25,6 +25,9 @@ if (!MONGODB_URI) {
   process.exit(1);
 }
 
+// Track last known vault values to filter mid-operation glitches
+const lastKnownVaultValues = new Map();
+
 // ── Vault definitions ───────────────────────────────────
 const USDT0 = "0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb";
 const USDT0_DECIMALS = 6;
@@ -153,6 +156,17 @@ async function takeSnapshot(db) {
   const vaultResults = await Promise.all(
     VAULTS.map((v) => queryVault(v, WALLET))
   );
+
+  // Carry forward values that drop >30% in a single tick (mid-operation glitch)
+  for (const v of vaultResults) {
+    const lastVal = lastKnownVaultValues.get(v.vault_address);
+    if (lastVal !== undefined && lastVal > 0 && v.shares_value_usdt < lastVal * 0.7) {
+      console.log(`[baseline] Filtering glitch: ${v.vault_name} $${v.shares_value_usdt.toFixed(2)} → carried forward $${lastVal.toFixed(2)}`);
+      v.shares_value_usdt = lastVal;
+    } else if (v.shares_value_usdt > 0) {
+      lastKnownVaultValues.set(v.vault_address, v.shares_value_usdt);
+    }
+  }
 
   // Also check wallet's raw USDT0 balance
   const walletBalHex = await ethCall(
