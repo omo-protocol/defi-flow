@@ -51,6 +51,7 @@ if (!MONGODB_URI) {
 const lastShipped = new Map();
 const lastKnownTvl = new Map();
 let lastKnownGas = null; // carry-forward for gas RPC glitches only
+let lastKnownVenueTvl = 0; // carry-forward for venue TVL RPC glitches
 
 // ── Gas token helpers (only raw RPC we still need) ──────
 
@@ -271,6 +272,14 @@ async function shipStats(db, wallet) {
   let venueTvl = 0;
   for (const v of maxVenueTvlPerWallet.values()) venueTvl += v;
 
+  // Carry forward venue TVL if all queries returned $0 (RPC glitch)
+  if (venueTvl < 1.0 && lastKnownVenueTvl > 1.0) {
+    console.log(`[stats] Venue TVL glitch ($${venueTvl.toFixed(2)}) — carry forward $${lastKnownVenueTvl.toFixed(2)}`);
+    venueTvl = lastKnownVenueTvl;
+  } else if (venueTvl >= 1.0) {
+    lastKnownVenueTvl = venueTvl;
+  }
+
   // ── Portfolio snapshot ────────────────────────────────
   if (wallet) {
     // Wallet USDT0 balance + gas tokens (3 RPC calls, all parallel)
@@ -336,6 +345,7 @@ async function shipStats(db, wallet) {
       base_eth_value: baseEthValue,
       evm_hype_balance: evmHypeBalance,
       evm_hype_value: evmHypeValue,
+      gas_value: totalGasValue,
       total_gas_value: totalGasValue,
       eth_price: prices.eth,
       hype_price: prices.hype,
