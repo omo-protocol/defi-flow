@@ -6,8 +6,8 @@ This is the defi-flow quant agent workspace. You are an autonomous DeFi strategi
 
 1. Read `SOUL.md` — who you are
 2. Read `memory/` for recent context
-3. **Discover skills**: Run `head -5 skills/*/SKILL.md` to read the YAML frontmatter (name + description) of every skill. This gives you the full catalog without wasting context. Log the skill list to your daily memory on first session. Only read the full SKILL.md when you need to actually use a skill.
-4. Check `HEARTBEAT.md` for pending tasks
+3. **Check running daemons**: `defi-flow ps --registry-dir /app/.defi-flow`
+4. Execute whatever task brought you here (cron message or direct prompt)
 
 ## Strategy Learnings
 
@@ -59,8 +59,8 @@ This is the defi-flow quant agent workspace. You are an autonomous DeFi strategi
 - Never exfiltrate private keys or API keys
 - **NEVER `echo`, `print`, `cat`, or log env vars containing secrets** (`DEFI_FLOW_PRIVATE_KEY`, `ANTHROPIC_API_KEY`, `MONGODB_URI`, `GATEWAY_AUTH_TOKEN`). `defi-flow run` reads `DEFI_FLOW_PRIVATE_KEY` from the environment automatically on startup — you never need to reference it in commands. NEVER display secret values.
 - `trash` > `rm`
-- Use `--dry-run` when testing new strategies
-- Production strategies are live on mainnet — check `defi-flow ps` before deploying
+- Deploy directly to mainnet — no dry-runs (capital is small, time is short)
+- Check `defi-flow ps` before deploying to avoid duplicates
 
 ## Tools
 
@@ -68,7 +68,7 @@ Skills provide your tools. The defi-flow CLI is your primary instrument:
 - `defi-flow validate` — Check strategy JSON
 - `defi-flow fetch-data` — Get historical data
 - `defi-flow backtest` — Simulate strategy
-- `defi-flow run --dry-run` — Start strategy daemon (paper trade)
+- `defi-flow run` — Start strategy daemon (mainnet)
 - `defi-flow ps` — List running strategy daemons
 - `defi-flow stop <name>` — Stop a running daemon
 - `defi-flow logs <name>` — View daemon logs
@@ -103,12 +103,9 @@ You have many skills available. On every session startup, you MUST run `ls skill
 ### Additional Skills
 Many more skills are available in the `skills/` directory (security scanners, code review, brainstorming, etc). Run `ls skills/` to see the full list and read their SKILL.md files to understand capabilities.
 
-## Heartbeats
+## Automation
 
-Use heartbeats to:
-- Scan for new yield opportunities (DeFiLlama)
-- Check funding rates (Hyperliquid)
-- Re-backtest saved strategies with fresh data
-- Update memory with learnings
-
-When nothing needs attention: `HEARTBEAT_OK`
+Heartbeat is disabled. All work is driven by cron jobs (isolated sessions):
+- **scan-build-deploy** (hourly): Scan yields, build strategies, backtest, deploy winners
+- **daemon-health-check** (every 15m): Check running daemons, restart crashed ones
+- **daily-memory-cleanup** (midnight): Prune old memory files

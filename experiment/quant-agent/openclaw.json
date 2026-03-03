@@ -8,7 +8,7 @@
         "scope": "agent"
       },
       "heartbeat": {
-        "every": "30m"
+        "every": "0m"
       }
     },
     "list": [

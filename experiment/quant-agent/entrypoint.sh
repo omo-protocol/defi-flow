@@ -53,22 +53,70 @@ if [ -f "$REGISTRY_DIR/registry.json" ]; then
   defi-flow resume-all --registry-dir "$REGISTRY_DIR" || echo "Resume failed (non-fatal), continuing."
 fi
 
-# Register cron jobs
+# Register cron jobs — these are the ONLY way the agent takes action (heartbeat is disabled)
 echo "Registering cron jobs..."
 
-openclaw cron add \
-  --name "hourly-yield-scan" \
-  --cron "0 * * * *" \
-  --session isolated \
-  --message "Run the quant-scan skill. Scan DeFiLlama yields and Hyperliquid funding rates. Build and backtest any promising strategies. Save results to memory." \
-  2>/dev/null || echo "Cron 'hourly-yield-scan' may already exist, skipping."
+# Clear stale cron jobs from previous runs
+openclaw cron list --json 2>/dev/null | python3 -c "
+import sys, json, subprocess
+try:
+    data = json.load(sys.stdin)
+    for job in data.get('jobs', []):
+        subprocess.run(['openclaw', 'cron', 'remove', '--id', job['id']], capture_output=True)
+        print(f'  Removed stale cron: {job.get(\"name\", job[\"id\"])}')
+except: pass
+" 2>/dev/null || true
 
 openclaw cron add \
-  --name "daily-rebacktest" \
-  --cron "0 6 * * *" \
+  --name "scan-build-deploy" \
+  --cron "0 * * * *" \
   --session isolated \
-  --message "Re-backtest all saved strategies in /app/strategies/ with fresh data. Flag any where Sharpe dropped >30%. Update memory with results." \
-  2>/dev/null || echo "Cron 'daily-rebacktest' may already exist, skipping."
+  --message "You are a DeFi quant agent. Execute this pipeline NOW:
+
+STEP 1: Check running strategies
+  Run: defi-flow ps --registry-dir /app/.defi-flow
+  If strategies are running and healthy, log their TVL/PnL and skip to STEP 5.
+  If crashed, check logs and restart them.
+
+STEP 2: Scan for yield opportunities
+  Run these two commands:
+    curl -s 'https://yields.llama.fi/pools' | jq '[.data[] | select((.chain==\"Hyperliquid\" or .chain==\"Base\" or .chain==\"Arbitrum\" or .chain==\"HyperEVM\") and .tvlUsd > 500000 and .apy > 5)] | sort_by(-.apy) | .[0:15] | .[] | {pool: .pool, symbol: .symbol, chain: .chain, apy: .apy, tvl: .tvlUsd}'
+    curl -s 'https://api.hyperliquid.xyz/info' -X POST -H 'Content-Type: application/json' -d '{\"type\": \"metaAndAssetCtxs\"}' | jq '.[1][] | select(.funding != null) | {coin: .coin, funding_ann: ((.funding | tonumber) * 8760 * 100), oi: .openInterest} | select(.funding_ann > 10 or .funding_ann < -10)'
+
+STEP 3: Build a strategy JSON
+  Pick the BEST opportunity. Read the defi-flow skill (head -50 skills/defi-flow/SKILL.md) for the JSON format.
+  Start simple — a single lending strategy (USDT0 on HyperLend) is easiest:
+    wallet(hyperevm) -> lending(aave_v3, hyperlend_pool, USDT0, supply)
+  Save to /app/strategies/<name>.json
+
+STEP 4: Validate, fetch data, backtest, and deploy
+  defi-flow validate /app/strategies/<name>.json
+  If validation fails, FIX the JSON and retry (up to 3 times).
+  defi-flow fetch-data /app/strategies/<name>.json --days 90 --interval 8h
+  defi-flow backtest /app/strategies/<name>.json --capital 30 --monte-carlo 50
+  If Sharpe > 1.0 and DD < 25%:
+    mkdir -p /app/.defi-flow/logs /app/.defi-flow/state
+    nohup defi-flow run /app/strategies/<name>.json --network mainnet --registry-dir /app/.defi-flow --state-file /app/.defi-flow/state/<name>.state.json --log-file /app/.defi-flow/logs/<name>.log > /app/.defi-flow/logs/<name>.log 2>&1 &
+    defi-flow ps --registry-dir /app/.defi-flow
+
+STEP 5: Log results to memory
+  Write scan results, backtest metrics, and daemon status to memory/\$(date +%Y-%m-%d).md
+  Update MEMORY.md if you learned something new." \
+  2>/dev/null || echo "Cron 'scan-build-deploy' may already exist, skipping."
+
+openclaw cron add \
+  --name "daemon-health-check" \
+  --cron "*/15 * * * *" \
+  --session isolated \
+  --message "You are a DeFi quant agent. Check daemon health NOW:
+
+1. Run: defi-flow ps --registry-dir /app/.defi-flow
+2. For each running daemon: log TVL and PnL
+3. For each crashed daemon: run 'defi-flow logs <name> -n 50 --registry-dir /app/.defi-flow', diagnose, and restart if appropriate
+4. If NO strategies are running and /app/strategies/ has validated strategy files, deploy the best one:
+   nohup defi-flow run /app/strategies/<name>.json --network mainnet --registry-dir /app/.defi-flow --state-file /app/.defi-flow/state/<name>.state.json --log-file /app/.defi-flow/logs/<name>.log > /app/.defi-flow/logs/<name>.log 2>&1 &
+5. Write a one-line status to memory/\$(date +%Y-%m-%d).md" \
+  2>/dev/null || echo "Cron 'daemon-health-check' may already exist, skipping."
 
 openclaw cron add \
   --name "daily-memory-cleanup" \

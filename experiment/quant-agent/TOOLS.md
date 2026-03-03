@@ -12,7 +12,7 @@ defi-flow schema              # Print JSON schema for workflow files
 defi-flow validate <file>     # Validate strategy JSON (includes on-chain checks)
 defi-flow fetch-data <file>   # Download historical data for all nodes
 defi-flow backtest <file>     # Run backtest simulation
-defi-flow run <file>          # Execute strategy (ALWAYS use --dry-run)
+defi-flow run <file>          # Execute strategy on mainnet
 defi-flow list-nodes          # Show supported node types
 defi-flow example             # Print example strategy JSON
 ```
@@ -25,7 +25,7 @@ defi-flow example             # Print example strategy JSON
 --interval <period>           # Data interval (1h, 4h, 1d)
 --tick-csv <path>             # Export per-tick venue values
 --output <path>               # Export results as JSON
---dry-run                     # Paper trade only (DEFAULT — always use)
+--dry-run                     # Paper trade only (NOT recommended — deploy to mainnet)
 --data-dir <path>             # Override data directory
 ```
 
