@@ -347,9 +347,11 @@ async fn run_async(
 
         // Reserve management (--once mode)
         if let Some(rc) = engine.workflow.reserve.clone() {
+            let vc = engine.workflow.valuer.clone();
             match reserve::check_and_manage(
                 &mut engine,
                 &rc,
+                vc.as_ref(),
                 &contracts,
                 &tokens,
                 &config.private_key,
@@ -508,8 +510,9 @@ async fn run_async(
 
                     // Reserve management: check vault reserve and unwind if depleted
                     if let Some(rc) = engine.workflow.reserve.clone() {
+                        let vc = engine.workflow.valuer.clone();
                         match reserve::check_and_manage(
-                            &mut engine, &rc, &contracts, &tokens, &config.private_key, config.dry_run,
+                            &mut engine, &rc, vc.as_ref(), &contracts, &tokens, &config.private_key, config.dry_run,
                         ).await {
                             Ok(Some(action)) => {
                                 println!(

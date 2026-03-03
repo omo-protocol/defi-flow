@@ -1,10 +1,16 @@
 {
   "deploy_completed": true,
-  "last_tick": 1772301128,
-  "balances": {
-    "wallet": 49.949376
-  },
-  "reserve_actions": [],
+  "last_tick": 1772526499,
+  "balances": {},
+  "reserve_actions": [
+    {
+      "timestamp": 1772526504,
+      "total_assets": 47.811662,
+      "reserve_ratio": 0.1999963523543691,
+      "deficit": 37.77138737999999,
+      "freed": 37.77138737999999
+    }
+  ],
   "allocation_actions": [
     {
       "timestamp": 1772297838,
@@ -21,8 +27,9 @@
       "pulled": 1.2458240000000007
     }
   ],
-  "initial_capital": 49.949376,
-  "peak_tvl": 49.949376,
+  "initial_capital": 1.785134,
+  "last_tvl": 10.88815,
+  "peak_tvl": 45.837112000000005,
   "cumulative_funding": 0.0,
   "cumulative_interest": 0.0,
   "cumulative_rewards": 0.0,

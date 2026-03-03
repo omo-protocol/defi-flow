@@ -507,6 +507,7 @@ fn encode_allocation_data(strategy_id: FixedBytes<32>) -> Bytes {
 pub async fn check_and_manage(
     engine: &mut Engine,
     config: &ReserveConfig,
+    valuer_config: Option<&ValuerConfig>,
     contracts: &evm::ContractManifest,
     tokens: &evm::TokenManifest,
     private_key: &str,
@@ -560,23 +561,26 @@ pub async fn check_and_manage(
 
         if dry_run {
             eprintln!(
-                "[reserve] [DRY RUN] would transfer ${:.2} to vault {}",
+                "[reserve] [DRY RUN] would return ${:.2} to vault {}",
                 total_freed,
                 evm::short_addr(&vault_addr),
             );
         } else {
-            match transfer_to_vault(config, contracts, tokens, private_key, total_freed).await {
+            // Return freed capital through the adapter→deallocate path so
+            // totalAllocations is reduced properly. Falls back to direct
+            // transfer only for vaults without an adapter.
+            match return_to_vault(config, valuer_config, contracts, tokens, private_key, total_freed).await {
                 Ok(()) => {
                     eprintln!(
-                        "[reserve] transferred ${:.2} to vault {}",
+                        "[reserve] returned ${:.2} to vault {}",
                         total_freed,
                         evm::short_addr(&vault_addr),
                     );
                 }
                 Err(e) => {
                     eprintln!(
-                        "[reserve] ERROR transferring to vault: {:#}. \
-                         Freed capital sits in wallet — keeper deposit cycle will pick it up.",
+                        "[reserve] ERROR returning to vault: {:#}. \
+                         Freed capital sits in wallet — next tick will retry.",
                         e,
                     );
                 }
@@ -594,11 +598,17 @@ pub async fn check_and_manage(
     }))
 }
 
-// ── ERC20 transfer to vault ─────────────────────────────────────────
+// ── Return capital to vault (via adapter deallocate) ────────────────
 
-/// Transfer freed capital (vault_token) to the vault address on-chain.
-async fn transfer_to_vault(
+/// Return freed capital to the vault through the proper accounting path.
+///
+/// When an adapter is configured: wallet → ERC20 transfer → adapter → vault.deallocate()
+/// This correctly reduces `adapter.totalAllocations` so totalAssets isn't overstated.
+///
+/// When no adapter exists: direct ERC20 transfer to vault (ERC4626 style).
+async fn return_to_vault(
     config: &ReserveConfig,
+    valuer_config: Option<&ValuerConfig>,
     contracts: &evm::ContractManifest,
     tokens: &evm::TokenManifest,
     private_key: &str,
@@ -624,28 +634,84 @@ async fn transfer_to_vault(
     let amount_units = evm::to_token_units(amount, 1.0, decimals);
 
     let provider = make_signer_provider(private_key, rpc_url)?;
-    let erc20 = IErc20Transfer::new(token_addr, &provider);
 
-    let pending = erc20
-        .transfer(vault_addr, amount_units)
-        .send()
-        .await
-        .context("ERC20 transfer to vault failed")?;
+    // If adapter + valuer configured, go through the proper deallocate path
+    if let (Some(adapter_key), Some(vc)) = (&config.adapter_address, valuer_config) {
+        let adapter_addr =
+            evm::resolve_contract(contracts, adapter_key, &config.vault_chain).with_context(|| {
+                format!(
+                    "Adapter '{}' on {} not in contracts manifest",
+                    adapter_key, config.vault_chain,
+                )
+            })?;
 
-    let receipt = pending
-        .get_receipt()
-        .await
-        .context("transfer receipt failed")?;
-
-    if !receipt.status() {
-        anyhow::bail!(
-            "ERC20 transfer reverted (tx: {:?}, gas: {:?})",
+        // Step 1: transfer tokens from wallet to adapter
+        let erc20 = IErc20Transfer::new(token_addr, &provider);
+        let pending = erc20
+            .transfer(adapter_addr, amount_units)
+            .send()
+            .await
+            .context("ERC20 transfer to adapter failed")?;
+        let receipt = pending
+            .get_receipt()
+            .await
+            .context("transfer to adapter receipt failed")?;
+        if !receipt.status() {
+            anyhow::bail!(
+                "ERC20 transfer to adapter reverted (tx: {:?})",
+                receipt.transaction_hash,
+            );
+        }
+        eprintln!(
+            "[reserve] transfer to adapter tx: {:?}",
             receipt.transaction_hash,
-            receipt.gas_used,
         );
-    }
 
-    eprintln!("[reserve] transfer tx: {:?}", receipt.transaction_hash,);
+        // Step 2: vault.deallocate(adapter, data, amount) — reduces totalAllocations
+        let strategy_id = crate::run::valuer::strategy_id_from_text(&vc.strategy_id);
+        let allocation_data = encode_allocation_data(strategy_id);
+
+        let vault = IVaultAllocate::new(vault_addr, &provider);
+        let pending = vault
+            .deallocate(adapter_addr, allocation_data, amount_units)
+            .gas(500_000)
+            .send()
+            .await
+            .context("vault.deallocate() send failed")?;
+        let receipt = pending
+            .get_receipt()
+            .await
+            .context("vault.deallocate() receipt failed")?;
+        if !receipt.status() {
+            anyhow::bail!(
+                "vault.deallocate() reverted (tx: {:?})",
+                receipt.transaction_hash,
+            );
+        }
+        eprintln!(
+            "[reserve] vault.deallocate() tx: {:?}",
+            receipt.transaction_hash,
+        );
+    } else {
+        // No adapter — direct ERC20 transfer to vault (simple ERC4626)
+        let erc20 = IErc20Transfer::new(token_addr, &provider);
+        let pending = erc20
+            .transfer(vault_addr, amount_units)
+            .send()
+            .await
+            .context("ERC20 transfer to vault failed")?;
+        let receipt = pending
+            .get_receipt()
+            .await
+            .context("transfer receipt failed")?;
+        if !receipt.status() {
+            anyhow::bail!(
+                "ERC20 transfer to vault reverted (tx: {:?})",
+                receipt.transaction_hash,
+            );
+        }
+        eprintln!("[reserve] transfer tx: {:?}", receipt.transaction_hash);
+    }
 
     Ok(())
 }
