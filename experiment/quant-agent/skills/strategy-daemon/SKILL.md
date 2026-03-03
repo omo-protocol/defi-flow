@@ -79,14 +79,26 @@ defi-flow logs <name> -n 100 --registry-dir /app/.defi-flow
 # Restart crashed strategies
 ```
 
+### Query on-chain TVL for a strategy
+
+```bash
+defi-flow query /app/strategies/<name>.json \
+  --state-file /app/.defi-flow/state/<name>.state.json
+```
+
+Returns JSON with per-venue breakdown, wallet token balances, and cumulative metrics.
+Use this to verify a strategy is actually deployed and has TVL > 0.
+
 ## Rules
 
-1. **Deploy directly to mainnet.** No dry-runs — capital is small and time is short.
-2. **Check `defi-flow ps`** regularly — restart crashed daemons.
-3. **Log everything.** Always use `--log-file` so `defi-flow logs` works.
-4. **State files persist.** A restarted daemon picks up where it left off via `--state-file`.
-5. **One daemon per strategy.** Don't start the same strategy twice — stop first, then start.
-6. **Max 2 strategies running** at once — capital is too small to split further.
+1. **ALWAYS use `--network mainnet`.** The default is testnet which won't execute real trades. Every `defi-flow run` command MUST include `--network mainnet`.
+2. **Deploy directly to mainnet.** No dry-runs — capital is small and time is short.
+3. **Check `defi-flow ps`** regularly — restart crashed daemons.
+4. **Log everything.** Always use `--log-file` so `defi-flow logs` works.
+5. **State files persist.** A restarted daemon picks up where it left off via `--state-file`.
+6. **One daemon per strategy.** Don't start the same strategy twice — stop first, then start.
+7. **Up to 5 strategies** can run simultaneously. Be aggressive — deploy more strategies.
+8. **Verify after deploy.** Run `defi-flow query` 60s after starting a daemon to confirm TVL > 0. If TVL is 0, check logs and fix.
 
 ## Troubleshooting
 
@@ -94,5 +106,6 @@ defi-flow logs <name> -n 100 --registry-dir /app/.defi-flow
 |-------|-----|
 | `defi-flow ps` shows "crashed" | Check logs: `defi-flow logs <name> -n 100`. Restart if transient. |
 | PID alive but no state updates | Check `last_tick` in state file. May be stuck — stop and restart. |
-| Strategy shows $0 TVL | Deploy phase may have failed. Check logs for "Deploy phase" errors. |
+| Strategy shows $0 TVL | Deploy phase may have failed. Check logs for "Deploy phase" errors. Run `defi-flow query` to verify on-chain. |
 | Can't stop — PID stale | `defi-flow stop <name>` handles stale PIDs (cleans registry). |
+| Strategy deployed but no trades | Check `--network mainnet` was used. Default is testnet! |

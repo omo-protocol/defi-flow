@@ -27,7 +27,17 @@ defi-flow ps --registry-dir /app/.defi-flow
 defi-flow logs <name> -n 100 --registry-dir /app/.defi-flow
 ```
 
-## Evaluation Criteria
-- **Deploy**: Sharpe > 1.0, max DD < 25%, positive PnL
-- **Suspicious**: Sharpe > 3.0 — check for overfitting
-- **Reject**: negative PnL, DD > 40%, liquidations
+### Verify strategy is live
+```bash
+defi-flow query /app/strategies/<name>.json \
+  --state-file /app/.defi-flow/state/<name>.state.json
+```
+If TVL is 0, check logs. If `--network mainnet` was missing, stop and restart with it.
+
+## Rules
+- **Up to 5 strategies** running simultaneously — be aggressive
+- **ALWAYS use `--network mainnet`** — default is testnet (won't execute real trades!)
+- Deploy: Sharpe > 1.0, max DD < 25%, positive PnL
+- Suspicious: Sharpe > 3.0 — check for overfitting
+- Reject: negative PnL, DD > 40%, liquidations
+- Scan-build-deploy runs every 20 minutes — iterate fast on validation errors (up to 10 attempts)

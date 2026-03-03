@@ -44,6 +44,11 @@ pub struct RunState {
     /// Cumulative swap/transaction costs (USD).
     #[serde(default)]
     pub cumulative_costs: f64,
+
+    /// Consecutive ticks where on-chain TVL was < $1.
+    /// Used by reconcile to distinguish RPC glitch from genuinely empty positions.
+    #[serde(default)]
+    pub zero_tvl_streak: u32,
 }
 
 impl RunState {

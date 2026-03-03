@@ -2,15 +2,10 @@
 /**
  * Ships quant agent strategy stats to MongoDB.
  *
- * For each agent (identified by DEFI_FLOW_PRIVATE_KEY):
- *   1. Agent wallet USDT0 balance on HyperEVM (idle funds)
- *   2. ETH on Base (gas tracking)
- *   3. Deployed strategies via `defi-flow query` (per-venue on-chain TVL)
- *      - Falls back to state file last_tvl if binary unavailable
- *   4. Computes PnL, APR, APY, max drawdown per strategy
+ * Uses `defi-flow query` per strategy for on-chain TVL (no double counting).
+ * Only raw RPC calls are for gas token balances (ETH on Base, HYPE on HyperEVM).
  *
  * Strategy discovery: reads registry.json OR scans /app/strategies/*.json
- *
  * Runs as a long-lived daemon: reactive via fs.watch + 5-min poll fallback.
  *
  * Env: MONGODB_URI, MONGODB_DB, DEFI_FLOW_PRIVATE_KEY,
@@ -41,66 +36,45 @@ const STRATEGIES_DIR = process.env.STRATEGIES_DIR || "/app/strategies";
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 const MIN_SHIP_INTERVAL_MS = 30_000;
 
-// Auto-detect initial capital from first portfolio snapshot (set on first ship)
 let INITIAL_CAPITAL = null;
 const HYPEREVM_RPC = "https://rpc.hyperliquid.xyz/evm";
 const BASE_RPC = "https://mainnet.base.org";
-const USDT0 = "0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb";
 const HL_INFO_URL = "https://api.hyperliquid.xyz/info";
+const USDT0 = "0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb";
 
 if (!MONGODB_URI) {
   console.log("[stats] MONGODB_URI not set — skipping.");
   process.exit(0);
 }
 
-// ── Throttle map ────────────────────────────────────────
+// ── Throttle ────────────────────────────────────────────
 const lastShipped = new Map();
 const lastKnownTvl = new Map();
-// Carry forward last known portfolio components to filter RPC glitches (returns 0)
-let lastKnownPortfolio = null;
+let lastKnownGas = null; // carry-forward for gas RPC glitches only
 
-// ── EVM helpers (raw eth_call) ──────────────────────────
+// ── Gas token helpers (only raw RPC we still need) ──────
 
-async function ethCall(rpc, to, data) {
+async function rpcCall(rpc, method, params) {
   const resp = await fetch(rpc, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "eth_call",
-      params: [{ to, data }, "latest"],
-    }),
-  });
-  const json = await resp.json();
-  return json.result || "0x";
-}
-
-async function ethBalance(rpc, addr) {
-  const resp = await fetch(rpc, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "eth_getBalance",
-      params: [addr, "latest"],
-    }),
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   });
   const json = await resp.json();
   return json.result || "0x0";
 }
 
-function decode(hex) {
-  if (!hex || hex === "0x") return 0n;
-  return BigInt(hex);
+async function ethBalance(rpc, addr) {
+  const hex = await rpcCall(rpc, "eth_getBalance", [addr, "latest"]);
+  return Number(BigInt(hex)) / 1e18;
 }
 
-function encodeAddress(addr) {
-  return addr.toLowerCase().replace("0x", "").padStart(64, "0");
+async function erc20Balance(rpc, token, wallet) {
+  const walletEnc = wallet.toLowerCase().replace("0x", "").padStart(64, "0");
+  const hex = await rpcCall(rpc, "eth_call", [{ to: token, data: "0x70a08231" + walletEnc }, "latest"]);
+  if (!hex || hex === "0x") return 0;
+  return Number(BigInt(hex)) / 1e6; // USDT0/USDC = 6 decimals
 }
-
-// ── Price helpers ───────────────────────────────────────
 
 async function getPrices() {
   try {
@@ -136,13 +110,9 @@ function deriveWallet() {
   if (!pk) return null;
   try {
     return execSync(`cast wallet address --private-key ${pk}`, {
-      encoding: "utf-8",
-      timeout: 5_000,
+      encoding: "utf-8", timeout: 5_000,
     }).trim();
   } catch {
-    // cast not available — try defi-flow
-    // The wallet address is printed in defi-flow's output but we can't easily get it.
-    // For now, return null and the script will still work for strategy stats.
     return null;
   }
 }
@@ -153,12 +123,12 @@ function queryStrategy(strategyFile, stateFile) {
   const args = [strategyFile];
   if (stateFile) args.push("--state-file", stateFile);
   try {
-    const output = execSync(`defi-flow query ${args.join(" ")}`, {
-      encoding: "utf-8",
-      timeout: 30_000,
-      env: { ...process.env },
-    }).trim();
-    return JSON.parse(output);
+    const raw = execSync(`defi-flow query ${args.join(" ")}`, {
+      encoding: "utf-8", timeout: 30_000, env: { ...process.env },
+    });
+    // defi-flow query prints JSON on first line, may print "Loaded state..." on stderr
+    const jsonLine = raw.split("\n").find((l) => l.startsWith("{"));
+    return jsonLine ? JSON.parse(jsonLine) : null;
   } catch {
     return null;
   }
@@ -191,31 +161,20 @@ async function discoverStrategies() {
       const fullPath = join(STRATEGIES_DIR, f);
       const name = f.replace(".json", "");
       if (strategies.some((s) => s.name === name)) continue;
-
-      // Check if there's a state file
       const stateFile = join(REGISTRY_DIR, "state", `${name}.state.json`);
-
       strategies.push({
-        name,
-        strategy_file: fullPath,
-        state_file: stateFile,
-        mode: "discovered",
-        network: "unknown",
-        started_at: null,
+        name, strategy_file: fullPath, state_file: stateFile,
+        mode: "discovered", network: "unknown", started_at: null,
       });
     }
-  } catch {
-    // strategies dir doesn't exist
-  }
+  } catch {}
 
   return strategies;
 }
 
-// ── Compute derived metrics ─────────────────────────────
+// ── Compute per-strategy derived metrics ────────────────
 
 function computeMetrics(name, entry, queryResult, state) {
-  // Prefer defi-flow query TVL (fully on-chain) → state.last_tvl → 0
-  // Carry forward last known TVL if current reading is 0 (state file mid-write)
   let tvl = queryResult?.total_tvl || state?.last_tvl || 0;
   if (tvl === 0 && lastKnownTvl.has(name)) {
     tvl = lastKnownTvl.get(name);
@@ -225,36 +184,20 @@ function computeMetrics(name, entry, queryResult, state) {
   const initialCapital = state?.initial_capital || 0;
   const peakTvl = state?.peak_tvl || tvl;
   const startedAt = entry.started_at ? new Date(entry.started_at) : null;
-
   const pnl = initialCapital > 0 ? tvl - initialCapital : 0;
-
   const uptimeMs = startedAt ? Date.now() - startedAt.getTime() : 0;
   const uptimeHours = Math.max(uptimeMs / (1000 * 3600), 1);
-  const hoursPerYear = 8766;
-  const apr =
-    initialCapital > 0
-      ? (pnl / initialCapital) * (hoursPerYear / uptimeHours)
-      : 0;
-  const apy = Math.exp(apr) - 1;
+  const apr = initialCapital > 0 ? (pnl / initialCapital) * (8766 / uptimeHours) : 0;
   const maxDrawdown = peakTvl > 0 ? Math.max(0, 1 - tvl / peakTvl) : 0;
 
   return {
-    strategy: name,
-    timestamp: new Date(),
-    tvl,
-    pnl,
-    apr,
-    apy,
-    max_drawdown: maxDrawdown,
-    initial_capital: initialCapital,
-    peak_tvl: peakTvl,
+    strategy: name, timestamp: new Date(), tvl, pnl, apr,
+    apy: Math.exp(apr) - 1, max_drawdown: maxDrawdown,
+    initial_capital: initialCapital, peak_tvl: peakTvl,
     uptime_hours: Math.round(uptimeHours * 10) / 10,
-    // Per-venue breakdown from defi-flow query (if available)
     venues: queryResult?.venues || {},
     wallet_tokens: queryResult?.wallet_tokens || {},
-    // Backwards compat: balances map (node_id → USD value)
     balances: state?.balances || {},
-    // Cumulative metrics from state
     funding_pnl: state?.cumulative_funding || 0,
     interest_pnl: state?.cumulative_interest || 0,
     rewards_pnl: state?.cumulative_rewards || 0,
@@ -267,146 +210,125 @@ function computeMetrics(name, entry, queryResult, state) {
   };
 }
 
-// ── Ship stats for all strategies ───────────────────────
+// ── Ship stats ──────────────────────────────────────────
 
 async function shipStats(db, wallet) {
   const strategies = await discoverStrategies();
-  if (strategies.length === 0) {
-    // No strategies yet — still ship agent-level stats
-  }
-
   const strategyCol = db.collection("strategy_stats");
   const portfolioCol = db.collection("portfolio_stats");
   let shipped = 0;
 
-  // Auto-detect initial capital from first portfolio snapshot
+  // Auto-detect IC from first MongoDB record
   if (INITIAL_CAPITAL === null && wallet) {
     const first = await portfolioCol
-      .find({ wallet })
-      .sort({ timestamp: 1 })
-      .limit(1)
-      .toArray();
+      .find({ wallet }).sort({ timestamp: 1 }).limit(1).toArray();
     if (first.length > 0) {
-      INITIAL_CAPITAL = first[0].portfolio_tvl;
-      console.log(`[stats] Auto-detected initial capital: $${INITIAL_CAPITAL.toFixed(2)}`);
+      INITIAL_CAPITAL = first[0].initial_capital || first[0].portfolio_tvl;
+      console.log(`[stats] Auto-detected IC: $${INITIAL_CAPITAL.toFixed(2)}`);
     }
   }
 
-  // Per-strategy stats
-  const strategyDocs = [];
+  // ── Per-strategy stats (via defi-flow query) ──────────
+  const queryResults = new Map(); // name → queryResult
+  // Dedup: track MAX venue_tvl per wallet (all HL perps report same account value)
+  const maxVenueTvlPerWallet = new Map();
+
   for (const entry of strategies) {
     const lastTime = lastShipped.get(entry.name) || 0;
     if (Date.now() - lastTime < MIN_SHIP_INTERVAL_MS) continue;
 
-    // Try defi-flow query for on-chain TVL
     const queryResult = queryStrategy(entry.strategy_file, entry.state_file);
-
-    // Read state file for cumulative metrics
     const state = await readJson(entry.state_file);
 
     if (!queryResult && !state) {
-      console.log(
-        `[stats] SKIP ${entry.name} — no query result or state file`
-      );
+      console.log(`[stats] SKIP ${entry.name} — no query result or state file`);
       continue;
     }
 
-    const metrics = computeMetrics(entry.name, entry, queryResult, state);
-    strategyDocs.push(metrics);
+    queryResults.set(entry.name, queryResult);
 
+    // Track highest venue_tvl per wallet (dedup HL double-counting)
+    if (queryResult?.wallet) {
+      const prev = maxVenueTvlPerWallet.get(queryResult.wallet) || 0;
+      const cur = queryResult.venue_tvl || 0;
+      if (cur > prev) maxVenueTvlPerWallet.set(queryResult.wallet, cur);
+    }
+
+    const metrics = computeMetrics(entry.name, entry, queryResult, state);
     try {
       await strategyCol.insertOne(metrics);
       lastShipped.set(entry.name, Date.now());
       shipped++;
-
-      const aprPct = (metrics.apr * 100).toFixed(2);
-      const ddPct = (metrics.max_drawdown * 100).toFixed(2);
       console.log(
-        `[stats] ${entry.name}: TVL=$${metrics.tvl.toFixed(2)} PnL=$${metrics.pnl.toFixed(2)} APR=${aprPct}% DD=${ddPct}%`
+        `[stats] ${entry.name}: TVL=$${metrics.tvl.toFixed(2)} PnL=$${metrics.pnl.toFixed(2)} APR=${(metrics.apr * 100).toFixed(2)}%`
       );
     } catch (err) {
       console.error(`[stats] FAIL ${entry.name}: ${err.message}`);
     }
   }
 
-  // Agent-level portfolio snapshot
+  // Aggregated venue TVL = sum of max per wallet (deduped)
+  let venueTvl = 0;
+  for (const v of maxVenueTvlPerWallet.values()) venueTvl += v;
+
+  // ── Portfolio snapshot ────────────────────────────────
   if (wallet) {
-    const walletEnc = encodeAddress(wallet);
-    const [usdt0Hex, baseEthHex, evmEthHex, prices] = await Promise.all([
-      ethCall(HYPEREVM_RPC, USDT0, "0x70a08231" + walletEnc),
+    // Wallet USDT0 balance + gas tokens (3 RPC calls, all parallel)
+    const [walletBalance, baseEthBal, evmHypeBal, prices] = await Promise.all([
+      erc20Balance(HYPEREVM_RPC, USDT0, wallet),
       ethBalance(BASE_RPC, wallet),
       ethBalance(HYPEREVM_RPC, wallet),
       getPrices(),
     ]);
-    let walletBalance = Number(decode(usdt0Hex)) / 1e6;
-    let baseEthBalance = Number(decode(baseEthHex)) / 1e18;
-    let evmHypeBalance = Number(decode(evmEthHex)) / 1e18;
+
+    let baseEthBalance = baseEthBal;
+    let evmHypeBalance = evmHypeBal;
     let baseEthValue = baseEthBalance * prices.eth;
-    let evmHypeValue = evmHypeBalance * prices.hype; // HyperEVM native = HYPE, not ETH
-    let totalGasValue = baseEthValue + evmHypeValue;
+    let evmHypeValue = evmHypeBalance * prices.hype;
 
-    // Fetch previous record from MongoDB for carry-forward and peak tracking
-    const prev = await portfolioCol
-      .find({ wallet })
-      .sort({ timestamp: -1 })
-      .limit(1)
-      .toArray();
-    const prevDoc = prev[0];
-
-    // Only count live (registry) strategies in portfolio — discovered strategies
-    // may duplicate the same on-chain positions under different names
-    let strategyTvl = strategyDocs
-      .filter((d) => d.mode === "live")
-      .reduce((s, d) => s + d.tvl, 0);
-
-    // Carry forward from in-memory state OR previous MongoDB record
-    const ref = lastKnownPortfolio || (prevDoc ? {
-      baseEthBalance: prevDoc.base_eth_balance || 0,
-      baseEthValue: prevDoc.base_eth_value || 0,
-      evmHypeBalance: prevDoc.evm_hype_balance || 0,
-      evmHypeValue: prevDoc.evm_hype_value || 0,
-      strategyTvl: prevDoc.strategy_tvl || 0,
-    } : null);
-
+    // Carry forward gas only (the only RPC that glitches)
+    const ref = lastKnownGas;
     if (ref) {
       if (baseEthBalance === 0 && ref.baseEthBalance > 0) {
-        console.log(`[stats] Base RPC glitch — carrying forward ETH=${ref.baseEthBalance.toFixed(4)}`);
+        console.log(`[stats] Base RPC glitch — carry forward ETH=${ref.baseEthBalance.toFixed(4)}`);
         baseEthBalance = ref.baseEthBalance;
         baseEthValue = ref.baseEthValue;
       }
       if (evmHypeBalance === 0 && ref.evmHypeBalance > 0) {
-        console.log(`[stats] HyperEVM RPC glitch — carrying forward HYPE=${ref.evmHypeBalance.toFixed(4)}`);
+        console.log(`[stats] HyperEVM RPC glitch — carry forward HYPE=${ref.evmHypeBalance.toFixed(4)}`);
         evmHypeBalance = ref.evmHypeBalance;
         evmHypeValue = ref.evmHypeValue;
       }
-      if (strategyTvl === 0 && (ref.strategyTvl || 0) > 0) {
-        console.log(`[stats] Strategy TVL=0 — carrying forward strat=$${ref.strategyTvl.toFixed(2)}`);
-        strategyTvl = ref.strategyTvl;
-      }
-      totalGasValue = baseEthValue + evmHypeValue;
     }
+    lastKnownGas = { baseEthBalance, baseEthValue, evmHypeBalance, evmHypeValue };
 
-    // Portfolio = idle USDT0 + deployed strategy TVL + gas tokens at market price
-    let portfolioTvl = walletBalance + strategyTvl + totalGasValue;
-    lastKnownPortfolio = { tvl: portfolioTvl, walletBalance, baseEthBalance, evmHypeBalance, baseEthValue, evmHypeValue, totalGasValue, strategyTvl };
-    // On very first ship, set initial capital to current TVL
+    const totalGasValue = baseEthValue + evmHypeValue;
+
+    // Portfolio = USDT0 wallet + venue TVL (from query, deduped) + gas
+    const strategyTvl = venueTvl;
+    const portfolioTvl = walletBalance + strategyTvl + totalGasValue;
+    console.log(`[stats] Components: USDT0=$${walletBalance.toFixed(2)} venues=$${strategyTvl.toFixed(2)} gas=$${totalGasValue.toFixed(2)}`);
+
     if (INITIAL_CAPITAL === null) {
       INITIAL_CAPITAL = portfolioTvl;
-      console.log(`[stats] First ship — setting initial capital: $${INITIAL_CAPITAL.toFixed(2)}`);
+      console.log(`[stats] First ship — IC: $${INITIAL_CAPITAL.toFixed(2)}`);
     }
-    const initialCapital = INITIAL_CAPITAL;
-    // Reset peak if previous was from inflated data (HYPE-as-ETH bug)
+
+    // Peak tracking from previous MongoDB record
+    const prev = await portfolioCol
+      .find({ wallet }).sort({ timestamp: -1 }).limit(1).toArray();
+    const prevDoc = prev[0];
     const prevPeak = prevDoc?.peak_tvl || 0;
     const peakTvl = prevPeak > portfolioTvl * 3 ? portfolioTvl : Math.max(prevPeak, portfolioTvl);
     const maxDrawdown = peakTvl > 0 ? Math.max(0, 1 - portfolioTvl / peakTvl) : 0;
-    const pnl = portfolioTvl - initialCapital;
+    const pnl = portfolioTvl - INITIAL_CAPITAL;
 
-    const portfolioDoc = {
+    await portfolioCol.insertOne({
       timestamp: new Date(),
       wallet,
       chain: "hyperevm",
       model: process.env.MODEL_NAME || "unknown",
-      initial_capital: initialCapital,
+      initial_capital: INITIAL_CAPITAL,
       portfolio_tvl: portfolioTvl,
       wallet_balance: walletBalance,
       strategy_tvl: strategyTvl,
@@ -419,20 +341,17 @@ async function shipStats(db, wallet) {
       hype_price: prices.hype,
       peak_tvl: peakTvl,
       max_drawdown: maxDrawdown,
-      strategies_count: strategyDocs.length,
+      strategies_count: queryResults.size,
       pnl,
-      pnl_percent: initialCapital > 0 ? (pnl / initialCapital) * 100 : 0,
-    };
+      pnl_percent: INITIAL_CAPITAL > 0 ? (pnl / INITIAL_CAPITAL) * 100 : 0,
+    });
 
-    await portfolioCol.insertOne(portfolioDoc);
     console.log(
-      `[stats] Portfolio: TVL=$${portfolioTvl.toFixed(2)} (wallet=$${walletBalance.toFixed(2)} strats=$${strategyTvl.toFixed(2)} gas=$${totalGasValue.toFixed(2)}) PnL=$${pnl.toFixed(2)} DD=${(maxDrawdown * 100).toFixed(1)}%`
+      `[stats] Portfolio: TVL=$${portfolioTvl.toFixed(2)} (wallet=$${walletBalance.toFixed(2)} strats=$${strategyTvl.toFixed(2)} gas=$${totalGasValue.toFixed(2)}) PnL=$${pnl.toFixed(2)}`
     );
   }
 
-  if (shipped > 0) {
-    console.log(`[stats] Shipped ${shipped} strategy stats.`);
-  }
+  if (shipped > 0) console.log(`[stats] Shipped ${shipped} strategy stats.`);
 }
 
 // ── Main ────────────────────────────────────────────────
@@ -452,23 +371,18 @@ try {
 
   const db = client.db(DB_NAME);
 
-  // Create indexes
   const stratCol = db.collection("strategy_stats");
-  await stratCol
-    .createIndex({ strategy: 1, timestamp: 1 })
-    .catch(() => {});
+  await stratCol.createIndex({ strategy: 1, timestamp: 1 }).catch(() => {});
   await stratCol.createIndex({ strategy: 1 }).catch(() => {});
 
   const portCol = db.collection("portfolio_stats");
-  await portCol
-    .createIndex({ wallet: 1, timestamp: 1 })
-    .catch(() => {});
+  await portCol.createIndex({ wallet: 1, timestamp: 1 }).catch(() => {});
   await portCol.createIndex({ timestamp: 1 }).catch(() => {});
 
   // Initial ship
   await shipStats(db, wallet);
 
-  // Watch for state file changes (reactive)
+  // Watch for state file changes (reactive) + poll fallback
   try {
     const watcher = watch(REGISTRY_DIR, { recursive: true });
     console.log(`[stats] Watching ${REGISTRY_DIR} for changes...`);

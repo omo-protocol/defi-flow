@@ -377,6 +377,11 @@ async fn run_async(
         // Update performance metrics
         let tvl = onchain_tvl(&engine, &config, &tokens).await;
         state.last_tvl = tvl;
+        if tvl < 1.0 {
+            state.zero_tvl_streak += 1;
+        } else {
+            state.zero_tvl_streak = 0;
+        }
         if tvl > state.peak_tvl {
             state.peak_tvl = tvl;
         }
@@ -531,6 +536,11 @@ async fn run_async(
                     // Update performance metrics
                     let tvl = onchain_tvl(&engine, &config, &tokens).await;
                     state.last_tvl = tvl;
+                    if tvl < 1.0 {
+                        state.zero_tvl_streak += 1;
+                    } else {
+                        state.zero_tvl_streak = 0;
+                    }
                     if tvl > state.peak_tvl {
                         state.peak_tvl = tvl;
                     }
@@ -757,18 +767,26 @@ async fn reconcile_onchain_state(
         }
     } else if state.deploy_completed && onchain_tvl < 1.0 {
         // State says deployed but on-chain reads as empty.
-        // If we had significant TVL previously, this is likely an RPC failure
-        // (rate limiting, timeout) rather than genuine liquidation — don't reset.
-        if state.last_tvl > 5.0 {
+        // Could be RPC glitch (one-off) or genuinely empty (liquidated/unwound).
+        // Use zero_tvl_streak to tell them apart: if the TICK LOOP already saw
+        // multiple consecutive $0 readings, it's real. If streak is low (0-2),
+        // could be a single RPC hiccup at restart — give one more chance.
+        if state.last_tvl > 5.0 && state.zero_tvl_streak < 3 {
             eprintln!(
-                "[reconcile] WARNING: on-chain TVL=$0 but state.last_tvl=${:.2} — \
-                 likely RPC failure, keeping deploy state",
-                state.last_tvl,
+                "[reconcile] WARNING: on-chain TVL=$0 but state.last_tvl=${:.2} (streak={}) — \
+                 possible RPC failure, keeping deploy state for now",
+                state.last_tvl, state.zero_tvl_streak,
             );
+            // Bump the streak so if the daemon restarts again we'll eventually reset
+            state.zero_tvl_streak += 1;
         } else {
-            println!("[reconcile] State says deployed but on-chain TVL is $0 — resetting for re-deploy");
+            println!(
+                "[reconcile] State says deployed but on-chain TVL is $0 (streak={}) — resetting for re-deploy",
+                state.zero_tvl_streak,
+            );
             state.deploy_completed = false;
             state.balances.clear();
+            state.zero_tvl_streak = 0;
         }
     }
 

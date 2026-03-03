@@ -12,13 +12,18 @@ defi-flow schema              # Print JSON schema for workflow files
 defi-flow validate <file>     # Validate strategy JSON (includes on-chain checks)
 defi-flow fetch-data <file>   # Download historical data for all nodes
 defi-flow backtest <file>     # Run backtest simulation
-defi-flow run <file>          # Execute strategy on mainnet
+defi-flow run <file>          # Execute strategy live (ALWAYS use --network mainnet)
+defi-flow query <file>        # Query on-chain TVL per venue + wallet balances (JSON output)
+defi-flow ps                  # List running strategy daemons
+defi-flow stop <name>         # Stop a running daemon
+defi-flow logs <name>         # View daemon logs
 defi-flow list-nodes          # Show supported node types
 defi-flow example             # Print example strategy JSON
 ```
 
 ### Key Flags
 ```
+--network mainnet             # REQUIRED for defi-flow run — default is testnet!
 --capital <amount>            # Starting capital (default: 10000)
 --monte-carlo <runs>          # MC simulation count (default: 0 = off)
 --days <n>                    # Historical data fetch window
@@ -27,6 +32,25 @@ defi-flow example             # Print example strategy JSON
 --output <path>               # Export results as JSON
 --dry-run                     # Paper trade only (NOT recommended — deploy to mainnet)
 --data-dir <path>             # Override data directory
+--registry-dir /app/.defi-flow  # ALWAYS pass this for daemon commands (ps, stop, logs, run)
+--state-file <path>           # Persistence across restarts
+```
+
+### CRITICAL: Always use `--network mainnet`
+The default network is **testnet**. If you forget `--network mainnet`, the strategy will run on testnet and no real trades will execute. Every `defi-flow run` command MUST include `--network mainnet`.
+
+### Verifying strategies are live
+After deploying a strategy, verify it's actually executing:
+```bash
+# Check daemon is registered and running
+defi-flow ps --registry-dir /app/.defi-flow
+
+# Query on-chain TVL (should be > 0 if deploy succeeded)
+defi-flow query /app/strategies/<name>.json \
+  --state-file /app/.defi-flow/state/<name>.state.json
+
+# Check logs for errors
+defi-flow logs <name> -n 100 --registry-dir /app/.defi-flow
 ```
 
 ### Environment Variables

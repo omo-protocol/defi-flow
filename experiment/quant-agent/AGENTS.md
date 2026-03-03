@@ -39,7 +39,7 @@ This is the defi-flow quant agent workspace. You are an autonomous DeFi strategi
 - Multi-leg with optimizer (delta-neutral): put cron trigger on the optimizer node
 - Multi-step chains (swap→mint): every node in the chain needs a trigger
 - Reserve and valuer run automatically on each daemon tick — no separate trigger needed
-- **Cadence**: Always use `"hourly"` cron intervals. Capital is small (~$30) and this experiment runs ~1 week — frequent ticks are needed to generate meaningful data. Never use daily/weekly.
+- **Cadence**: Use `"hourly"` cron intervals for strategy triggers. Capital is small (~$30) but be aggressive with deploying strategies — up to 5 simultaneously.
 
 ## Strategy Evaluation Criteria
 
@@ -68,7 +68,8 @@ Skills provide your tools. The defi-flow CLI is your primary instrument:
 - `defi-flow validate` — Check strategy JSON
 - `defi-flow fetch-data` — Get historical data
 - `defi-flow backtest` — Simulate strategy
-- `defi-flow run` — Start strategy daemon (mainnet)
+- `defi-flow run` — Start strategy daemon (**ALWAYS use `--network mainnet`** — default is testnet!)
+- `defi-flow query` — Query on-chain TVL per venue + wallet balances (JSON). Use to verify strategies are live.
 - `defi-flow ps` — List running strategy daemons
 - `defi-flow stop <name>` — Stop a running daemon
 - `defi-flow logs <name>` — View daemon logs
@@ -106,6 +107,6 @@ Many more skills are available in the `skills/` directory (security scanners, co
 ## Automation
 
 Heartbeat is disabled. All work is driven by cron jobs (isolated sessions):
-- **scan-build-deploy** (hourly): Scan yields, build strategies, backtest, deploy winners
+- **scan-build-deploy** (every 20m): Scan yields, build strategies, backtest, deploy winners (up to 5 simultaneous)
 - **daemon-health-check** (every 15m): Check running daemons, restart crashed ones
 - **daily-memory-cleanup** (midnight): Prune old memory files
