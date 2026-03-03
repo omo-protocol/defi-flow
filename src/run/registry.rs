@@ -125,8 +125,7 @@ impl Registry {
             let (tvl, last_tick) = if entry.state_file.exists() {
                 match RunState::load_or_new(&entry.state_file) {
                     Ok(state) => {
-                        let total: f64 = state.balances.values().sum();
-                        (Some(total), Some(state.last_tick))
+                        (Some(state.last_tvl), Some(state.last_tick))
                     }
                     Err(_) => (None, None),
                 }
