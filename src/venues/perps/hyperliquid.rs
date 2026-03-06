@@ -326,13 +326,17 @@ impl HyperliquidPerp {
         format!("{:.prec$}", size, prec = decimals as usize)
     }
 
-    /// Round price to 5 significant figures (Hyperliquid requirement).
-    fn format_price(price: f64) -> String {
+    /// Round price to 5 significant figures, capped at (6 - szDecimals) decimal places.
+    /// HL constraint: prices have ≤5 sig figs AND ≤(MAX_DECIMALS - szDecimals) decimals,
+    /// where MAX_DECIMALS=6 for perps.
+    fn format_price(price: f64, sz_decimals: u32) -> String {
         if price == 0.0 {
             return "0".to_string();
         }
         let magnitude = price.abs().log10().floor() as i32;
-        let decimals = (4 - magnitude).max(0) as usize;
+        let sig_fig_decimals = (4 - magnitude).max(0) as usize;
+        let max_decimals = 6usize.saturating_sub(sz_decimals as usize);
+        let decimals = sig_fig_decimals.min(max_decimals);
         format!("{:.prec$}", price, prec = decimals)
     }
 
@@ -369,7 +373,8 @@ impl HyperliquidPerp {
         let size = notional / mid_price;
 
         let formatted_size = self.format_size(coin, size);
-        let formatted_price = Self::format_price(limit_price);
+        let sz_dec = self.sz_decimals.get(coin).copied().unwrap_or(0);
+        let formatted_price = Self::format_price(limit_price, sz_dec);
 
         println!(
             "  HL: {} {} {} @ {} (notional ${:.2}, {:.1}x leverage)",
@@ -499,7 +504,8 @@ impl HyperliquidPerp {
 
         let close_size = position.size.abs();
         let formatted_size = self.format_size(coin, close_size);
-        let formatted_price = Self::format_price(limit_price);
+        let sz_dec = self.sz_decimals.get(coin).copied().unwrap_or(0);
+        let formatted_price = Self::format_price(limit_price, sz_dec);
 
         println!(
             "  HL: CLOSE {} {} @ {} (reduce_only)",
@@ -770,7 +776,7 @@ impl Venue for HyperliquidPerp {
                 };
 
                 let formatted_size = format!("{:.prec$}", size, prec = spot_decimals as usize);
-                let formatted_price = Self::format_price(limit_price);
+                let formatted_price = Self::format_price(limit_price, spot_decimals);
 
                 println!(
                     "  HL SPOT: {} {} {} @ {} (${:.2})",
@@ -1033,7 +1039,13 @@ impl Venue for HyperliquidPerp {
                     .with_context(|| format!("Unknown asset '{coin}'"))?;
                 (a, self.format_size(&coin, close_size))
             };
-            let formatted_price = Self::format_price(limit_price);
+            let unwind_sz_dec = if self.is_spot {
+                let spot_coin = self.resolve_spot_coin(&coin);
+                self.spot_sz_decimals.get(&spot_coin).copied().unwrap_or(0)
+            } else {
+                self.sz_decimals.get(&coin).copied().unwrap_or(0)
+            };
+            let formatted_price = Self::format_price(limit_price, unwind_sz_dec);
 
             println!(
                 "  HL: UNWIND {:.1}% {} {} @ {}{}",
