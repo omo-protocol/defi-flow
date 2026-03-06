@@ -65,24 +65,38 @@ async fn query_async(
 
     let engine = Engine::new(workflow.clone(), venue_map);
 
-    // Query per-venue on-chain values
+    // Query per-venue on-chain values.
+    // Dedup perp nodes: multiple perp nodes on the same exchange (e.g. Hyperliquid)
+    // all return the full clearing house account_value. We only count it once by
+    // tracking the max value seen for perp-type nodes. For non-perp venues (lending,
+    // lp, spot, etc.) each venue is independent so no dedup needed.
     let mut venues_json = serde_json::Map::new();
     let mut venue_total = 0.0;
+    let mut perp_max: f64 = 0.0;
 
     for node in &workflow.nodes {
         let id = node.id();
         let node_type = node.type_name();
         if let Some(venue) = engine.venues.get(id) {
             let val = venue.total_value().await.unwrap_or(0.0);
-            venue_total += val;
             if val > 0.001 {
                 venues_json.insert(
                     id.to_string(),
                     json!({ "type": node_type, "value": round2(val) }),
                 );
             }
+            if node_type == "perp" {
+                // All perp nodes on the same HL account return the same clearing
+                // house value — only count the max once.
+                if val > perp_max {
+                    perp_max = val;
+                }
+            } else {
+                venue_total += val;
+            }
         }
     }
+    venue_total += perp_max;
 
     // Query wallet token balances
     let wallet_tokens =

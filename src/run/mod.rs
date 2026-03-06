@@ -695,15 +695,26 @@ async fn reconcile_onchain_state(
 ) -> Result<()> {
     println!("── Reconciling on-chain state ──");
 
-    // 1. Query venue on-chain values
+    // 1. Query venue on-chain values (dedup perps — same HL clearing house)
     let mut venue_tvl = 0.0;
+    let mut perp_max: f64 = 0.0;
     for (node_id, venue) in &engine.venues {
         let val = venue.total_value().await.unwrap_or(0.0);
         if val > 0.5 {
             println!("  [reconcile] {} = ${:.2}", node_id, val);
         }
-        venue_tvl += val;
+        let is_perp = engine.workflow.nodes.iter().any(|n| {
+            n.id() == node_id && n.type_name() == "perp"
+        });
+        if is_perp {
+            if val > perp_max {
+                perp_max = val;
+            }
+        } else {
+            venue_tvl += val;
+        }
     }
+    venue_tvl += perp_max;
 
     // 2. Query wallet balance for ALL manifest tokens on-chain
     let wallet_tokens = query_wallet_all_tokens(&engine.workflow, config, tokens).await;
@@ -886,9 +897,25 @@ async fn onchain_tvl(
     tokens: &evm::TokenManifest,
 ) -> f64 {
     let mut tvl = 0.0;
-    for v in engine.venues.values() {
-        tvl += v.total_value().await.unwrap_or(0.0);
+    let mut perp_max: f64 = 0.0;
+
+    for (node_id, v) in &engine.venues {
+        let val = v.total_value().await.unwrap_or(0.0);
+        // All perp venues on the same HL clearing house return the same account_value.
+        // Only count the max once to avoid double-counting.
+        let is_perp = engine.workflow.nodes.iter().any(|n| {
+            n.id() == node_id && n.type_name() == "perp"
+        });
+        if is_perp {
+            if val > perp_max {
+                perp_max = val;
+            }
+        } else {
+            tvl += val;
+        }
     }
+    tvl += perp_max;
+
     let wallet_tokens = query_wallet_all_tokens(&engine.workflow, config, tokens).await;
     tvl += wallet_tokens.iter().map(|(_, b)| b).sum::<f64>();
     tvl
