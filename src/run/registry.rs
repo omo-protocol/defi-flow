@@ -47,6 +47,8 @@ pub struct DaemonInfo {
     pub status: DaemonStatus,
     pub tvl: Option<f64>,
     pub last_tick: Option<u64>,
+    /// Cumulative income (funding + interest + rewards - costs).
+    pub earned: Option<f64>,
 }
 
 impl Registry {
@@ -122,15 +124,19 @@ impl Registry {
             };
 
             // Try to read state file for TVL
-            let (tvl, last_tick) = if entry.state_file.exists() {
+            let (tvl, last_tick, earned) = if entry.state_file.exists() {
                 match RunState::load_or_new(&entry.state_file) {
                     Ok(state) => {
-                        (Some(state.last_tvl), Some(state.last_tick))
+                        let earned = state.cumulative_funding
+                            + state.cumulative_interest
+                            + state.cumulative_rewards
+                            - state.cumulative_costs;
+                        (Some(state.last_tvl), Some(state.last_tick), Some(earned))
                     }
-                    Err(_) => (None, None),
+                    Err(_) => (None, None, None),
                 }
             } else {
-                (None, None)
+                (None, None, None)
             };
 
             infos.push(DaemonInfo {
@@ -139,6 +145,7 @@ impl Registry {
                 status,
                 tvl,
                 last_tick,
+                earned,
             });
         }
 

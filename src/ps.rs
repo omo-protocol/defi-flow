@@ -15,10 +15,10 @@ pub fn run(registry_dir: Option<&Path>) -> Result<()> {
 
     // Header
     println!(
-        "{:<24} {:<10} {:<10} {:<8} {:<12} {:<10} {}",
-        "NAME", "MODE", "NETWORK", "PID", "TVL", "UPTIME", "STATUS"
+        "{:<24} {:<10} {:<10} {:<8} {:<12} {:<12} {:<10} {}",
+        "NAME", "MODE", "NETWORK", "PID", "TVL", "EARNED", "UPTIME", "STATUS"
     );
-    println!("{}", "-".repeat(90));
+    println!("{}", "-".repeat(102));
 
     let now = Utc::now();
 
@@ -38,6 +38,12 @@ pub fn run(registry_dir: Option<&Path>) -> Result<()> {
             None => "—".to_string(),
         };
 
+        let earned_str = match info.earned {
+            Some(v) if v.abs() < 0.005 => "$0".to_string(),
+            Some(v) => format!("${:.2}", v),
+            None => "—".to_string(),
+        };
+
         let uptime_str = match info.entry.started_at.parse::<DateTime<Utc>>() {
             Ok(started) => {
                 if matches!(info.status, DaemonStatus::Crashed) {
@@ -50,12 +56,13 @@ pub fn run(registry_dir: Option<&Path>) -> Result<()> {
         };
 
         println!(
-            "{:<24} {:<10} {:<10} {:<8} {:<12} {:<10} {}",
+            "{:<24} {:<10} {:<10} {:<8} {:<12} {:<12} {:<10} {}",
             truncate(&info.name, 23),
             info.entry.mode,
             info.entry.network,
             pid_str,
             tvl_str,
+            earned_str,
             uptime_str,
             status_str,
         );

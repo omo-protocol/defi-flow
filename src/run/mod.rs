@@ -148,6 +148,7 @@ async fn run_async(
 
     // Build venues using the unified factory
     let wallet_tok = wallet_token(&workflow);
+    let w_id = wallet_id(&workflow);
     let tokens = workflow.token_manifest();
     let contracts = workflow.contracts.clone().unwrap_or_default();
     let venue_map = venues::build_all(
@@ -241,7 +242,7 @@ async fn run_async(
                             "[allocator] Pulled ${:.2} from vault (excess=${:.2})",
                             record.pulled, record.excess,
                         );
-                        engine.balances.add("wallet", &wallet_tok, record.pulled);
+                        engine.balances.add(&w_id, &wallet_tok, record.pulled);
                         sync_balances(&engine, &mut state);
                         state.allocation_actions.push(record);
                     }
@@ -307,7 +308,7 @@ async fn run_async(
                         "[allocator] Pulled ${:.2} from vault (excess=${:.2})",
                         record.pulled, record.excess,
                     );
-                    engine.balances.add("wallet", &wallet_tok, record.pulled);
+                    engine.balances.add(&w_id, &wallet_tok, record.pulled);
                     sync_balances(&engine, &mut state);
                     state.allocation_actions.push(record);
 
@@ -476,7 +477,7 @@ async fn run_async(
                                     "[allocator] Pulled ${:.2} from vault (excess=${:.2})",
                                     record.pulled, record.excess,
                                 );
-                                engine.balances.add("wallet", &wallet_tok, record.pulled);
+                                engine.balances.add(&w_id, &wallet_tok, record.pulled);
                                 sync_balances(&engine, &mut state);
                                 state.allocation_actions.push(record);
 
@@ -695,6 +696,9 @@ async fn reconcile_onchain_state(
 ) -> Result<()> {
     println!("── Reconciling on-chain state ──");
 
+    // Find the actual wallet node ID (could be "wallet", "wallet_hl", etc.)
+    let wallet_node_id = wallet_id(&engine.workflow);
+
     // 1. Query venue on-chain values (dedup perps — same HL clearing house)
     let mut venue_tvl = 0.0;
     let mut perp_max: f64 = 0.0;
@@ -734,26 +738,76 @@ async fn reconcile_onchain_state(
     //   → do NOT mark deployed — let deploy phase route wallet→venues
     // both = 0 → nothing on-chain → need fresh allocation + deploy
     if venue_tvl > 1.0 {
-        // Venue positions exist — deploy completed for certain
-        if !state.deploy_completed {
-            println!(
-                "[reconcile] On-chain venue capital ${:.2} found — marking deploy as completed",
-                venue_tvl,
-            );
-            state.deploy_completed = true;
+        // Check if perp venues have idle margin but no actual positions.
+        // total_value() includes idle USDC on HyperCore; deployed_value() only
+        // counts open positions. If deployed_value=0 with total>0, there's money
+        // sitting idle — the position was never opened or was closed/liquidated.
+        // Check unconditionally (even if deploy_completed=false) to prevent
+        // idle margin from being counted as "deployed capital".
+        let mut perp_idle_total = 0.0f64;
+        for (node_id, venue) in &engine.venues {
+            let is_perp = engine.workflow.nodes.iter().any(|n| {
+                n.id() == node_id && n.type_name() == "perp"
+            });
+            if is_perp {
+                let total = venue.total_value().await.unwrap_or(0.0);
+                let deployed = venue.deployed_value().await.unwrap_or(0.0);
+                if total > 1.0 && deployed < 1.0 {
+                    perp_idle_total = perp_idle_total.max(total);
+                    println!(
+                        "  [reconcile] WARNING: {} has ${:.2} idle margin but NO open positions",
+                        node_id, total,
+                    );
+                }
+            }
         }
-        if state.initial_capital <= 0.0 {
-            state.initial_capital = onchain_tvl;
-            state.peak_tvl = onchain_tvl;
+
+        // Effective venue TVL = actual deployed positions (subtract idle perp margin)
+        let effective_venue_tvl = venue_tvl - perp_idle_total;
+
+        if perp_idle_total > 1.0 && effective_venue_tvl < 1.0 {
+            // ALL venue value is idle perp margin — no real positions anywhere.
+            // Reset deploy so the deploy phase re-opens positions.
             println!(
-                "[reconcile] Set initial_capital = ${:.2} from on-chain TVL",
-                onchain_tvl,
+                "[reconcile] Resetting deploy — perp has ${:.2} idle margin but no positions",
+                perp_idle_total,
             );
-        }
-        // Seed wallet balance so optimizer can deploy idle funds
-        for (tok, bal) in &wallet_tokens {
-            if *bal > 0.0 {
-                engine.balances.add("wallet", tok, *bal);
+            state.deploy_completed = false;
+            if state.initial_capital <= 0.0 {
+                state.initial_capital = onchain_tvl;
+                state.peak_tvl = onchain_tvl;
+            }
+            // Seed wallet balance with idle perp margin so deploy edge can route it
+            // to the perp node. The USDC is already on HL — execute_perp_open just
+            // needs to know how much margin to use for the order.
+            engine.balances.add(&wallet_node_id, "USDC", perp_idle_total);
+            for (tok, bal) in &wallet_tokens {
+                if *bal > 0.0 {
+                    engine.balances.add(&wallet_node_id, tok, *bal);
+                }
+            }
+        } else {
+            // Real venue positions exist — deploy completed for certain
+            if !state.deploy_completed {
+                println!(
+                    "[reconcile] On-chain venue capital ${:.2} found — marking deploy as completed",
+                    venue_tvl,
+                );
+                state.deploy_completed = true;
+            }
+            if state.initial_capital <= 0.0 {
+                state.initial_capital = onchain_tvl;
+                state.peak_tvl = onchain_tvl;
+                println!(
+                    "[reconcile] Set initial_capital = ${:.2} from on-chain TVL",
+                    onchain_tvl,
+                );
+            }
+            // Seed wallet balance so optimizer can deploy idle funds
+            for (tok, bal) in &wallet_tokens {
+                if *bal > 0.0 {
+                    engine.balances.add(&wallet_node_id, tok, *bal);
+                }
             }
         }
     } else if venue_tvl < 1.0 && wallet_balance > 1.0 {
@@ -774,7 +828,7 @@ async fn reconcile_onchain_state(
             );
         }
         for (tok, bal) in &wallet_tokens {
-            engine.balances.add("wallet", tok, *bal);
+            engine.balances.add(&wallet_node_id, tok, *bal);
         }
     } else if state.deploy_completed && onchain_tvl < 1.0 {
         // State says deployed but on-chain reads as empty.
@@ -925,6 +979,17 @@ async fn onchain_tvl(
 
 /// Extract the wallet node's token symbol (e.g. "USDT0", "USDC").
 /// Falls back to "USDC" if no wallet node exists.
+fn wallet_id(workflow: &Workflow) -> String {
+    workflow
+        .nodes
+        .iter()
+        .find_map(|n| match n {
+            Node::Wallet { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "wallet".to_string())
+}
+
 fn wallet_token(workflow: &Workflow) -> String {
     workflow
         .nodes
