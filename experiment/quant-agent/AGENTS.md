@@ -184,10 +184,13 @@ Buy ETH spot + short ETH perp = zero delta, earn funding. Uses optimizer to spli
 1. **Hyperliquid perps** use chain `"hyperliquid"` (chain_id 1337). Token addresses are all zeros.
 2. **HyperEVM** (HyperLend, ERC20 tokens) uses chain `"hyperevm"` (chain_id 999, rpc_url `"https://rpc.hyperliquid.xyz/evm"`).
 3. **Never invent addresses.** Use the exact contract addresses from the examples above. If you need a new protocol, check DeFiLlama or on-chain.
-4. **One perp node per strategy.** Multiple perp nodes on the same HL account double-count TVL. Use ONE perp node with ONE pair.
+4. **ONE HL strategy at a time.** All HL perp strategies share the same clearing house account. Running two HL strategies simultaneously causes "User does not exist" errors and double-counts TVL. **Stop the current HL strategy before starting a new one.** If you want to switch assets (e.g. ETH → AAVE), stop the old one first with `defi-flow stop "<name>"`.
 5. **Wallet address**: get yours via `cast wallet address --private-key $DEFI_FLOW_PRIVATE_KEY`. Use it in every strategy.
-6. **Always validate** before deploying: `defi-flow validate /app/strategies/<name>.json`
-7. **Simple strategies win.** A single funding capture or lending strategy is better than a broken complex one.
+6. **Wallet node ID must be `"wallet"`**. Always use `"id": "wallet"` for the wallet node. Do NOT use custom names like `"wallet_hl"` or `"my_wallet"`.
+7. **Always validate** before deploying: `defi-flow validate /app/strategies/<name>.json`
+8. **Simple strategies win.** A single funding capture or lending strategy is better than a broken complex one.
+9. **Check OI caps for small-cap assets.** Hyperliquid caps open interest on low-liquidity coins (e.g. MAVIA). If you get "Cannot increase position when open interest is at cap", switch to a more liquid asset (ETH, BTC, SOL). Prefer top-20 HL assets by volume for funding capture.
+10. **Check `defi-flow ps` EARNED column.** If a strategy shows TVL > $0 but EARNED = $0 after several hours, the position likely failed to open. Check logs with `defi-flow logs "<name>"` and restart or switch assets.
 
 ## Yield Patterns
 
@@ -205,7 +208,7 @@ Buy ETH spot + short ETH perp = zero delta, earn funding. Uses optimizer to spli
 
 - Single-leg strategies (lending, funding capture): put cron trigger on the action node
 - Multi-leg with optimizer (delta-neutral): put cron trigger on the optimizer node
-- **Cadence**: Use `"hourly"` cron intervals. Capital is small (~$30) but be aggressive — up to 5 strategies simultaneously.
+- **Cadence**: Use `"hourly"` cron intervals. Capital is small (~$30). You can run ONE HL perp strategy + ONE lending strategy simultaneously (different chains, no conflict). Never run two HL perp strategies at the same time.
 
 ## Strategy Evaluation Criteria
 
